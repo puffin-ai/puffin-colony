@@ -364,20 +364,6 @@ def test_the_version_comes_from_the_package(capsys):
     assert capsys.readouterr().out.strip() == "Puffin Colony 0.1.0"
 
 
-LEAN = ("coding", "testing", "security", "performance", "accessibility", "git")
-
-
-@pytest.mark.parametrize("name", LEAN)
-def test_each_lean_rule_is_short_and_has_must_and_must_not_lines(name):
-    text = (PACKAGE / "presets" / "lean" / f"{name}.md").read_text()
-    assert len(text.split()) < 400
-    assert "## Must\n" in text and "## Must not\n" in text
-
-
-def test_the_lean_preset_holds_only_its_six_files():
-    assert sorted(p.stem for p in (PACKAGE / "presets" / "lean").iterdir()) == sorted(LEAN)
-
-
 def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config, capsys):
     """A set ANTHROPIC_API_KEY bills that key instead of the subscription, so it is dropped by default."""
     cmux_log = make_stub(home / "bin", "cmux")

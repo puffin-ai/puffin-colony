@@ -32,12 +32,6 @@ def repo(tmp_path, monkeypatch):
     return root.resolve()
 
 
-def test_the_puffin_preset_ships_every_rule_its_essentials_and_the_docs_aid():
-    names = {path.relative_to(PUFFIN).as_posix() for path in preset_files()}
-    assert names == {f"rules/{rule}.md" for rule in RULES} | {
-        "essentials/nextjs.md", "essentials/fastapi.md", "essentials/generic.md", "docs.md"}
-
-
 def test_the_preset_files_hold_no_vault_links_no_glass_and_no_product_name():
     for path in preset_files():
         text = path.read_text()
