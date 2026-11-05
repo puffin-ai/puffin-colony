@@ -4,9 +4,11 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 from argparse import Namespace
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -239,4 +241,59 @@ def test_a_line_never_carries_a_secret(world, monkeypatch, line, why):
     with pytest.raises(cli.ColonyError, match="never carries a secret") as raised:
         transport.send(RELAY, "builder-1", line, card=12)
     assert why in str(raised.value) and "s3cr3t" not in str(raised.value)
+    assert world.calls(PROBE) == [] and world.calls("gh") == []
+
+
+# colony post: every card line, from builders and the lead
+
+
+@pytest.mark.parametrize("session, to, sentence, urgent, line, relayed", [
+    ("builder-2", "lead", "blocked: the test database won't start", False,
+     "for lead: blocked: the test database won't start (from builder-2)", True),
+    ("builder-2", "Lead", "main is  red", True, "for lead: urgent: main is red (from builder-2)", True),
+    ("lead", "builder-2", "start this card", False, "for builder-2: start this card (from lead)", True),
+    ("builder-2", "lead", "done, builder-2/41 pushed, 12 passed", False,
+     "for lead: done, builder-2/41 pushed, 12 passed (from builder-2)", False),  # waits for the lead's digest
+])
+def test_post_sends_a_card_line_through_the_transport(world, monkeypatch, capsys, session, to, sentence, urgent, line,
+                                                      relayed):
+    monkeypatch.setenv("COLONY_SESSION", session)
+    assert wait.post(RELAY, Namespace(card=41, to=to, sentence=sentence, urgent=urgent)) == 0
+    assert capsys.readouterr().out == f"#41 {line}\n"
+    probe = [["relay", "send", "--socket", world.core, "--to", line.split(":")[0][4:], "--body", f"#41 {line}"]]
+    assert world.calls(PROBE) == (probe if relayed else [])
+    assert world.calls("gh") == [["issue", "comment", "41", "--repo", "acme/demo",
+                                  "--body", f"{line}\n{transport.MARK}" if relayed else line]]
+
+
+def test_post_is_a_command_on_the_command_line(world, tmp_path):
+    host = tmp_path / "host"
+    (host / ".colony").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(host)], check=True)
+    (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
+    env = {"HOME": str(tmp_path), "PATH": f"{world.bin}:/usr/bin:/bin", "COLONY_SESSION": "lead"}
+    run = subprocess.run([sys.executable, "-m", "colony", "post", "#41", "builder-2", "start this card"],
+                         capture_output=True, text=True, cwd=host, env=env)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "#41 for builder-2: start this card (from lead)\n"
+    assert world.calls("gh") == [["issue", "comment", "41", "--repo", "owner/myapp",
+                                  "--body", "for builder-2: start this card (from lead)"]]
+    bad = subprocess.run([sys.executable, "-m", "colony", "post", "the next one", "lead", "hi"],
+                         capture_output=True, text=True, cwd=host, env=env)
+    assert bad.returncode == 2 and "is not a card number" in bad.stderr
+    args = cli.build_parser().parse_args(["post", "41", "lead", "main is red", "--urgent"])
+    assert (args.card, args.to, args.sentence, args.urgent, args.run) == (41, "lead", "main is red", True, wait.post)
+
+
+@pytest.mark.parametrize("session, to, sentence, why", [
+    ("", "lead", "hello", "set COLONY_SESSION"),
+    ("builder-2", "builder-2", "hello", "another session's name"),
+    ("builder-2", "the lead", "hello", "another session's name"),
+    ("builder-2", "lead", "  ", "one sentence under 300 characters"),
+    ("builder-2", "lead", "word " * 60, "one sentence under 300 characters"),
+])
+def test_post_needs_a_session_another_name_and_one_short_sentence(world, monkeypatch, session, to, sentence, why):
+    monkeypatch.setenv("COLONY_SESSION", session)
+    with pytest.raises(cli.ColonyError, match=why):
+        wait.post(RELAY, Namespace(card=41, to=to, sentence=sentence, urgent=False))
     assert world.calls(PROBE) == [] and world.calls("gh") == []

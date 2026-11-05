@@ -7,7 +7,8 @@ at once on a line that can't wait (see `taken`). Leads talk to each other as `<p
 last read, sending the last ETag, so a quiet poll costs nothing against the rate limit. Its state lives in
 ~/.colony/<project>/<session>.json, and a session's first wait reads the last hour. Lines are posted through
 transport.send. With transport = "relay", a line that also came through Agent Relay is skipped, so it is acted on
-once. When colony.cycle imports, the lead's wait also gathers its cycle.stale_lines.
+once. Every line goes out by `colony post` on a card, or `colony say` lead to lead. When colony.cycle imports,
+the lead's wait also gathers its cycle.stale_lines.
 """
 from __future__ import annotations
 
@@ -303,6 +304,35 @@ def say(config: dict, args) -> int:
     return 0
 
 
+def post(config: dict, args) -> int:
+    """`colony post <card> <to> "<sentence>" [--urgent]`: post `for <to>: <sentence> (from $COLONY_SESSION)` on the
+    card through transport.send, with `urgent:` first for --urgent. Builders and the lead post every card line so."""
+    from colony import transport
+
+    me = os.environ.get(cli.SESSION_ENV, "").lower()
+    if not me:
+        raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
+    transport.kind(config)
+    to, sentence = args.to.lower(), " ".join(args.sentence.split())
+    if not cli.SESSION_NAME.fullmatch(to) or to == me:
+        raise cli.ColonyError(f"post needs another session's name, such as lead or builder-2 (you are {me})")
+    if sentence and args.urgent and not CANT_WAIT.match(sentence):
+        sentence = f"urgent: {sentence}"
+    line = f"for {to}: {sentence} (from {me})"
+    if not sentence or len(line) >= MAX_LINE:
+        raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
+    number = transport.send(config, to, line, card=args.card)
+    print(f"#{number} {line}")
+    return 0
+
+
+def card_number(value: str) -> int:
+    """Check a card value, such as 41 or #41, and return its number."""
+    if not value.lstrip("#").isdigit():
+        raise argparse.ArgumentTypeError(f"{value!r} is not a card number, such as 41")
+    return int(value.lstrip("#"))
+
+
 def card_numbers(value: str) -> list[int]:
     """Check a --waiting-on value, card numbers such as 1251,1252, and return them; "" clears the list."""
     parts = [part.strip().lstrip("#") for part in value.split(",") if part.strip()]
@@ -312,10 +342,16 @@ def card_numbers(value: str) -> list[int]:
 
 
 def add_commands(sub, wait_parser) -> None:
-    """cli.py's route to this module: wait's --waiting-on, and the `say` command."""
+    """cli.py's route to this module: wait's --waiting-on, and the `say` and `post` commands."""
     wait_parser.add_argument("--waiting-on", type=card_numbers, metavar="N,N",
                              help="the lead: the cards the batch waits on, whose done lines come at once")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue")
     p.add_argument("to", metavar="lead-name", help="the other lead, such as burak-lead")
     p.add_argument("sentence", help="one sentence")
     p.set_defaults(run=say)
+    p = sub.add_parser("post", help="post a line for another session on a card, through the transport")
+    p.add_argument("card", type=card_number, help="the card's issue number, such as 41")
+    p.add_argument("to", metavar="name", help="who the line is for, such as lead or builder-2")
+    p.add_argument("sentence", help="one sentence")
+    p.add_argument("--urgent", action="store_true", help="start the sentence with urgent:, so it can't wait")
+    p.set_defaults(run=post)
