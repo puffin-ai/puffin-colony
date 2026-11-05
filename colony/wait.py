@@ -20,10 +20,18 @@ The unread cache, for the prompt hook: the state file's `unread` lists, as `{car
 addressed to this session that the wait gathered and hasn't printed. The hook prints them and empties the list; the
 wait then drops those lines (`listed` names the ones it put there), so the session never reads a line twice.
 `polled_at` is the time of the wait's last poll, which tells the hook a wait is running.
+
+The lead's heartbeat: the lead's wait writes ~/.colony/<project>/lead.heartbeat at each poll, every 15 seconds, holding
+its session name, account, token and time. A heartbeat under HEARTBEAT_FRESH old means a lead is alive, so a session
+the person opens offers to build or help (`colony hi`). The heartbeat is also the lock: `beat` writes it only when it is
+missing, stale, or holds the writer's own token, under a file lock, so two sessions never both hold the lead. A lead's
+token is $COLONY_LEAD_TOKEN, which `colony` and `colony hi` set when they claim the lead.
 """
 from __future__ import annotations
 
 import argparse
+import fcntl
+import functools
 import importlib
 import json
 import os
@@ -32,6 +40,8 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +68,10 @@ LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9-]*[\s,:]*)+")
 ALL = "all"  # @all reaches every lead, and every builder whose lead signed it
 AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
+
+
+HEARTBEAT_FRESH = 120  # a lead's heartbeat under 2 minutes old is alive; older, any session may take the lead
+TOKEN_ENV = f"{cli.NAME.upper()}_LEAD_TOKEN"  # which claim a lead's session holds, so its wait refreshes its own beat
 
 
 class GhError(cli.ColonyError):
@@ -99,6 +113,68 @@ def write_json(path: Path, value) -> None:
     part = path.with_name(f".{path.name}.{os.getpid()}")
     part.write_text(json.dumps(value))
     os.replace(part, path)
+
+
+class LeadTaken(cli.ColonyError):
+    """Another session holds the lead: its heartbeat is fresh and carries another token."""
+
+
+def heartbeat_path(project: str) -> Path:
+    """The lead's heartbeat on this computer, ~/.colony/<project>/lead.heartbeat."""
+    return state_path(project, cli.LEAD).with_suffix(".heartbeat")
+
+
+def read_heartbeat(project: str) -> dict | None:
+    """The lead's heartbeat, as {session, account, token, at}, or None when it is missing or unreadable."""
+    beat = read_json(heartbeat_path(project), None)
+    if not isinstance(beat, dict) or not isinstance(beat.get("at"), (int, float)):
+        return None
+    return beat
+
+
+def fresh(beat: dict | None, now: float | None = None) -> bool:
+    """Whether a heartbeat shows a live lead: it is under HEARTBEAT_FRESH seconds old."""
+    return beat is not None and (time.time() if now is None else now) - beat["at"] < HEARTBEAT_FRESH
+
+
+def new_token() -> str:
+    """A fresh lead token, for one claim."""
+    return uuid.uuid4().hex[:12]
+
+
+@contextmanager
+def heartbeat_lock(project: str):
+    """Hold the heartbeat's file lock, so a read, check and write of the heartbeat is one step."""
+    path = heartbeat_path(project).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def beat(project: str, session: str, account: str, token: str, now: float | None = None) -> dict:
+    """Write the lead's heartbeat and return it: claim it when it is missing or stale, refresh it when it holds
+    `token`. Raise LeadTaken when another token's heartbeat is fresh."""
+    now = time.time() if now is None else now
+    with heartbeat_lock(project):
+        held = read_heartbeat(project)
+        if fresh(held, now) and held.get("token", "") != token:
+            raise LeadTaken(f"{held.get('session', 'a lead')} on account {held.get('account', 'unknown')} holds the "
+                            f"lead: its heartbeat is {int(now - held['at'])} s old")
+        mine = {"session": session, "account": account, "token": token, "at": now}
+        write_json(heartbeat_path(project), mine)
+    return mine
+
+
+def keep_beat(heartbeat) -> None:
+    """Run the lead's heartbeat: a LeadTaken goes up and ends the wait, and a failed write goes to stderr."""
+    try:
+        heartbeat()
+    except (OSError, ValueError) as e:
+        print(f"{cli.NAME} wait: the heartbeat was not written: {e}", file=sys.stderr)
 
 
 def mentions(text: str) -> set[str]:
@@ -273,12 +349,13 @@ def add_stale(state: dict, stale) -> None:
 
 
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         mark: str | None = None, stale=None) -> int:
+         mark: str | None = None, stale=None, heartbeat=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `mark` skips relayed lines (poll),
     and `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
-    A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown)."""
+    A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
+    lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr."""
     clock = clock or CLOCK
     path = state_path(project, me.name)
     state = read_json(path, {})
@@ -299,6 +376,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
                 return 1
         state["polled_at"] = time.time()
+        if heartbeat is not None:
+            keep_beat(heartbeat)
         drop_shown(path, state, listed)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
@@ -411,7 +490,10 @@ def run(config: dict, args, clock=None) -> int:
         except (GhError, ValueError, KeyError) as e:
             print(f"{cli.NAME} wait: no coordination issue yet, the next wait tries again: {e}", file=sys.stderr)
     stale = stale_check(config) if config.get("features", {}).get("board", True) else None
-    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, mark, stale)
+    name, account, token = lead_name(config, args), cli.current_account(config), os.environ.get(TOKEN_ENV, "")
+    heartbeat = functools.partial(beat, project, name, account, token)
+    keep_beat(heartbeat)  # before any poll, so a second lead stops at once
+    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, mark, stale, heartbeat)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:

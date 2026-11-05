@@ -80,7 +80,7 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 ## Lead
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
+You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which tells every new session a lead runs, and which holds the lead for you. When it says another session holds the lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
 

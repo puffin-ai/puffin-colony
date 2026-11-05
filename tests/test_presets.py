@@ -114,5 +114,5 @@ def test_every_shipped_skill_has_a_skill_md_with_its_name_and_a_description(name
 
 
 def test_the_starter_set_is_every_shipped_skill_beside_the_role_skills():
-    assert set(guards.STARTER_SKILLS) == set(shipped_skills()) - set(cli.ROLE_SKILLS)
+    assert set(guards.STARTER_SKILLS) == set(shipped_skills()) - set(cli.ROLE_SKILLS) - {cli.SETUP_SKILL}
     assert len(guards.STARTER_SKILLS) == 10

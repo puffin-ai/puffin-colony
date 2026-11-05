@@ -1,6 +1,8 @@
 """Puffin Colony's command line: one command for a repo's whole software life cycle.
 
 `colony` alone runs setup the first time (the repo has no .colony/colony.toml) and opens the lead every time after.
+`colony hi` tells a session opened without a task which case it is in: no setup yet, a lead running (offer to build
+or help), or none (claim the lead through its heartbeat, wait.beat).
 `colony join <name>` opens a builder on another computer. The lead and the builders use `open`, `wait`, `batch`
 and `status`, and the lead opens a researcher or the spec agent with `research` and `spec`. In hack mode,
 `colony merge <branch>` lands a branch after the fast check (merge.py). The cycle's commands (cycle.py, board.py),
@@ -18,6 +20,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from datetime import datetime, timezone
 from importlib import resources
@@ -296,7 +299,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
     `claude attach`. A dry run prints the command, the env names (never their values) and where it would
-    open, and runs nothing.
+    open, and runs nothing. A lead claims the heartbeat first (wait.beat), so a second lead never opens while one runs.
     """
     person = person_of(config, args)
     account, config_dir = choose_account(config, args)
@@ -314,6 +317,14 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
         return 0
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
+    if session == LEAD:
+        from colony import wait
+
+        env[wait.TOKEN_ENV] = wait.new_token()
+        try:
+            wait.beat(config["project"]["name"], wait.lead_name(config, args), account, env[wait.TOKEN_ENV])
+        except wait.LeadTaken as e:
+            raise ColonyError(f"a lead is running here, so {NAME} opens no second one: {e}") from None
     print(f"Opening {title} on account {account}, in {where}.", flush=True)
     # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
     # subscription, so a session drops it unless colony.toml says to use it.
@@ -342,6 +353,7 @@ MCP_SERVERS = {
     "context7": {"type": "http", "url": "https://mcp.context7.com/mcp"},
 }
 ROLE_SKILLS = ("colony-lead", "colony-builder", "colony-reviewer", "colony-walker")  # shipped in skills/
+SETUP_SKILL = "colony-setup"  # the skill `colony skill-install` copies into a settings folder, for repos not set up yet
 # Outside skills, each pinned to a commit: (repo, commit, folder in that repo, the skill's folder name here).
 OUTSIDE_SKILLS = {
     "ui-design": ("anthropics/skills", "ca45fc496a3436251f191354091d557da31c15b5", "skills/frontend-design",
@@ -380,9 +392,13 @@ def offered() -> dict[str, tuple[str, str]]:
 
 
 def setup(args) -> int:
-    """First run: an interactive claude session in this terminal whose first message is the setup prompt."""
+    """First run: an interactive claude session in this terminal whose first message is the setup prompt. With
+    --print, the prompt alone, for a session already open to follow (the colony-setup skill)."""
     root = repo_root()
     prompt = fill_names(package_file("prompts", "setup.md"))
+    if getattr(args, "print", False):
+        print(prompt)
+        return 0
     if args.dry_run:
         print(f"setup plan: {DIR}/{CONFIG_NAME} is missing, so {NAME} sets up {root} in this terminal.")
         print(f"  command: claude <the setup prompt from {NAME} {__version__}, {len(prompt)} characters>")
@@ -399,6 +415,114 @@ def setup(args) -> int:
     print(f"No {DIR}/{CONFIG_NAME} yet, so {DISPLAY} starts setup.", flush=True)
     os.chdir(root)
     os.execvp("claude", ["claude", prompt])
+
+
+def ago(seconds: float) -> str:
+    """A time span in the largest whole unit, such as `40 s`, `12 min` or `3 h`."""
+    if seconds < 60:
+        return f"{int(seconds)} s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min"
+    return f"{int(seconds // 3600)} h"
+
+
+def current_account(config: dict) -> str:
+    """The account this process runs on: the one whose folder is $CLAUDE_CONFIG_DIR, or the default folder's when it
+    is unset, else the folder's own name."""
+    folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    for name, account in config.get("accounts", {}).items():
+        if (is_default_dir(account["config_dir"]) and not folder) or (
+                folder and Path(account["config_dir"]).expanduser() == Path(folder).expanduser()):
+            return name
+    return Path(folder).name if folder else "default"
+
+
+def lead_line(config: dict) -> str:
+    """One line on this computer's lead: its name, account and heartbeat age, or that none is running."""
+    from colony import wait
+
+    held = wait.read_heartbeat(config["project"]["name"])
+    if held is None:
+        return "lead: none running on this computer (no heartbeat)"
+    age = ago(time.time() - held["at"])
+    if not wait.fresh(held):
+        return f"lead: none running on this computer ({held.get('session', 'the last lead')}'s heartbeat is {age} old)"
+    return f"lead: {held.get('session', 'unknown')} on account {held.get('account', 'unknown')}, heartbeat {age} ago"
+
+
+def free_builder(project: str) -> str:
+    """The first builder name, builder-1 up, with no wait that polled on this computer in the last 2 minutes."""
+    from colony import wait
+
+    n = 1
+    while True:
+        state = wait.read_json(wait.state_path(project, f"builder-{n}"), {})
+        polled = state.get("polled_at") if isinstance(state, dict) else None
+        if not isinstance(polled, (int, float)) or time.time() - polled >= wait.HEARTBEAT_FRESH:
+            return f"builder-{n}"
+        n += 1
+
+
+def hi(args) -> int:
+    """`colony hi`: for a session opened without a task, say which case this repo is in and what to do.
+
+    No .colony/colony.toml: set Colony up in this session. A session Colony opened ($COLONY_SESSION set) is a helper
+    for good, and is told its role. Otherwise the lead's heartbeat decides: fresh, and the session offers to be a
+    builder or to help; stale or missing, and the session claims the lead by writing the heartbeat (wait.beat), which
+    lapses in 2 minutes unless its `colony wait` keeps it."""
+    from colony import wait
+
+    if not config_path().exists():
+        print(f"{DISPLAY}: not set up in this repo, since {DIR}/{CONFIG_NAME} is missing.")
+        print(f"Next: set it up in this session. Load the {SETUP_SKILL} skill, or run `{NAME} setup --print` and follow "
+              "the prompt it prints, asking the person its questions here.")
+        return 0
+    config = load_config()
+    project = config["project"]["name"]
+    print(f"{DISPLAY}: set up here, project {project}, {mode(config)} mode.")
+    me = os.environ.get(SESSION_ENV, "").lower()
+    if me:
+        role = "Lead" if me == LEAD else "Builder"
+        print(f"This session is {me}, which {NAME} opened: follow the {role} section of {DIR}/playbook.md.")
+        return 0
+    try:
+        person = person_of(config, args)
+    except ColonyError:
+        people = sorted({a["person"] for a in config["accounts"].values()} - {"any"})
+        print(f"Next: ask the person which of {', '.join(people)} they are, then run `{NAME} hi --person <them>`.")
+        return 0
+    account, token = current_account(config), wait.new_token()
+    try:
+        wait.beat(project, wait.lead_name(config, args), account, token)
+    except wait.LeadTaken:
+        builder = free_builder(project)
+        print(lead_line(config))
+        print(f"Next: offer to be a builder, or to help. As a builder: take the name {builder}, ask the person to tell "
+              f"their lead that {builder} waits for a card, load the colony-builder skill and follow it, and start "
+              f"every {NAME} command with `{SESSION_ENV}={builder} {PERSON_ENV}={person}`. To help: do what the person "
+              "asks, and leave the cards to the lead and its builders.")
+        return 0
+    print(f"No lead was running on this computer, so this session claimed the lead, on account {account}.")
+    print(f"Next: tell the person you are their lead, then load the colony-lead skill and follow it. Start every {NAME} "
+          f"command with `{SESSION_ENV}={LEAD} {PERSON_ENV}={person} {wait.TOKEN_ENV}={token}`, and start "
+          f"`{NAME} wait` in the background within 2 minutes: it keeps the heartbeat that holds the lead. When the "
+          "person would rather you didn't lead, start no wait, and the claim lapses in 2 minutes.")
+    return 0
+
+
+def skill_install(args) -> int:
+    """`colony skill-install`: copy the colony-setup skill into a Claude settings folder's skills/, so a session in
+    any repo, before setup, knows how to set Colony up."""
+    folder = Path(args.config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    target = folder / "skills" / SETUP_SKILL
+    if args.dry_run:
+        print(f"would write {target}/. Nothing ran.")
+        return 0
+    if not folder.is_dir():
+        raise ColonyError(f"{folder} is not a Claude settings folder: pass --config-dir")
+    _copy_tree(resources.files(__package__).joinpath("skills", SETUP_SKILL), target)
+    print(f"wrote {target}/")
+    return 0
 
 
 def tools_list() -> str:
@@ -631,9 +755,10 @@ def batch(config: dict, args) -> int:
 
 
 def status(config: dict, args) -> int:
-    """Print where a batch stands (batch.batch_status)."""
+    """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
     from colony import batch as runner
 
+    print(lead_line(config))
     return runner.batch_status(config, args)
 
 
@@ -724,7 +849,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
-    p = sub.add_parser("status", help="show a batch's round, open problems, walk, running steps and minutes")
+    p = sub.add_parser("status", help="show the lead's name, account and heartbeat, then a batch's round, open "
+                                      "problems, walk, running steps and minutes")
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
 
@@ -736,6 +862,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     for module in (cycle, board, vault, guards):
         module.add_commands(sub)
+
+    p = sub.add_parser("hi", help="for a session opened without a task: set up, claim the lead when none runs, or "
+                                  "offer to build or help")
+    p.add_argument("--person", help="whose session this is")
+    p.set_defaults(run=hi)
+
+    p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
+                                     "setup prompt for a session already open")
+    p.add_argument("--print", action="store_true", help="print the setup prompt, and run nothing")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
+    p.set_defaults(run=setup)
+
+    p = sub.add_parser("skill-install", help=f"copy the {SETUP_SKILL} skill into a Claude settings folder, so a "
+                                             "session in any repo can set Colony up")
+    p.add_argument("--config-dir", metavar="DIR", help="the settings folder, $CLAUDE_CONFIG_DIR or ~/.claude by default")
+    p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
+    p.set_defaults(run=skill_install)
 
     p = sub.add_parser("tools", help="list the MCPs, skills and relay setup offers, or write the named ones "
                                      "(setup runs it)")
@@ -751,8 +894,8 @@ def main(argv=None) -> int:
     try:
         if args.command is None and not config_path().exists():
             return setup(args)
-        if args.command == "tools":  # setup runs it before colony.toml exists
-            return tools(args)
+        if args.command in ("tools", "hi", "setup", "skill-install"):  # each runs before colony.toml exists
+            return args.run(args)
         config = load_config()
         feature = FEATURES.get(args.command)
         if feature and not config["features"][feature]:

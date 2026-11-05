@@ -74,6 +74,12 @@ A session's first wait reads the last hour, so a start line the lead posted whil
 
 The wait guard hook refuses a foreground sleep or poll loop, so an agent can't wait any other way. See [safety.md](safety.md#hooks).
 
+## The lead's heartbeat
+
+The lead's wait also writes `~/.colony/<project>/lead.heartbeat` at each poll, every 15 seconds. It holds the lead's name, such as `serdar-lead`, its account, a token, and the time. Under 2 minutes old, it means a lead is alive on this computer. Then a session you open yourself and greet gets an offer from `colony hi`: be a builder, or help you. When the heartbeat is older or missing, `colony hi` claims the lead for that session by writing the heartbeat. A session `colony` opened has `COLONY_SESSION` set, and keeps its role for good.
+
+The heartbeat is also the lock. It is written under a file lock, and only when it is missing, stale, or holds the writer's own token, `$COLONY_LEAD_TOKEN`. So `colony` refuses to open a second lead, and a lead's wait that finds another lead's fresh heartbeat stops with that lead's name. `colony status` prints the lead's name, account and heartbeat age.
+
 ## The quiet lead
 
 A lead that wakes on every line spends its time and tokens on interruptions. So the lead's wait gathers lines and prints them together as a digest, at the end of the first `lead_digest_minutes` (10 by default) that gathered one.

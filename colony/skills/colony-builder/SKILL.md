@@ -1,6 +1,6 @@
 ---
 name: colony-builder
-description: A Puffin Colony builder's steps. Use when you are a builder in this repo (COLONY_SESSION is your builder name), and before you start the wait, take a card, make its change, run the fast check, or post a done line or a question to the lead.
+description: A Puffin Colony builder's steps. Use when you are a builder in this repo (COLONY_SESSION is your builder name, or the person took colony hi's offer to build), and before you start the wait, take a card, make its change, run the fast check, or post a done line or a question to the lead.
 ---
 
 # Colony builder

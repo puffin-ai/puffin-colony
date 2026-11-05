@@ -10,6 +10,7 @@ Applies to every session, at its start and with each new request, and to the rev
 
 | Task | Skill |
 | --- | --- |
+| A session opened without a task, or a repo with no `.colony/colony.toml` | `colony-setup` |
 | You are the lead, a builder, the reviewer, or the walker | `colony-lead`, `colony-builder`, `colony-reviewer`, `colony-walker` |
 | A bug, a failing test, a regression, or something slow | `diagnosing-bugs` |
 | New logic or a bug fix, built test-first | `tdd` |

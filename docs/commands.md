@@ -6,7 +6,10 @@ You type `colony`, and `colony join <name>` when the lead asks. The agents and t
 
 | Command | What it does |
 | --- | --- |
-| `colony` | Runs setup when the repo has no `.colony/colony.toml`, and opens your lead every time after. |
+| `colony` | Runs setup when the repo has no `.colony/colony.toml`, and opens your lead every time after. It opens no second lead while one's heartbeat is fresh. |
+| `colony hi` | For a session you opened without a task, which the line setup adds to `CLAUDE.md` runs: with no `.colony/colony.toml`, it says to set Colony up in that session. With no lead running, it claims the lead for that session. With a lead running, it offers a builder's name, or help. A session `colony` opened keeps its role. |
+| `colony setup [--print]` | Runs setup in this terminal, as `colony` does the first time. `--print` prints the setup prompt instead, for a session already open to follow. |
+| `colony skill-install [--config-dir <dir>]` | Copies the `colony-setup` skill into a Claude settings folder, `$CLAUDE_CONFIG_DIR` or `~/.claude` by default, so a session in any repo can set Colony up. |
 | `colony join <name>` | Opens a builder on this computer, after saying what it lacks: a clone, the `claude` login, or `gh auth`. |
 | `colony open <name>` | Opens a builder on this computer, in cmux or as a background session. The lead runs it. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
@@ -34,7 +37,7 @@ Both take `@<login>` as the recipient, which reaches that person's lead, and `@a
 | `colony handover --decisions … --open … --next …` | The lead posts its handover on the coordination issue, and prints the command for a fresh lead. |
 | `colony handover --read` | Prints this lead's last handover. |
 | `colony batch --name <n> --card N=BRANCH …` | Takes the cards through the gate loop to one PR. `--from <branch>` builds on another branch than `origin/<base>`. |
-| `colony status [--name <n>]` | Shows a batch's round, open problems, walk, running steps and minutes. Without `--name`, the newest batch. |
+| `colony status [--name <n>]` | Shows this computer's lead, with its name, account and heartbeat age, then a batch's round, open problems, walk, running steps and minutes. Without `--name`, the newest batch. |
 | `colony stats --card N[=BRANCH] … [--base B]` | Prints each card's predicted and actual minutes and tokens, as a table with a total row. |
 | `colony retro --name <batch>` | Runs the retro agent on a batch's reports, and opens a PR when it finds a lesson. |
 
