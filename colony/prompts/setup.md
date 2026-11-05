@@ -1,5 +1,22 @@
 You are setting up {display} in this repository. {display} runs a lead agent and builder agents through the whole software life cycle, and the person only talks to the lead, answers what it can't decide, and merges. Your job is to write its files into `{dir}/` at the top of this repo, lay out the knowledge vault, add the tools the person accepts, and open one pull request with them. The installed {display} package, which holds the templates you copy, is at `{package}`; read from it, and never change it. This is an interactive session: the person is here to answer.
 
+## The mode, first
+
+Before anything else, ask the person this one question, alone, and wait for the answer:
+
+    Which mode should {display} run in here?
+    - hack: a team building fast for hours or a weekend. Each person runs a lead, the leads talk on one pinned board issue, and work merges after the fast check.
+    - solo: one person on a small project. One lead and builders, with the checks and a reviewer.
+    - startup: a company's whole life cycle. The knowledge vault, specs, the card board, and the full gate.
+    Default: startup.
+
+Keep the answer as `<mode>`, taking `startup` when it is unclear, and write `mode = "<mode>"` as the first key of the `[project]` table when you write `{dir}/{name}.toml`. Then follow the mode's own steps, and only them:
+- `startup`: steps 1 to 9 below, exactly as written.
+- `solo`: "Solo mode", after step 9.
+- `hack`: "Hack mode", after step 9.
+
+The package's `modes/<mode>.toml` holds each mode's defaults, and every key in `{dir}/{name}.toml` overrides one there. So in solo and hack, write only the keys their steps name.
+
 ## 1. Read the repo, without asking
 
 Find out, and keep each answer for the later steps:
@@ -28,7 +45,7 @@ This message is the only time you ask. Number the 5 questions, and give your def
 
 Then show one yes-or-no list, each item with its default in brackets and what it installs or writes: the tools list from step 1, then these 4 items.
 - `knowledge` [yes]: the knowledge vault, typed pages with Obsidian-style `[[links]]` for what the team decides, builds and finds out, at `knowledge/`. When step 1 found a docs folder, the default is to adopt it in place: keep every file in it, add the vault's folders and readmes beside them, and change no page already there. The person may answer with another folder instead.
-- `hooks` [yes]: the wait guard, which refuses a foreground sleep, poll loop or watch, and two hooks that post a line for the lead when a builder waits on a permission pop-up or stops on an error, merged into `.claude/settings.json`.
+- `hooks` [yes]: the wait guard, which refuses a foreground sleep, poll loop or watch, two hooks that post a line for the lead when a builder waits on a permission pop-up or stops on an error, and the prompt hook, which shows a session the lines for it that it hasn't read, when it starts and before each prompt, merged into `.claude/settings.json`.
 - `board` [yes]: a GitHub Project board for the cards, owned by `<owner>`, with the fields Status, Builder, Tier, State, Last update, Account and Branch. When the login lacks the project scope, say in the same item that the person first runs `gh auth refresh -s project`, which opens the browser to grant it, and that every computer that runs a builder needs the same scope.
 - `pointer` [yes]: two lines in `CLAUDE.md`, `@{dir}/core.md` at its top, which loads {display}'s core in every session, and `This repo runs {display}: read {dir}/playbook.md.` at its end.
 
@@ -101,7 +118,7 @@ On a yes to `knowledge`. Its templates are in `{package}/knowledge/`: `templates
 ## 7. Add the tools and the guards
 
 1. **The tools.** Run `{name} tools` with the names from the tools list the person said yes to, such as `{name} tools playwright context7 role-skills starter-skills`, and skip it when they said yes to none. It merges the MCP servers into `.mcp.json` and keeps every entry already there, copies the role skills and the starter skills into `.claude/skills/`, keeping a starter skill the repo already has, and downloads an outside skill at its pinned commit. Never edit `.mcp.json` by hand. Add the `[tools]` table it prints to `{dir}/{name}.toml`, and on a yes to `relay`, the `transport` line it prints to the `[messages]` table there. When it fails, say why in one line and go on without that tool.
-2. **The hooks.** On a yes to `hooks`, run `{name} hooks install`. It merges three hooks into `.claude/settings.json`, keeping every hook and setting already there, and writes `{dir}/hooks/wait_guard.py`. Never edit `.claude/settings.json` by hand. When it fails, say why in one line and go on without the hooks.
+2. **The hooks.** On a yes to `hooks`, run `{name} hooks install`. It merges five hooks into `.claude/settings.json`, keeping every hook and setting already there, and writes `{dir}/hooks/wait_guard.py`. Never edit `.claude/settings.json` by hand. When it fails, say why in one line and go on without the hooks.
 3. **The suppressions ledger.** Run `{name} suppressions --update`. It records each file's count of lint and type suppressions, such as `# noqa`, `eslint-disable` and `@ts-expect-error`, in `{dir}/suppressions.json`. Then add ` && {name} suppressions` to the end of `checks` in `{dir}/{name}.toml`, so a batch fails when a count grows.
 4. **The board.** On a yes to `board`, run `{name} board init`. Put the board link it prints in the pull request's body. When it fails, say why in one line, and add that the person can run `{name} board init` later.
 5. Make no Needs issue: `{name} needs` makes `Needs <Person>` with the first question it posts.
@@ -120,10 +137,84 @@ On a yes to `pointer`, add `@{dir}/core.md` at the top of `CLAUDE.md` and `This 
       Pull request: <the PR link>. Merge it when you're happy with it.
       Run `{name}` to start.
 
+## Solo mode
+
+One person on a small project: one lead and builders, with the checks and a reviewer. Solo skips the knowledge vault, specs, research, the card board and the retro; the person can turn each on later under `[features]` in `{dir}/{name}.toml`. Follow steps 1 to 9 with these changes, and none other:
+
+- **Step 1:** skip the docs folders, the project scope and the tools list.
+- **Step 2:** ask only these 2 questions, numbered, in one message, each with its default, and show no yes-or-no list: which branch PRs go to (default: the default branch), and which rules, `lean` (the default), `puffin` or `own`.
+- **Step 3:** write only these keys. In `[project]`: `mode = "solo"`, the name, repo, base branch, `preset`, worktrees, fast and full checks, install command, and the generated paths and regen command when step 1 found them. Then the `[accounts.<name>]` tables, `[gate] rules`, and `[cycle]` when step 1 found something its defaults miss. Write no `[knowledge]` or `[board]` table.
+- **Step 4:** as written, with the rules from question 2.
+- **Step 5:** copy the playbook, and skip the spec and researcher briefs.
+- **Step 6:** skip it.
+- **Step 7:** install the hooks and record the suppressions ledger, and skip the tools and the board.
+- **Step 8:** add both lines, without asking.
+- **Step 9:** as written.
+
+## Hack mode
+
+A team builds fast, for hours or a weekend. Each person runs their own lead, `<login>-lead`, on their own computer. The leads are peers, talk on one pinned board issue, and merge after the fast check. Hack skips the knowledge vault, specs, research, the card board, the tools list and the retro. In hack mode a person is their GitHub login.
+
+1. **Read the repo, without asking.** Find only these, as step 1 does:
+   - The stack, the install command and the fast check. When the repo has no check yet, take its build command; when it has none either, leave the fast check empty, and say in the closing message that the team adds one before agents merge.
+   - The repo as `owner/name` and its default branch, and the folders at the top of the repo, for the owner question.
+   - Any `CLAUDE.md` or `AGENTS.md` at the top, and the settings folders on this computer, by name only.
+   - The person's name, from `git config user.name`, and GitHub login, from `gh api user --jq .login`.
+   - Whether this computer runs an Agent Relay core: the `relay` item that `{name} tools` prints.
+2. **Ask everything in one message.** This is the only other time you ask. Number these 5 questions, and give your default after each, so "defaults" is a full answer:
+   1. Who is on the team? Each person's GitHub login and name, and which one is the team lead, who alone reassigns work. Default: you alone, as the lead.
+   2. Who owns which folders? Default: with you alone, the whole repo; with a team, "not yet" for each person, until the team splits the folders at kickoff.
+   3. Which branch does work land on? Default: `main`.
+   4. May agents merge into it themselves after a passing fast check? Default: yes.
+   5. When is the demo? Default: not set.
+
+   When an answer is unclear, take the default and say so.
+3. **Open and pin the board.** Look for an open issue titled exactly `Board: <project>`, with `gh issue list --repo <owner/name> --state open --search '"Board: <project>" in:title' --json number,title`, and reuse it when there is one. Otherwise:
+   - Fill `{package}/templates/hack/board-issue.md`: `{project}` is the project's name, `{lead}` the team lead as `<Name> (`<login>`)`, `{demo}` the demo time or `the time the team sets`, and `{team}` one line per person, `- <Name>, `<login>`: owns <their folders, or not yet>`. Write logins without `@` here, so the issue doesn't subscribe each teammate to every post.
+   - Write it to a file in a temporary folder outside the repo, and run `gh issue create --repo <owner/name> --title "Board: <project>" --body-file <that file>`. The issue's number is the end of the URL it prints.
+   - Pin it with `gh issue pin <number> --repo <owner/name>`. When pinning fails, say why in one line and go on: the board works unpinned.
+4. **Write the config.** Write `{dir}/{name}.toml` with only these keys, from step 1 and the answers:
+
+       [project]
+       mode = "hack"
+       name = "<short name>"
+       repo = "<owner/name>"
+       base = "<question 3>"
+       fast_check = "<the fast check>"
+       checks = "<the fast check again: hack's gate runs it alone>"
+       install = "<the install command>"
+       worktrees = "<a sibling folder of the clone>"
+
+       [gate]
+       merge_after_fast_check = true    # false on a no to question 4
+
+       [messages]
+       board = <the board issue's number>
+
+       [people]
+       logins = ["<login>", "<login>"]
+       names = { <login> = "<Name>", <login> = "<Name>" }
+
+       [accounts.<login>]
+       config_dir = "~/.claude"
+       person = "<login>"
+
+   Write one `[accounts.<login>]` table per person, with `~/.claude`, the folder on their own computer. For each other settings folder step 1 found on this computer, add `[accounts.<login>-<folder>]` with the person's login. When this computer runs an Agent Relay core, add `transport = "relay"` to `[messages]`: a line then also arrives at once wherever a core runs, and the board keeps the record.
+5. **Write the core, the playbook and the pointer.** Copy `{package}/presets/hack/core.md` to `{dir}/core.md`, and fill `{project}`, `{base}` and `{fast_check}`. Copy the playbook as step 5 says, without the briefs, since every lead starts by reading it. Add both of step 8's lines without asking, and below the core's line add `@AGENTS.md`, unless the file already loads it.
+6. **Write AGENTS.md's two sections.** At the end of the top `AGENTS.md`, or in a new one, add `{package}/templates/hack/agents-board.md` and then `{package}/templates/hack/agents-owners.md`, and keep every line already there. Fill `{project}`, `{repo}`, `{board}` (the issue's number), `{lead}` and `{demo}` as in step 3, and `{owners}` with one table row per person: `| <Name> | `<login>` | <each folder in backticks, comma-separated, or not yet> |`.
+7. **Add the board script.** Copy `{package}/scripts/board` to `tools/board`, run `chmod +x tools/board`, and run `tools/board whoami`, which must name the board's issue. Any agent with `sh` and `gh`, Codex among them, reads and posts on the board with it.
+8. **Install the hooks.** Run `{name} hooks install`, as step 7 says. The prompt hook it adds shows each lead its new board lines when it starts and before each prompt.
+9. **Open the pull request** as step 9 says, with the message `chore: set up {display} in hack mode`, and the board's link in its body. Then end with exactly this message, its 3 lines filled in, and nothing after it:
+
+       You're set: wrote <each file and folder written, comma-separated>, and pinned the board at <the issue link>.
+       Pull request: <the PR link>. Merge it now, so every teammate's agent gets the board and the owner table.
+       Each teammate pulls and runs `{name}`, and any other agent uses `tools/board`.
+
 ## Never
 
 - Print, copy or write the value of an environment variable, a key, a token or a password.
 - Install a package, add a dependency, or download a file without the person's yes.
 - Spend money, or call a paid service.
-- Change any file outside `{dir}/`, the knowledge vault at `<vault>/`, the app folders' `AGENTS.md` and `CLAUDE.md`, `.mcp.json`, `.claude/skills/`, `.claude/rules/`, the hooks in `.claude/settings.json`, `.ignore`, and the two lines in the top `CLAUDE.md` or `AGENTS.md`.
+- Change any file outside `{dir}/`, the knowledge vault at `<vault>/`, the app folders' `AGENTS.md` and `CLAUDE.md`, `.mcp.json`, `.claude/skills/`, `.claude/rules/`, the hooks in `.claude/settings.json`, `.ignore`, and the two lines in the top `CLAUDE.md` or `AGENTS.md`; in hack mode also the board and owner sections at the end of the top `AGENTS.md`, the `@AGENTS.md` line, and `tools/board`.
+- Post or comment on the board issue: setup only opens and pins it.
 - Move, rename, overwrite or delete a page already in an adopted docs folder.

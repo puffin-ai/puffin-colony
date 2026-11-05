@@ -1,0 +1,310 @@
+#!/bin/sh
+# tools/board: read and post on the team's pinned board issue from any agent, with sh and gh alone.
+#
+#   tools/board post "<text>"        post; the text starts with [<Name>'s <agent>], added when missing (no text: stdin)
+#   tools/board unread               every post by others since your last look, marking the ones for you
+#   tools/board wait [--interval S]  check every S seconds (30) until a post for you comes, then print what is new
+#   tools/board read [-n N]          the board's last N posts (10), leaving what is unread as it is
+#   tools/board whoami               who you post as, and on which board
+#
+# A post is for you when it holds @<your GitHub login> or @all. The board is [messages] board in
+# .colony/colony.toml and the repo its [project] repo; BOARD_ISSUE and BOARD_REPO override them. Your name comes
+# from BOARD_NAME, else [people] names, else git's user.name; your agent from BOARD_AGENT, else Claude or Codex when
+# the environment shows one. What you have read lives in ~/.colony/board/, one folder per board and agent.
+
+set -u
+
+TAB=$(printf '\t')
+FIRST_LOOK=10   # the posts a first look shows, for context
+GIVE_UP=20      # failed checks in a row before wait stops
+SECRET='gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
+
+fail() {
+  printf 'board: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  sed -n '2,13s/^# \{0,1\}//p' "$0"
+}
+
+TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=$(cd "$(dirname "$0")/.." && pwd)
+CONFIG="$TOP/.colony/colony.toml"
+
+# toml_value TABLE KEY: one key's value in colony.toml, without its quotes, or nothing.
+toml_value() {
+  [ -f "$CONFIG" ] || return 0
+  awk -v want="[$1]" -v key="$2" '
+    /^[[:space:]]*\[/ { head = $0; sub(/#.*/, "", head); gsub(/[[:space:]]/, "", head); inside = (head == want); next }
+    inside && $0 ~ ("^[[:space:]]*" key "[[:space:]]*=") {
+      value = $0
+      sub(/^[^=]*=[[:space:]]*/, "", value)
+      sub(/[[:space:]]+#[^"]*$/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }' "$CONFIG"
+}
+
+valid_login() {
+  case $1 in '' | *[!A-Za-z0-9-]*) return 1 ;; esac
+}
+
+valid_repo() {
+  case $1 in '' | */*/* | /* | */ | *[!A-Za-z0-9_./-]*) return 1 ;; */*) return 0 ;; esac
+  return 1
+}
+
+# The board's repo and issue, and this agent's folder of state. Every command but help and whoami's name needs them.
+find_board() {
+  command -v gh >/dev/null 2>&1 || fail "gh is missing: install it from https://cli.github.com, then run gh auth login"
+  REPO=${BOARD_REPO:-$(toml_value project repo)}
+  [ -n "$REPO" ] || REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || REPO=""
+  valid_repo "$REPO" || fail "no repo: set [project] repo in .colony/colony.toml, or BOARD_REPO=owner/name"
+  ISSUE=${BOARD_ISSUE:-$(toml_value messages board)}
+  case $ISSUE in
+    '' | *[!0-9]*) fail "no board: set board = <issue number> under [messages] in .colony/colony.toml, or BOARD_ISSUE" ;;
+  esac
+  AGENT=$(agent_name)
+  slug=$(printf '%s' "$AGENT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')
+  STATE="${BOARD_STATE:-$HOME/.colony/board}/$(printf '%s' "$REPO" | tr '/' '_')-$ISSUE/$slug"
+  mkdir -p "$STATE" || fail "cannot write $STATE"
+}
+
+# Your GitHub login: BOARD_LOGIN, else the one this board's folder remembers, else gh's (which whoami refreshes).
+login() {
+  if [ -n "${BOARD_LOGIN:-}" ]; then
+    valid_login "$BOARD_LOGIN" || return 1
+    printf '%s\n' "$BOARD_LOGIN"
+    return 0
+  fi
+  if [ "${1:-}" != fresh ] && [ -s "$STATE/../login" ]; then
+    cat "$STATE/../login"
+    return 0
+  fi
+  who=$(gh api user --jq .login 2>/dev/null) || return 1
+  valid_login "$who" || return 1
+  printf '%s\n' "$who" > "$STATE/../login"
+  printf '%s\n' "$who"
+}
+
+# person_name LOGIN: BOARD_NAME, else the login's entry in [people] names, else the first word of git's user.name.
+person_name() {
+  if [ -n "${BOARD_NAME:-}" ]; then
+    printf '%s\n' "$BOARD_NAME"
+    return 0
+  fi
+  found=$(toml_value people names | awk -v who="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" '{
+    line = $0
+    gsub(/[{}]/, "", line)
+    count = split(line, pairs, ",")
+    for (i = 1; i <= count; i++) {
+      at = index(pairs[i], "=")
+      if (!at) continue
+      key = substr(pairs[i], 1, at - 1)
+      value = substr(pairs[i], at + 1)
+      gsub(/[[:space:]"]/, "", key)
+      sub(/^[[:space:]]*"/, "", value)
+      sub(/"[[:space:]]*$/, "", value)
+      if (tolower(key) == who && value != "") { print value; exit }
+    }
+  }')
+  [ -n "$found" ] || found=$(git config user.name 2>/dev/null | awk '{ print $1 }')
+  [ -n "$found" ] || found=$1
+  printf '%s\n' "$found"
+}
+
+agent_name() {
+  if [ -n "${BOARD_AGENT:-}" ]; then
+    printf '%s\n' "$BOARD_AGENT"
+  elif [ -n "${CLAUDECODE:-}" ]; then
+    echo Claude
+  elif [ -n "${CODEX_SANDBOX:-}${CODEX_HOME:-}${CODEX_THREAD_ID:-}" ]; then
+    echo Codex
+  else
+    echo agent
+  fi
+}
+
+# rows_jq LOGIN: the jq program gh runs on a page of comments. Each comment becomes one line,
+# id TAB author TAB time TAB "you" or "-" TAB body, with the body's newlines as \037, so a post never splits.
+rows_jq() {
+  printf '%s' '.[] | "\(.id)\t\(.user.login)\t\(.created_at)\t" + (if ((.body // "") | test("(^|[^A-Za-z0-9_-])@('"$1"'|all)($|[^A-Za-z0-9_-])"; "i")) then "you" else "-" end) + "\t" + ((.body // "") | gsub("\r"; "") | gsub("\t"; "  ") | gsub("\n"; "\u001f"))'
+}
+
+# fetch_last N: the board's last N comments as rows, reading pages from the end.
+fetch_last() {
+  total=$(gh api "repos/$REPO/issues/$ISSUE" --jq .comments 2>/dev/null) || return 1
+  case $total in '' | *[!0-9]*) return 1 ;; esac
+  page=$(((total + 99) / 100))
+  rows=""
+  while [ "$page" -ge 1 ]; do
+    got=$(gh api "repos/$REPO/issues/$ISSUE/comments?per_page=100&page=$page" --jq "$JQ" 2>/dev/null) || return 1
+    rows=$(printf '%s\n%s' "$got" "$rows")
+    [ "$(printf '%s\n' "$rows" | grep -c .)" -ge "$1" ] && break
+    page=$((page - 1))
+  done
+  printf '%s\n' "$rows" | grep . | tail -n "$1"
+}
+
+# fetch_new: set NEW to the rows past the cursor that this agent didn't post, and NEWEST to the newest row's
+# "<id> <time>", which mark_read makes the cursor. A first look anchors the cursor before the last FIRST_LOOK posts.
+fetch_new() {
+  cursor=""
+  [ -s "$STATE/cursor" ] && cursor=$(cat "$STATE/cursor")
+  if [ -z "$cursor" ]; then
+    rows=$(fetch_last "$FIRST_LOOK") || return 1
+    cursor=$(printf '%s\n' "$rows" | awk -F "$TAB" 'NF > 1 && (low == "" || $1 + 0 < low + 0) { low = $1; at = $3 }
+      END { if (low == "") print "0 1970-01-01T00:00:00Z"; else print (low - 1) " " at }')
+    printf '%s\n' "$cursor" > "$STATE/cursor"
+  else
+    rows=$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments?per_page=100&since=${cursor#* }" --jq "$JQ" \
+      2>/dev/null) || return 1
+  fi
+  last=${cursor%% *}
+  mine=" "
+  [ -f "$STATE/posted" ] && mine=" $(tr '\n' ' ' < "$STATE/posted")"
+  NEW=$(printf '%s\n' "$rows" | awk -F "$TAB" -v last="$last" -v mine="$mine " \
+    'NF > 1 && $1 + 0 > last + 0 && index(mine, " " $1 " ") == 0')
+  NEWEST=$(printf '%s\n' "$rows" | awk -F "$TAB" -v last="$last" 'NF > 1 && $1 + 0 > top + 0 { top = $1 + 0; at = $3 }
+    END { if (top > last + 0) print top " " at }')
+}
+
+mark_read() {
+  [ -z "$NEWEST" ] || printf '%s\n' "$NEWEST" > "$STATE/cursor"
+}
+
+# show: rows on stdin as posts, each under a line naming its author, time and comment, and whether it is for you.
+show() {
+  while IFS=$TAB read -r id who at flag body; do
+    [ -n "$id" ] || continue
+    mark=""
+    [ "$flag" = you ] && mark=", for you"
+    printf '%s @%s at %s, comment %s%s\n' '---' "$who" "$at" "$id" "$mark"
+    printf '%s\n' "$body" | tr '\037' '\n'
+  done
+}
+
+start() {
+  find_board
+  me=$(login) || me=""
+  JQ=$(rows_jq "${me:-all}")
+}
+
+cmd_post() {
+  if [ $# -gt 0 ]; then text=$*; else text=$(cat); fi
+  [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || fail "nothing to post: give the text, or pipe it in"
+  if printf '%s' "$text" | grep -Eq "$SECRET"; then
+    fail "a post never carries a secret, and this one holds a token's shape: take it out"
+  fi
+  case $text in
+    "["*"'s "*"]"*) ;;
+    *)
+      me=$(login) || fail "gh is not signed in: run gh auth login"
+      text="[$(person_name "$me")'s $AGENT] $text"
+      ;;
+  esac
+  out=$(gh api "repos/$REPO/issues/$ISSUE/comments" -f "body=$text" --jq '"\(.id) \(.html_url)"') ||
+    fail "GitHub did not take the post"
+  printf '%s\n' "${out%% *}" >> "$STATE/posted"
+  tail -n 200 "$STATE/posted" > "$STATE/posted.new" && mv "$STATE/posted.new" "$STATE/posted"
+  printf 'posted %s\n' "${out#* }"
+}
+
+cmd_unread() {
+  [ $# -eq 0 ] || fail "unread takes no arguments"
+  start
+  fetch_new || fail "could not reach GitHub, so nothing was marked read"
+  if [ -n "$NEW" ]; then
+    printf '%s\n' "$NEW" | show
+  else
+    echo "board: no new posts" >&2
+  fi
+  mark_read
+}
+
+cmd_wait() {
+  interval=30
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --interval)
+        [ $# -ge 2 ] || fail "--interval needs seconds"
+        interval=$2
+        shift 2
+        ;;
+      --interval=*)
+        interval=${1#*=}
+        shift
+        ;;
+      *) fail "wait: unknown argument $1" ;;
+    esac
+  done
+  case $interval in '' | *[!0-9]*) fail "--interval takes whole seconds" ;; esac
+  [ "$interval" -ge 1 ] || fail "--interval takes 1 second or more"
+  start
+  failed=0
+  while :; do
+    if fetch_new; then
+      failed=0
+      if printf '%s\n' "$NEW" | awk -F "$TAB" '$4 == "you" { found = 1 } END { exit !found }'; then
+        printf '%s\n' "$NEW" | show
+        mark_read
+        return 0
+      fi
+    else
+      failed=$((failed + 1))
+      [ "$failed" -lt "$GIVE_UP" ] || fail "could not reach GitHub $GIVE_UP times in a row: check gh auth status"
+    fi
+    sleep "$interval"
+  done
+}
+
+cmd_read() {
+  n=10
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -n)
+        [ $# -ge 2 ] || fail "read: -n needs a number"
+        n=$2
+        shift 2
+        ;;
+      -n*)
+        n=${1#-n}
+        shift
+        ;;
+      *) fail "read: unknown argument $1" ;;
+    esac
+  done
+  case $n in '' | *[!0-9]*) fail "read: -n takes a whole number" ;; esac
+  start
+  rows=$(fetch_last "$n") || fail "could not reach GitHub"
+  [ -z "$rows" ] || printf '%s\n' "$rows" | show
+}
+
+cmd_whoami() {
+  [ $# -eq 0 ] || fail "whoami takes no arguments"
+  find_board
+  me=$(login fresh) || fail "gh is not signed in: run gh auth login"
+  name=$(person_name "$me")
+  printf 'login: %s\nname: %s\nagent: %s\nposts as: [%s'"'"'s %s]\nboard: %s#%s\n' \
+    "$me" "$name" "$AGENT" "$name" "$AGENT" "$REPO" "$ISSUE"
+}
+
+command=${1:-help}
+[ $# -gt 0 ] && shift
+case $command in
+  post)
+    find_board
+    cmd_post "$@"
+    ;;
+  unread) cmd_unread "$@" ;;
+  wait) cmd_wait "$@" ;;
+  read) cmd_read "$@" ;;
+  whoami) cmd_whoami "$@" ;;
+  help | -h | --help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

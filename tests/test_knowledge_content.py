@@ -34,10 +34,11 @@ PLACEHOLDERS = {"product", "knowledge", "apps"}
 PROMPT_PLACEHOLDERS = {
     "researcher": {"project", "question", "knowledge"},
     "spec": {"project", "feature", "knowledge"},
-    # Setup fills its own names; the vault's, the presets', the playbook's and the briefs' placeholders appear as text
-    # for the setup session to fill.
+    # Setup fills its own names; the vault's, the presets', the playbook's, the briefs' and the hack templates'
+    # placeholders appear as text for the setup session to fill.
     "setup": {"package", "dir", "name", "display"} | PLACEHOLDERS
-             | {"web_app", "service", "fast_check", "checks", "base", "install", "project"},
+             | {"web_app", "service", "fast_check", "checks", "base", "install", "project"}
+             | {"repo", "board", "lead", "demo", "team", "owners"},
 }
 
 CONTENT = sorted(KNOWLEDGE.rglob("*.md"))

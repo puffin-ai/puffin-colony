@@ -1,9 +1,11 @@
 """colony suppressions and colony hooks: the guards a repo keeps on its agents.
 
 `colony suppressions` holds each file's count of lint and type suppressions to `.colony/suppressions.json`, a record
-that only shrinks. `colony hooks install` merges three hooks into `.claude/settings.json`, keeping the hooks already
-there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), and two that post a line on the
-coordination issue, `asking` when a builder waits on a permission pop-up and `stopped` when a turn ends on an error.
+that only shrinks. `colony hooks install` merges five hooks into `.claude/settings.json`, keeping the hooks already
+there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), two that post a line on the coordination
+issue, `asking` when a builder waits on a permission pop-up and `stopped` when a turn ends on an error, and the prompt
+hook, `unread`, which shows a session the lines addressed to it that it hasn't read, when it starts and before each
+prompt. Every mode installs all five.
 """
 from __future__ import annotations
 
@@ -25,6 +27,9 @@ LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
 ASKING_REPEAT = 600  # a builder posts at most one asking line per 10 minutes
 ERROR_CODE = re.compile(r"[a-z_]{1,40}")
+UNREAD_EVERY = 30  # with no wait running, the prompt hook reads GitHub itself at most once per 30 seconds
+WAIT_FRESH = 60  # a wait whose last poll is under a minute old is running, and the prompt hook leaves GitHub to it
+HOOK_TIMEOUT = 20  # seconds Claude Code gives the prompt hook before it goes on without it
 # The starter skills shipped in skills/ beside the role skills, which setup offers.
 STARTER_SKILLS = ("diagnosing-bugs", "tdd", "code-review", "resolving-merge-conflicts", "retro", "implement-spec",
                   "prototype", "grill-me", "writing-for-agents", "git-guardrails")
@@ -178,15 +183,25 @@ def colony_command(action: str) -> str:
             f'cd "$CLAUDE_PROJECT_DIR" && exec {cli.NAME} hooks {action}')
 
 
+def quiet_command(action: str) -> str:
+    """A hook's shell command that runs `colony hooks <action>` in a Colony session, skips every other one, and always
+    exits 0: a UserPromptSubmit hook that exits 2 would erase the person's prompt."""
+    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {cli.NAME} >/dev/null 2>&1 || exit 0; '
+            f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {cli.NAME} hooks {action}; exit 0')
+
+
 def hook_entries() -> list[tuple[str, str | None, dict, str]]:
     """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file)."""
     guard = f"{cli.DIR}/hooks/{GUARD}"
+    unread_hook = {"type": "command", "command": quiet_command("unread"), "timeout": HOOK_TIMEOUT}
     return [
         ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard)}, guard),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking"), "async": True}, f"{cli.NAME} hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped"), "async": True},
          f"{cli.NAME} hooks stopped"),
+        ("UserPromptSubmit", None, unread_hook, f"{cli.NAME} hooks unread"),
+        ("SessionStart", None, dict(unread_hook), f"{cli.NAME} hooks unread"),
     ]
 
 
@@ -228,7 +243,7 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
 
 def install(config: dict, args) -> int:
     """`colony hooks install`: merge Colony's hooks into .claude/settings.json, and copy the wait guard into
-    .colony/hooks/."""
+    .colony/hooks/. Every mode gets the same five hooks."""
     root = cli.repo_root()
     # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
     name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
@@ -316,14 +331,87 @@ def stopped(config: dict, args) -> int:
     return post(config, lead, f"{me} stopped on an error ({cause}) at {at}", me)
 
 
+def save_state(path: Path, state: dict) -> None:
+    """Write a wait's state file whole, through a temporary file, so a wait reading it never sees half of it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}")
+    temporary.write_text(json.dumps(state))
+    os.replace(temporary, path)
+
+
+def read_unread(config: dict, args, me: str) -> list[dict]:
+    """The unread cache's lines for the session `me`, taken out of its state file (see `unread`)."""
+    from colony import transport, wait
+
+    path = wait.state_path(config["project"]["name"], me)
+    state = wait.read_json(path, {})
+    state = state if isinstance(state, dict) else {}
+    now = time.time()
+    running = now - float(state.get("polled_at") or 0) < WAIT_FRESH
+    if not running and now - float(state.get("hook_polled_at") or 0) >= UNREAD_EVERY:
+        state["hook_polled_at"] = now  # before the call, so a hanging network is tried again only after the interval
+        state.setdefault("since", (datetime.now(timezone.utc) - wait.LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        state.setdefault("pending", [])
+        mark = transport.MARK if transport.kind(config) == "relay" else None
+        try:
+            wait.poll(config["project"]["repo"], state, wait.session(config, args, me), mark)
+        except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+            print(f"{cli.NAME} hooks unread: GitHub was not read, and the hook tries again in {UNREAD_EVERY} seconds: "
+                  f"{e}", file=sys.stderr)
+        save_state(path, state)
+    entries = [entry for entry in state.get("unread") or [] if isinstance(entry, dict)]
+    if not entries:
+        return []
+    if running:
+        # The wait owns the file: read it again just before writing, and take out only the lines shown here. The
+        # wait drops them from its own gathered lines when it next reads the file (wait.drop_shown).
+        state = wait.read_json(path, {})
+        state = state if isinstance(state, dict) else {}
+        state["unread"] = [entry for entry in state.get("unread") or [] if entry not in entries]
+    else:
+        shown = {wait.unread_text(entry) for entry in entries}
+        state["unread"] = []
+        state["pending"] = [item for item in state.get("pending", []) if not item or item[0] not in shown]
+        state["listed"] = [text for text in state.get("listed", []) if text not in shown]
+    save_state(path, state)
+    return entries
+
+
+def unread(config: dict, args) -> int:
+    """`colony hooks unread`, the UserPromptSubmit and SessionStart hook: print the lines addressed to this session that
+    it hasn't read, then empty the unread cache they came from.
+
+    The cache is `unread` in the state file `colony wait` keeps, ~/.colony/<project>/<session>.json. While a wait runs,
+    which its last poll (`polled_at`, under WAIT_FRESH seconds old) shows, the hook makes no network call. Otherwise it
+    reads GitHub itself through wait.poll, with the wait's read time and ETag, at most once per UNREAD_EVERY seconds,
+    so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr."""
+    from colony import wait
+
+    hook_event()  # read and dropped: the prompt stays in the window
+    me = os.environ.get(cli.SESSION_ENV, "").lower()
+    if not me:
+        return 0
+    try:
+        entries = read_unread(config, args, me)
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME} hooks unread: {e}", file=sys.stderr)
+        return 0
+    if entries:
+        print(f"Unread lines for {me}, which colony wait won't print again:")
+        print("\n".join(wait.unread_text(entry) for entry in entries))
+    return 0
+
+
 def add_commands(sub) -> None:
-    """cli.py's route to this module: `suppressions`, and `hooks install`, `hooks asking` and `hooks stopped`."""
+    """cli.py's route to this module: `suppressions`, and `hooks install`, `hooks asking`, `hooks stopped` and
+    `hooks unread`."""
     p = sub.add_parser("suppressions", help=f"count lint and type suppressions per file against "
                                             f"{cli.DIR}/{LEDGER}, and fail on growth")
     p.add_argument("--update", action="store_true",
                    help="lower the record to today's counts (it never raises one); the first run records them")
     p.set_defaults(run=suppressions)
-    hooks = sub.add_parser("hooks", help="the wait guard and the lines a builder posts on a pop-up or an error")
+    hooks = sub.add_parser("hooks", help="the wait guard, the lines a builder posts on a pop-up or an error, and the "
+                                         "prompt hook")
     actions = hooks.add_subparsers(dest="action", metavar="action", required=True)
     p = actions.add_parser("install", help="merge Colony's hooks into .claude/settings.json, keeping the hooks there")
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
@@ -334,3 +422,6 @@ def add_commands(sub) -> None:
     p.set_defaults(run=asking)
     p = actions.add_parser("stopped", help="the StopFailure hook: a line for the lead (Claude Code runs it)")
     p.set_defaults(run=stopped)
+    p = actions.add_parser("unread", help="the prompt hook: the lines this session hasn't read, when it starts and "
+                                          "before each prompt (Claude Code runs it)")
+    p.set_defaults(run=unread)
