@@ -10,6 +10,8 @@ Your own `CLAUDE.md` and `AGENTS.md` always count, whichever preset you pick. Se
 | `puffin` | You want a full engineering system, written for a Next.js app and a Python service. |
 | `own` | Your repo already has the rules it needs in `CLAUDE.md` or `AGENTS.md`. |
 
+Hack mode asks for no preset. It uses a hack core of about 300 words: honesty, ownership of folders, and duties on the board. Solo uses `lean` by default. See [modes.md](modes.md).
+
 ## The three levels
 
 | Level | File | Loads | Holds |

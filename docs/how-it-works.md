@@ -2,6 +2,8 @@
 
 Puffin Colony runs one loop: you ask, a lead plans, builders build, a gate checks, and you merge one pull request. Around the loop sit the knowledge vault, the tiers, the board and the learning step. This page walks through it step by step and names the command or file behind each step. [cycle.md](cycle.md) covers tiers, specs, research, the Needs issue, the board, handover, stats and retro in full.
 
+This is Startup, the whole system. Hack and Solo turn parts of it off, and [Hack and Solo](#hack-and-solo) below says how they differ. [modes.md](modes.md) compares all three.
+
 ## The pieces
 
 | Piece | What it is |
@@ -43,7 +45,9 @@ Run `colony` in a repo that has no `.colony/colony.toml`. It starts an interacti
 - the Claude Code settings folders on this computer (`~/.claude` and any `~/.claude-*`), by name only, never their contents;
 - your name, from `git config user.name`.
 
-**It asks at most 5 questions,** in one message, each with a default:
+**It asks the mode first:** `hack`, `solo` or `startup`. The rest of this step is Startup's setup. Hack asks about the team, owners and the demo instead, and Solo asks only the base branch and the rules; see [modes.md](modes.md).
+
+**Then it asks at most 5 questions,** in one message, each with a default:
 1. Who is on the team, and which Claude accounts (settings folders) does each one use?
 2. Which branch do PRs go to?
 3. Which rules: `lean`, `puffin` or `own`?
@@ -225,7 +229,23 @@ See [cycle.md](cycle.md#stats) for both.
 
 ## 11. You merge
 
-The merge is yours. Colony never merges into your base branch, and never pushes to it. When you merge, the lead sets the cards to Done.
+The merge is yours. In Startup and Solo, Colony never merges into your base branch, and never pushes to it. When you merge, the lead sets the cards to Done. Hack is the one exception, below.
+
+## Hack and Solo
+
+### Hack
+
+1. **Setup** asks the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. It writes the owner table into `AGENTS.md` and a hack core of about 300 words as the rules. It opens the issue `Board: <project>`, pins it, and writes its number to `[messages] board`. It copies the board script to `tools/board`.
+2. **Each person runs `colony`** on their own machine and gets a lead named `<login>-lead`. The leads are peers, and each may open builders.
+3. **Every line goes to the board,** not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds the prefix. A post is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
+4. **Posts reach the agent between prompts.** `colony wait` keeps the lines addressed to this session that it hasn't printed under `unread` in `~/.colony/<project>/<session>.json`. When you send a prompt, the prompt hook prints them, empties `unread`, and makes no network call. When `colony wait` isn't running, the hook makes one ETag-cached `gh api` call, at most once per 30 seconds. Where Agent Relay runs, a post also arrives at once.
+5. **The gate is the fast check.** `colony merge <branch>` fetches, merges the branch into the base locally, and runs the fast check. It pushes the base only when the check passes and `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. It never force-pushes. Before the demo, `colony batch --review` adds one fresh reviewer.
+
+Codex and other agents take part through `tools/board`. The step-by-step guide is [hackathon.md](hackathon.md).
+
+### Solo
+
+Solo is one lead with cards and builders, as above, and a gate of the checks and a reviewer. The browser walk is optional. The knowledge vault, specs, research, the card board and the retro are off until you turn them on. The prompt hook shows the lead new lines when you send a prompt.
 
 ## Where things live
 
@@ -243,6 +263,7 @@ The merge is yours. Colony never merges into your base branch, and never pushes 
 | `<worktrees>/<project>-retro-<batch>` | The retro agent's worktree |
 | `../<builder>-<card>` | A builder's worktree |
 | `../next-<batch>` | The lead's early-merge worktree |
-| `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, and the lead's stale-card record |
+| `tools/board` | Hack only: the board script for Codex and other agents |
+| `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
 
 Every command, with one line each, is in [commands.md](commands.md).

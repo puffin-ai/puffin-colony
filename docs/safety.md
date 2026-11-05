@@ -6,7 +6,7 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 
 ## Locks in the code
 
-- **It never pushes to your base branch.** A batch makes one push, naming its own branch in full: `refs/heads/<project>/batch-<name>`. It refuses to push any branch that is the base branch or doesn't start with `<project>/batch-`. The retro pushes only `<project>/retro-<batch>`, under the same check. Fixers commit and never push. Setup pushes only `colony/setup`.
+- **It never pushes to your base branch.** A batch makes one push, naming its own branch in full: `refs/heads/<project>/batch-<name>`. It refuses to push any branch that is the base branch or doesn't start with `<project>/batch-`. The retro pushes only `<project>/retro-<batch>`, under the same check. Fixers commit and never push. Setup pushes only `colony/setup`. The one exception is Hack's `colony merge <branch>`: it pushes the base only when `[gate] merge_after_fast_check = true` and the fast check passed on the merged result, never force-pushes, and opens a PR otherwise.
 - **It never prints env values.** `--dry-run` prints the names of the variables it would set, never their values. The values in `check_env_file` go only into the checks' environment.
 - **A line never carries a secret.** `colony post`, `colony say` and the hooks refuse a line that holds a token's shape, or the value of an env variable whose name says it is a key, token, secret or password.
 - **The gate's agents never bill an API key.** The reviewer, walker, fixers and retro run with `ANTHROPIC_API_KEY` removed from their environment, so they always run on your Claude Code login. The lead and builders drop it too, unless `use_api_key = true`.
@@ -25,6 +25,8 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 | The wait guard | Before every Bash call | Refuses a foreground sleep over 10 seconds, a loop that sleeps, an endless loop, `watch`, `gh run watch` and `gh pr checks --watch`. Its message says to use `run_in_background` or `colony wait`. A command sent to the background passes. |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
+
+In Hack and Solo, a prompt hook also runs when you send a prompt. It prints the lines `colony wait` saved for this session, then empties that list. It makes no network call while the wait runs, and otherwise one ETag-cached `gh api` call at most every 30 seconds.
 
 The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3`. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
 
@@ -47,7 +49,7 @@ Setup writes the first record and adds `&& colony suppressions` to your `checks`
 - show, copy or move a secret: keys, tokens, passwords, `.env` values;
 - delete data: databases, issues, or files and branches that aren't its own;
 - add, remove or upgrade a dependency;
-- merge into the base branch, or push to it.
+- merge into the base branch, or push to it, except through `colony merge` in Hack, when setup's yes allowed it.
 
 A builder that meets one sends it to the lead as a question. Only the lead asks you, on your Needs issue, with its own pick as the default.
 
@@ -62,7 +64,7 @@ The core and the stop list are instructions, not locks: a model can still get on
 
 ## Second locks you should add
 
-- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused.
+- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused. In Hack, that also refuses `colony merge`'s push, so either leave the base open for the event or set `merge_after_fast_check = false`.
 - **Start `colony` from a shell without `ANTHROPIC_API_KEY`.**
 - **Keep `.env` files and `check_env_file` out of git.**
 - **Run `--dry-run` first,** for setup and for your first batch.

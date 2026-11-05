@@ -2,15 +2,18 @@
 
 Colony keeps its settings in `.colony/colony.toml` at the root of your repo. Setup writes it from [`colony/colony.toml.example`](../colony/colony.toml.example) and fills in every value, so you rarely edit it by hand. When you do, commit the change like any other file: every machine reads the same settings.
 
+Each mode has its defaults in the package, in `colony/modes/<mode>.toml`. Colony reads the mode's file first, then `.colony/colony.toml`, and any key in your file overrides the default. See [modes.md](modes.md#the-defaults-files).
+
 Paths may start with `~`. Every command checks the required keys when it starts, and names the missing one in a single line, such as `colony.toml: [project] needs 'checks'`. Every table below `[budget]` is optional, and each of its keys has a default.
 
 ## `[project]`
 
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
+| `mode` | no | `"hack"` | The mode: `"hack"`, `"solo"` or `"startup"`. Setup asks it first. It picks the defaults file, and what runs: see [modes.md](modes.md). Without it, `startup`. |
 | `name` | yes | `"myapp"` | A short name. It starts session titles (`myapp-lead`), branch names (`myapp/batch-2026-11-05`), worktree names, and the board's title. |
 | `repo` | yes | `"owner/myapp"` | The GitHub repo, as `owner/name`. Cards, lines and PRs live here, and the board belongs to its owner. |
-| `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it. |
+| `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it, except `colony merge` in Hack with `[gate] merge_after_fast_check = true`. |
 | `preset` | no | `"lean"` | The rules setup copied: `lean`, `puffin` or `own`. A record for you; the commands don't read it. |
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
 | `prefer_account` | no | `"ana-team"` | The `[accounts.<name>]` table new sessions and batches use first, while its folder is on this computer and its saved 5-hour usage is under 90%. It must name a table in the file. |
@@ -92,6 +95,7 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | `max_rounds` | yes | `5` | The most rounds a batch runs. A last round that still has findings stops the batch. |
 | `walk` | yes | `true` | Whether to walk the changed screens in a browser. Set `false` for a repo with no web UI. |
 | `walk_paths` | no | `["web/", "app/"]` | Path prefixes. A round that changes none of them skips the walk, unless the last walk failed. Empty walks every round. |
+| `merge_after_fast_check` | no | `true` | Hack only. `true` lets `colony merge <branch>` push the base after the fast check passes on the merged result. Otherwise `colony merge` opens a PR. Setup asks, with yes as the default. |
 
 ## `[budget]`
 
@@ -111,6 +115,7 @@ How lines travel between sessions. See [messages.md](messages.md).
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
 | `transport` | no | `"relay"` | `"github"`, the default, posts every line as an issue comment and polls for it. `"relay"` also sends each line that can't wait through this computer's Agent Relay core, at once, and keeps the comment as the record. Setup offers `relay`, with yes as the default when a core runs on this computer. |
+| `board` | no | `12` | Hack only. The number of the pinned `Board: <project>` issue, which setup opens and pins. Every line goes there instead of to cards. |
 | `lead_digest_minutes` | no | `10` | How long the lead's wait gathers lines before it prints them as a digest. A line that can't wait prints at once: `urgent:`, `blocked:` and `question:` lines, your lines, and `done` for a card the batch waits on. |
 
 ## `[people]`
@@ -145,7 +150,7 @@ caps = { living-spec = 25000 }
 
 | Key | Example | What it does |
 | --- | --- | --- |
-| `number` | `7` | The number of a GitHub Project the repo's owner already has, to use as the board. Without it, Colony finds the owner's open project titled `Colony: <name>`, which `colony board init` makes. |
+| `number` | `7` | The number of a GitHub Project the repo's owner already has, to use as the card board. (Hack's board issue is `[messages] board`.) Without it, Colony finds the owner's open project titled `Colony: <name>`, which `colony board init` makes. |
 
 Every computer's `gh` login needs the project scope for the board: `gh auth refresh -s project`.
 

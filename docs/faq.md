@@ -5,6 +5,9 @@
 **Does it need many Claude accounts?**
 No. It uses yours. One account runs the lead, the builders, the gate, the spec agent and the researcher. `colony.toml` can list more than one settings folder, so that each person on a team uses their own account. Spreading one person's work across several seats may conflict with [Anthropic's terms](https://www.anthropic.com/legal), so check them before you do it.
 
+**Can a hackathon team use it?**
+Yes, in Hack mode. Each teammate runs a lead on their own machine, the leads talk on one pinned issue with `@login` mentions, and work lands after the fast check with `colony merge <branch>`. For one person, Solo keeps the lead, builders, checks and a reviewer, and leaves the rest off. See [modes.md](modes.md) and [hackathon.md](hackathon.md).
+
 **Which stacks does it support?**
 Any repo on GitHub whose checks run from a shell command. Setup reads `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, `Gemfile`, `pom.xml` and your CI files to find them. The gate names failing tests for pytest and for JavaScript runners such as Vitest and Jest, and sums up other failures from the output. The browser walk needs a web UI: set `walk = false` for a library or a service. It runs on macOS and Linux, and uses [cmux](https://github.com/manaflow-ai/cmux) for new workspaces when it is installed.
 
@@ -25,6 +28,28 @@ It stops when the checks fail the same way two rounds in a row, when a fixer com
 
 **What if a builder goes quiet?**
 A card In progress whose Last update on the board is over 2.5 hours old gives the lead a `stale:` line, unless its State is usage limit. The lead looks at that builder's session. See [cycle.md](cycle.md#the-board).
+
+## Numbers from the first batches
+
+These come from one team's first batch: Puffin Calendar, on 2026-11-05. It is one run, not a benchmark, and your numbers will differ.
+
+| What | Result |
+| --- | --- |
+| Open problems across 10 cards | 7 → 0, over 4 fix rounds |
+| Phone bugs the browser walk caught that tests missed | 4 |
+| Time per fix card | 1 to 25 minutes, median about 5 |
+| Cost per session after loading rules on demand | 14% less |
+| A tiny change | about 2 minutes |
+| The whole batch | about 2.5 hours, mostly checks |
+
+The same day, Colony ran a batch on its own for the first time, with nobody relaying messages ([Puffin PR #1310](https://github.com/Puffin-Calendar/puffin-calendar/pull/1310)):
+
+| What | Result |
+| --- | --- |
+| Setup on Puffin's repo | 2.6 minutes and $1.00. It wrote the config, playbook, skills and one AGENTS.md row, and opened its own setup PR |
+| Two cards, from the job to an open PR | about 66 minutes. The lead opened a builder and handed out the cards. It answered the builder's question on the card in minutes, then ran the gate |
+| The gate | open problems 1 → 0 in 2 rounds, with the walk and the checks passing both times |
+| Agent cost | $9.58 at API prices: $5.90 walk, $2.38 review, $1.30 fix |
 
 ## How it compares
 
