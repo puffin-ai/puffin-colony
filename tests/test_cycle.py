@@ -1,0 +1,449 @@
+"""Tests for the cycle: the tier rules on fixture diffs, the risk list, `needs`, the handover, `stats` totals, stale
+cards on a fake clock, and the retro prompt. gh is the stand-in from test_board."""
+import argparse
+import json
+import os
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+from test_board import CONFIG, LISTED, gh  # noqa: F401  (gh is the stand-in gh fixture)
+
+from colony import cli, cycle
+
+
+def parse(*argv):
+    """Parse a command line the way cli.py will, through cycle.add_commands."""
+    parser = argparse.ArgumentParser()
+    cycle.add_commands(parser.add_subparsers(dest="command"))
+    return parser.parse_args(list(argv))
+
+
+def change(path, added=0, removed=0, status="M", old=None, lines=None):
+    """One file's part of a unified diff: `added` and `removed` filler lines, or the added `lines` given."""
+    old = old or path
+    head = f"diff --git a/{old} b/{path}\n"
+    if status == "A":
+        head += f"new file mode 100644\n--- /dev/null\n+++ b/{path}\n"
+    elif status == "D":
+        head += f"deleted file mode 100644\n--- a/{path}\n+++ /dev/null\n"
+    elif status == "R":
+        head += f"similarity index 90%\nrename from {old}\nrename to {path}\n--- a/{old}\n+++ b/{path}\n"
+    else:
+        head += f"--- a/{path}\n+++ b/{path}\n"
+    body = [f"+{line}" for line in (lines or [f"line {i}" for i in range(added)])]
+    body += [f"-old {i}" for i in range(removed)]
+    return head + ("@@ -1 +1 @@\n" + "\n".join(body) + "\n" if body else "")
+
+
+def verdict(*parts, config=None, existed=lambda entry: True, feature=False):
+    """The verdict on a diff made of these parts."""
+    return cycle.classify(cycle.parse_diff("".join(parts)), existed, config or CONFIG, feature)
+
+
+# Tiers
+
+
+def test_a_small_change_in_one_area_is_tiny():
+    result = verdict(change("web/src/button.tsx", added=6, removed=4))
+    assert (result.tier, result.reasons, result.risks) == ("TINY", [], [])
+
+
+def test_docs_up_to_the_cap_are_tiny_and_past_it_small():
+    assert verdict(change("knowledge/wiki/home.md", added=150, removed=150)).tier == "TINY"
+    result = verdict(change("knowledge/wiki/home.md", added=200, removed=101))
+    assert result.tier == "SMALL" and "301 changed docs lines, over 300" in result.reasons
+    assert verdict(change("README.md", added=20)).tier == "TINY"
+
+
+@pytest.mark.parametrize("parts, reason", [
+    ([change("web/src/a.tsx", added=101)], "101 non-test code lines, over 100"),
+    ([change("web/src/a.tsx", added=5), change("api/main.py", added=5)], "code in more than one area, api, web"),
+    ([change("apps/web/a.tsx", added=5), change("apps/site/b.tsx", added=5)],
+     "code in more than one area, apps/site, apps/web"),
+    ([change("knowledge/wiki/old.md", status="D", removed=3)], "a docs page moved or deleted, knowledge/wiki/old.md"),
+])
+def test_a_change_past_a_tiny_limit_is_small(parts, reason):
+    result = verdict(*parts)
+    assert result.tier == "SMALL" and reason in result.reasons
+
+
+def test_backend_code_is_never_tiny():
+    config = {**CONFIG, "project": {**CONFIG["project"], "backend_paths": ["server/"]}}
+    result = verdict(change("server/app.py", added=3), config=config)
+    assert result.tier == "SMALL" and result.reasons == ["code in a backend path, server/app.py"]
+    assert verdict(change("server/tests/test_app.py", added=3), config=config).tier == "TINY"
+
+
+def test_tests_lockfiles_and_generated_files_do_not_count_toward_the_line_limits():
+    config = {**CONFIG, "project": {**CONFIG["project"], "generated": ["web/src/gen/*"]}}
+    result = verdict(change("web/src/a.tsx", added=10), change("web/src/a.test.tsx", added=900),
+                     change("web/src/gen/api.ts", added=900), config=config)
+    assert result.tier == "TINY"
+    result = verdict(change("web/src/a.tsx", added=10), change("package-lock.json", added=900))
+    assert result.tier == "SMALL" and result.reasons == ["1 place on the risk list"]
+
+
+@pytest.mark.parametrize("parts, existed, reason", [
+    ([change("web/src/a.tsx", added=401)], True, "401 non-test code lines, over 400, in web"),
+    ([change("src/features/billing/index.ts", status="A", added=5)], False,
+     "a new entry under features/, src/features/billing"),
+    ([change("web/app/settings/page.tsx", status="A", added=5)], True,
+     "a new page, layout or route file, web/app/settings/page.tsx"),
+    ([change("knowledge/specs/billing/requirements.md", status="A", added=5)], True,
+     "a new spec page, knowledge/specs/billing/requirements.md"),
+    ([change("db/migrations/0003_users.sql", status="A", lines=["CREATE TABLE users (id int);"])], True,
+     "a migration that creates a table, db/migrations/0003_users.sql"),
+])
+def test_a_feature_trigger_makes_it_a_feature(parts, existed, reason):
+    result = verdict(*parts, existed=lambda entry: existed)
+    assert result.tier == "FEATURE" and reason in result.reasons
+
+
+def test_a_new_file_in_a_feature_folder_that_exists_is_no_feature():
+    assert verdict(change("src/features/calendar/more.ts", status="A", added=5)).tier == "TINY"
+    assert verdict(change("tests/routes/test_users.py", status="A", added=5), existed=lambda e: False).tier == "TINY"
+
+
+def test_feature_asked_for_wins_over_a_tiny_diff():
+    result = verdict(change("web/src/a.tsx", added=1), feature=True)
+    assert result.tier == "FEATURE" and result.reasons == ["FEATURE was asked for with --feature"]
+
+
+def test_weakened_checks_are_never_tiny():
+    result = verdict(change("tests/test_a.py", removed=2, added=1))
+    assert result.tier == "SMALL" and result.risks == ["checks: tests/test_a.py, deletes test lines"]
+    result = verdict(change("web/src/a.ts", lines=["// eslint-disable-next-line no-console"]))
+    assert result.risks == ["checks: web/src/a.ts, adds the skip mark `eslint-disable`"]
+    result = verdict(change("tests/test_a.py", status="D", removed=3))
+    assert "checks: tests/test_a.py, moves or deletes a test file" in result.risks
+
+
+# The risk list
+
+
+@pytest.mark.parametrize("path, lines, risk", [
+    ("src/auth/session.ts", None, "auth: src/auth/session.ts"),
+    ("web/src/login/form.tsx", None, "auth: web/src/login/form.tsx"),
+    ("src/billing/invoice.py", None, "payments: src/billing/invoice.py"),
+    ("db/migrations/0004.py", ["op.add_column('users', sa.Column('age'))"], "migrations: db/migrations/0004.py"),
+    ("src/settings.py", ['API_KEY = "abcd1234efgh5678"'],
+     'secrets: src/settings.py, adds `API_KEY = "abcd1234efgh5678"`'),
+    (".env.example", None, "secrets: .env.example"),
+    ("src/jobs/cleanup.py", ['db.execute("DELETE FROM users WHERE old")'],
+     'deletion: src/jobs/cleanup.py, adds `db.execute("DELETE FROM users WHERE old")`'),
+    ("src/api/users.py", None, "public API: src/api/users.py"),
+    ("proto/calendar.proto", None, "public API: proto/calendar.proto"),
+    ("web/package.json", None, "dependencies: web/package.json, a dependency manifest"),
+    ("requirements-dev.txt", None, "dependencies: requirements-dev.txt, a dependency manifest"),
+    (".github/workflows/ci.yml", None, "config: .github/workflows/ci.yml"),
+    ("AGENTS.md", None, "config: AGENTS.md"),
+    (".colony/rules/coding.md", None, "config: .colony/rules/coding.md"),
+])
+def test_the_risk_list_names_each_kind(path, lines, risk):
+    result = verdict(change(path, added=1, lines=lines))
+    assert risk in result.risks and result.tier != "TINY"
+
+
+def test_docs_tests_and_reports_stay_off_the_risk_list():
+    result = verdict(change("knowledge/wiki/auth.md", lines=["Run DELETE FROM users to reset."]),
+                     change("tests/test_auth.py", lines=["shutil.rmtree(tmp)"]),
+                     change(".colony/reports/b1/review-1.md", added=3))
+    assert result.risks == [] and result.tier == "TINY"
+
+
+def test_a_test_with_a_real_looking_secret_is_still_flagged():
+    result = verdict(change("tests/test_client.py", lines=['token = "ghp_' + "a" * 36 + '"']))
+    assert [risk.split(",")[0] for risk in result.risks] == ["secrets: tests/test_client.py"]
+
+
+def test_the_config_adds_risk_fragments_and_new_kinds():
+    config = {**CONFIG, "cycle": {"risk": {"payments": ["src/ledger/"], "personal data": ["src/profile/"]}}}
+    result = verdict(change("src/ledger/post.py", added=1), change("src/profile/view.py", added=1), config=config)
+    assert result.risks == ["payments: src/ledger/post.py", "personal data: src/profile/view.py"]
+
+
+def test_the_risk_list_runs_in_kind_order():
+    result = verdict(change("web/package.json", added=1), change("src/auth/a.py", added=1),
+                     change("tests/test_a.py", removed=1))
+    assert [risk.split(":")[0] for risk in result.risks] == ["auth", "dependencies", "checks"]
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    """A git repo with one commit on `base`, checked out on a new branch `work`."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, check=True,
+                       capture_output=True)
+
+    git("init", "-q", "-b", "base")
+    (root / "src" / "features" / "calendar").mkdir(parents=True)
+    (root / "src" / "features" / "calendar" / "view.ts").write_text("export const a = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "first")
+    git("switch", "-qc", "work")
+    monkeypatch.chdir(root)
+    return root, git
+
+
+def test_tier_reads_the_branch_from_git_and_prints_the_tier_and_risks(repo, capsys):
+    root, git = repo
+    (root / "src" / "features" / "calendar" / "view.ts").write_text("export const a = 2\n")
+    (root / "src" / "features" / "billing").mkdir()
+    (root / "src" / "features" / "billing" / "pay.ts").write_text("export const pay = 1\n")
+    git("add", "-A")
+    git("commit", "-qm", "billing")
+    args = parse("tier", "--base", "base", "--why")
+    assert args.run(CONFIG, args) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "FEATURE", "why:", "- a new entry under features/, src/features/billing", "risks:",
+        "- payments: src/features/billing/pay.ts"]
+    assert cycle.risk_text(CONFIG, "base") == "- payments: src/features/billing/pay.ts"
+
+
+def test_tier_against_a_base_that_names_no_commit_says_to_fetch(repo):
+    args = parse("tier", "--base", "origin/gone")
+    with pytest.raises(cli.ColonyError, match="git fetch origin"):
+        args.run(CONFIG, args)
+
+
+# Needs you
+
+
+@pytest.fixture
+def lead(monkeypatch):
+    """This session is Serdar's lead."""
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    monkeypatch.setenv(cli.PERSON_ENV, "serdar")
+
+
+def test_needs_makes_the_issue_and_posts_the_line(gh, lead, capsys):  # noqa: F811
+    gh.answer("issue list", [])
+    gh.answer("issue create", "https://github.com/acme/demo/issues/9\n")
+    args = parse("needs", "keep health checks at 30 s", "--default", "yes")
+    assert args.run(CONFIG, args) == 0
+    create = gh.called("issue", "create")[0]
+    assert create[create.index("--title") + 1] == "Needs Serdar"
+    line = "for serdar-lead: Serdar decides: keep health checks at 30 s? Default: yes (from serdar-lead)"
+    assert gh.called("issue", "comment") == [["issue", "comment", "9", "--repo", "acme/demo", "--body", line]]
+    assert capsys.readouterr().out.strip() == f"#9 {line}"
+
+
+def test_needs_for_another_person_posts_on_their_issue(gh, lead):  # noqa: F811
+    gh.answer("issue list", [{"number": 4, "title": "Needs Serdar"}, {"number": 6, "title": "Needs Burak"}])
+    args = parse("needs", "Ship the bundle today?", "--default", "tomorrow.", "--person", "burak")
+    args.run(CONFIG, args)
+    assert not gh.called("issue", "create")
+    search = gh.called("issue", "list")[0]
+    assert search[search.index("--search") + 1] == '"Needs Burak" in:title'
+    assert gh.called("issue", "comment")[0][2] == "6"
+    assert gh.called("issue", "comment")[0][-1] == ("for serdar-lead: Burak decides: Ship the bundle today? "
+                                                    "Default: tomorrow (from serdar-lead)")
+
+
+def test_needs_is_for_the_lead_and_one_short_line(gh, lead, monkeypatch):  # noqa: F811
+    with pytest.raises(cli.ColonyError, match="under 300 characters"):
+        cycle.needs_line("serdar-lead", "serdar", "why " * 80, "yes")
+    monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
+    args = parse("needs", "a question", "--default", "x")
+    with pytest.raises(cli.ColonyError, match="for the lead"):
+        args.run(CONFIG, args)
+    assert gh.calls() == []
+
+
+# The handover
+
+
+def test_handover_posts_on_the_coordination_issue_and_prints_the_fresh_lead(gh, lead, capsys):  # noqa: F811
+    gh.answer("issue list", [{"number": 5, "title": "Colony: coordination"}])
+    gh.answer("issue comment", "https://github.com/acme/demo/issues/5#issuecomment-1\n")
+    args = parse("handover", "--decisions", "#12 uses the default", "--open", "none", "--next", "merge #13")
+    assert args.run(CONFIG, args) == 0
+    body = gh.called("issue", "comment")[0][-1]
+    assert body.splitlines() == ["handover from serdar-lead, 2026-11-05 14:05 UTC", "decisions: #12 uses the default",
+                                 "open questions: none", "next: merge #13"]
+    assert "Open the fresh lead: colony --person serdar" in capsys.readouterr().out
+
+
+def test_handover_read_prints_this_leads_last_handover(gh, lead, capsys):  # noqa: F811
+    gh.answer("issue list", [{"number": 5, "title": "Colony: coordination"}])
+    gh.answer("issue view", {"comments": [{"body": "handover from serdar-lead, 1\nnext: a"},
+                                          {"body": "handover from burak-lead, 2\nnext: b"},
+                                          {"body": "handover from serdar-lead, 3\nnext: c"}]})
+    args = parse("handover", "--read")
+    args.run(CONFIG, args)
+    assert capsys.readouterr().out.strip() == "handover from serdar-lead, 3\nnext: c"
+
+
+def test_handover_needs_all_three_parts(gh, lead):  # noqa: F811
+    gh.answer("issue list", [{"number": 5, "title": "Colony: coordination"}])
+    args = parse("handover", "--decisions", "x")
+    with pytest.raises(cli.ColonyError, match="--open, --next"):
+        args.run(CONFIG, args)
+
+
+# Card stats
+
+T0 = datetime(2026, 1, 5, 10, 0, tzinfo=timezone.utc)
+
+
+def at(minutes: float) -> str:
+    """A GitHub time `minutes` after T0."""
+    return (T0 + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def card(title, body, *comments):
+    """A card as `gh issue view --json title,body,comments` answers it."""
+    return {"title": title, "body": body, "comments": [{"createdAt": at(m), "body": b} for m, b in comments]}
+
+
+def transcript(home: Path, root: Path, name: str, builder: str, calls):
+    """A builder's Claude Code transcript in an account folder: its first prompt, then one assistant call per
+    (minutes, message id, tokens)."""
+    folder = home / "projects" / cycle.project_folder(root)
+    folder.mkdir(parents=True, exist_ok=True)
+    lines = [{"type": "user", "timestamp": at(-1),
+              "message": {"content": f"Read .colony/playbook.md, Builder section. You are {builder}. Start the wait."}}]
+    lines += [{"type": "assistant", "timestamp": at(m), "requestId": f"r{mid}",
+               "message": {"id": mid, "usage": {"input_tokens": tokens, "output_tokens": 0}}}
+              for m, mid, tokens in calls]
+    path = folder / f"{name}.jsonl"
+    path.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+    os.utime(path, (T0.timestamp() + 7200, T0.timestamp() + 7200))
+    return path
+
+
+def test_stats_sums_each_cards_predicted_and_actual_minutes_and_tokens(gh, tmp_path):  # noqa: F811
+    root = tmp_path / "repo"
+    gh.answer("issue view 12", card("builder-1: the banner", "## Task\nx\n\npredicted: S, 20 min, 1M tokens",
+                                    (0, "for builder-1: start this card (from lead)"),
+                                    (30, "for lead: done, builder-1/12 pushed, 12 passed (from builder-1)")))
+    gh.answer("issue view 13", card("builder-2: the route", "predicted: M, 40 min",
+                                    (10, "**for builder-2: start this card (from lead)**")))
+    one, two = tmp_path / "acct-one", tmp_path / "acct-two"
+    main = transcript(one, root, "s1", "builder-1", [(1, "a", 1000), (2, "b", 500), (2, "b", 500), (45, "c", 9000)])
+    sub = main.parent / "s1" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-1.jsonl").write_text(json.dumps({"type": "assistant", "timestamp": at(3), "requestId": "rs",
+                                                   "message": {"id": "s", "usage": {"input_tokens": 2000}}}) + "\n")
+    transcript(two, root, "s2", "builder-2", [(11, "d", 3000), (12, "e", 4000)])
+    transcript(two, root, "s3", "builder-22", [(11, "f", 99999)])  # another builder whose name starts the same
+
+    table = cycle.stats_table(CONFIG, {"12": None, "13": None}, now=T0 + timedelta(minutes=70), homes=[one, two],
+                              root=root)
+    rows = [[cell.strip() for cell in line.strip("|").split("|")] for line in table.splitlines()[2:]]
+    assert rows[0] == ["#12", "builder-1", "S", "done line", "20", "30.0", "2.0", "1.0M", "4K", "-"]
+    assert rows[1] == ["#13", "builder-2", "M", "open", "40", "60.0", "1.0", "-", "7K", "-"]
+    assert rows[2] == ["**total**", "", "", "", "60", "90.0", "3.0", "1.0M", "10K", ""]
+
+
+def test_stats_reads_the_cards_given_on_the_command_line(gh, capsys, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(cycle, "main_root", lambda: Path("/nowhere"))
+    gh.answer("issue view 7", card("builder-1: x", "no prediction"))
+    args = parse("stats", "--card", "#7")
+    assert args.card == [("7", None)]
+    args.run(CONFIG, args)
+    assert "| #7 | builder-1 | - | no start line |" in capsys.readouterr().out
+
+
+# Stale cards
+
+
+def items_answer(*cards):
+    """The board's items query answer: (number, status, state, last update, builder) per card."""
+    nodes = []
+    for number, status, state, last, builder in cards:
+        values = [{"name": status, "field": {"name": "Status"}}, {"text": last, "field": {"name": "Last update"}},
+                  {"text": builder, "field": {"name": "Builder"}}]
+        if state:
+            values.append({"name": state, "field": {"name": "State"}})
+        nodes.append({"id": f"I{number}", "content": {"number": number, "url": f"u/{number}", "state": "OPEN"},
+                      "fieldValues": {"nodes": values}})
+    return {"data": {"node": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}
+
+
+NOW = datetime(2026, 11, 5, 13, 0, tzinfo=timezone.utc)
+
+
+def test_a_card_in_progress_with_no_update_for_2_5_hours_is_stale_once(gh):  # noqa: F811
+    gh.answer("project list", LISTED)
+    gh.answer("items(first", items_answer((12, "In progress", "working", "2026-11-05 10:29 UTC", "builder-2"),
+                                          (13, "In progress", "working", "2026-11-05 10:31 UTC", "builder-3"),
+                                          (14, "In progress", "usage limit", "2026-11-05 06:00 UTC", "builder-4"),
+                                          (15, "Done", "", "2026-11-05 06:00 UTC", "builder-5"),
+                                          (16, "In progress", "", "", "builder-6")))
+    assert cycle.stale_lines(CONFIG, NOW) == [
+        "#12 stale: builder-2 shows no update since 2026-11-05 10:29 UTC, and its State is not usage limit; "
+        "check its session"]
+    assert cycle.stale_lines(CONFIG, NOW.timestamp() + 60) == []  # reported once, and a Unix time works too
+    later = cycle.stale_lines(CONFIG, NOW + timedelta(minutes=5))
+    assert [line.split(" ")[0] for line in later] == ["#13"]
+
+
+def test_a_stale_card_is_reported_again_after_its_last_update_changes(gh):  # noqa: F811
+    gh.answer("project list", LISTED)
+    gh.answer("items(first", items_answer((12, "In progress", "waiting", "2026-11-05 08:00 UTC", "")), once=True)
+    gh.answer("items(first", items_answer((12, "In progress", "waiting", "2026-11-05 09:00 UTC", "")))
+    assert len(cycle.stale_lines(CONFIG, NOW)) == 1
+    assert cycle.stale_lines(CONFIG, NOW) == ["#12 stale: its builder shows no update since 2026-11-05 09:00 UTC, "
+                                              "and its State is not usage limit; check its session"]
+
+
+def test_no_board_means_no_stale_lines_and_a_broken_board_is_an_error(gh):  # noqa: F811
+    gh.answer("project list", {"projects": []}, once=True)
+    assert cycle.stale_lines(CONFIG, NOW) == []
+    gh.answer("project list", "", code=1)
+    with pytest.raises(cli.ColonyError):
+        cycle.stale_lines(CONFIG, NOW)
+
+
+def test_the_stale_hours_come_from_the_config(gh):  # noqa: F811
+    gh.answer("project list", LISTED)
+    gh.answer("items(first", items_answer((12, "In progress", "working", "2026-11-05 12:00 UTC", "builder-2")))
+    assert cycle.stale_lines({**CONFIG, "cycle": {"stale_hours": 0.5}}, NOW) != []
+
+
+# The retro
+
+
+def test_the_retro_prompt_is_filled_in_for_the_batch():
+    config = {**CONFIG, "project": {**CONFIG["project"], "fast_check": "make fast"},
+              "gate": {"rules": [".colony/rules/*.md", "CLAUDE.md"]}}
+    prompt = cycle.retro_prompt(config, "2026-11-05", Path("/r/reports"), Path("/w/demo-retro"),
+                                "demo/retro-2026-11-05", Path("/w/demo-retro/retro.md"), "Assisted-by: x")
+    assert "{" not in prompt and "}" not in prompt
+    for text in ("Batch 2026-11-05", "/r/reports", "/w/demo-retro, on branch demo/retro-2026-11-05",
+                 "`.colony/rules/*.md`, `CLAUDE.md`", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
+                 "Write /w/demo-retro/retro.md", "`lessons: N`", "rule line plus a check", "decision",
+                 "never as a note alone"):
+        assert text in prompt, text
+
+
+def test_retro_dry_run_finds_the_reports_and_prints_the_plan_and_prompt(repo, tmp_path, capsys, monkeypatch):
+    root, _ = repo
+    reports = root / ".colony" / "reports" / "b1"
+    reports.mkdir(parents=True)
+    (reports / "review-1.md").write_text("open: 0\n")
+    monkeypatch.setenv(cli.PERSON_ENV, "serdar")
+    config = {**CONFIG, "project": {**CONFIG["project"], "worktrees": str(tmp_path / "trees")}}
+    args = parse("retro", "--name", "b1", "--dry-run")
+    assert args.run(config, args) == 0
+    out = capsys.readouterr().out
+    assert f"--no-track -b demo/retro-b1 {tmp_path / 'trees' / 'demo-retro-b1'} origin/dev" in out
+    assert f"its round reports are in {reports}" in out.replace(str(reports.resolve()), str(reports))
+    assert "--add-dir" in out and "--- retro prompt" in out
+
+
+def test_retro_without_reports_says_to_run_the_batch(repo):
+    args = parse("retro", "--name", "nope", "--dry-run")
+    with pytest.raises(cli.ColonyError, match="no reports for batch 'nope'"):
+        args.run(CONFIG, args)
+
+
+def test_the_retro_reads_the_decisions_it_prints():
+    found = cycle.DECISION.match("decision: keep the walk on phones? — default: yes")
+    assert found.groups() == ("keep the walk on phones?", "yes")
