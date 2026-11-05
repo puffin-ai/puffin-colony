@@ -64,4 +64,4 @@ You type `colony`, and `colony join <name>` when the lead asks. The agents and t
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |
 | `--version` | `colony` | Prints the version. |
 
-`needs`, `handover` and `say` refuse to run outside the lead's session, and `post` and `wait` need `$COLONY_SESSION`.
+`handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post` and `wait` need `$COLONY_SESSION`.

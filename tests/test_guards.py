@@ -319,3 +319,14 @@ def test_add_commands_routes_suppressions_and_the_hooks_actions():
     assert parser.parse_args(["hooks", "stopped"]).run is guards.stopped
     with pytest.raises(SystemExit):
         parser.parse_args(["hooks"])
+
+
+def test_hooks_install_local_writes_the_machine_settings_only(tmp_path, monkeypatch):
+    """--local keeps the hooks out of the committed settings.json, so a CI job never runs them."""
+    import argparse, subprocess
+    from colony import cli, guards
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    guards.install({}, argparse.Namespace(dry_run=False, local=True))
+    assert (tmp_path / ".claude" / "settings.local.json").exists()
+    assert not (tmp_path / ".claude" / "settings.json").exists()

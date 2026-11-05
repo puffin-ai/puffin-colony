@@ -230,11 +230,13 @@ def install(config: dict, args) -> int:
     """`colony hooks install`: merge Colony's hooks into .claude/settings.json, and copy the wait guard into
     .colony/hooks/."""
     root = cli.repo_root()
-    settings, guard = root / ".claude" / "settings.json", root / cli.DIR / "hooks" / GUARD
+    # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
+    name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
+    settings, guard = root / ".claude" / name, root / cli.DIR / "hooks" / GUARD
     events = ", ".join(event for event, *_ in hook_entries())
     if args.dry_run:
         print(f"hooks plan for {root}:")
-        print(f"  .claude/settings.json: merge the {events} hooks, keeping every hook already there")
+        print(f"  .claude/{name}: merge the {events} hooks, keeping every hook already there")
         print(f"  {cli.DIR}/hooks/{GUARD}: the wait guard, copied from the package")
         print("Nothing ran.")
         return 0
@@ -243,7 +245,7 @@ def install(config: dict, args) -> int:
     guard.write_text(resources.files(__package__).joinpath("hooks", GUARD).read_text())
     guard.chmod(0o755)
     done = f"added {', '.join(added) or 'nothing'}" + (f", updated {', '.join(updated)}" if updated else "")
-    print(f"wrote .claude/settings.json: {done}, and kept every hook already there")
+    print(f"wrote .claude/{name}: {done}, and kept every hook already there")
     print(f"wrote {cli.DIR}/hooks/{GUARD}")
     return 0
 
@@ -325,6 +327,8 @@ def add_commands(sub) -> None:
     actions = hooks.add_subparsers(dest="action", metavar="action", required=True)
     p = actions.add_parser("install", help="merge Colony's hooks into .claude/settings.json, keeping the hooks there")
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
+    p.add_argument("--local", action="store_true",
+                   help="write .claude/settings.local.json, this machine's only, instead of the shared settings.json")
     p.set_defaults(run=install)
     p = actions.add_parser("asking", help="the Notification hook: an urgent line for the lead (Claude Code runs it)")
     p.set_defaults(run=asking)
