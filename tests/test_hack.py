@@ -327,3 +327,33 @@ def test_setups_never_list_allows_what_hack_writes():
     never = SETUP.split("## Never", 1)[1]
     assert "the board and owner sections at the end of the top `AGENTS.md`" in never and "`tools/board`" in never
     assert "Post or comment on the board issue" in never
+
+
+def test_the_hack_files_ship_in_an_installed_package():
+    import tomllib
+
+    data = tomllib.loads((PACKAGE.parent / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]["colony"]
+    shipped = {path for pattern in data for path in PACKAGE.glob(pattern) if path.is_file()}
+    hack = [*HACK.glob("*.md"), CORE, PACKAGE / "scripts" / "board"]
+    assert len(hack) == 5 and [path.name for path in hack if path not in shipped] == []
+
+
+def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_path):
+    block = hack_steps().split("4. **Write the config.**", 1)[1].split("   Write one", 1)[0]
+    text = "\n".join(line[7:] for line in block.splitlines() if line.startswith("       "))
+    for old, new in (("<short name>", "app"), ("<owner/name>", "acme/app"), ("<question 3>", "main"),
+                     ("<the fast check again: hack's gate runs it alone>", "npm test"), ("<the fast check>", "npm test"),
+                     ("<the install command>", "npm ci"), ("<a sibling folder of the clone>", "~/worktrees"),
+                     ("<the board issue's number>", "12"), ('["<login>", "<login>"]', '["ana", "ben"]'),
+                     ('{ <login> = "<Name>", <login> = "<Name>" }', '{ ana = "Ana", ben = "Ben" }'),
+                     ("[accounts.<login>]", "[accounts.ana]"), ('"<login>"', '"ana"')):
+        assert old in text, old
+        text = text.replace(old, new)
+    assert "<" not in text, text
+    path = tmp_path / "colony.toml"
+    path.write_text(text)
+    config = cli.load_config(path)
+    assert cli.mode(config) == "hack" and config["messages"]["board"] == 12
+    assert config["gate"]["merge_after_fast_check"] is True and config["people"]["names"] == {"ana": "Ana", "ben": "Ben"}
+    assert (PACKAGE / "presets" / config["project"]["preset"] / "core.md") == CORE
+    assert wait.display_name(config, "ana") == "Ana"
