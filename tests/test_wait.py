@@ -3,6 +3,7 @@ clock, so a 10-minute digest runs in a moment."""
 import json
 import subprocess
 import sys
+import types
 from argparse import Namespace
 from datetime import datetime, timedelta, timezone
 from importlib import resources
@@ -11,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from colony import cli, wait
+from colony import cli, transport, wait
 
 GH_STUB = """#!{python}
 import json, pathlib, sys
@@ -74,7 +75,8 @@ class Gh:
 
 @pytest.fixture
 def gh(tmp_path, monkeypatch):
-    """A temporary HOME, the stand-in gh first on PATH, and Serdar as the person."""
+    """A temporary HOME, the stand-in gh first on PATH, and Serdar as the person. colony.cycle doesn't import, so the
+    lead's wait runs no stale-card check unless a test gives it one."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "gh").write_text(GH_STUB.replace("{python}", sys.executable))
@@ -82,6 +84,7 @@ def gh(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setenv("COLONY_PERSON", "serdar")
+    monkeypatch.setitem(sys.modules, "colony.cycle", None)
     return Gh(bin_dir)
 
 
@@ -341,10 +344,89 @@ def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, 
     assert gh.calls() == []
 
 
-def test_the_relay_transport_is_not_built_yet(gh, capsys, monkeypatch):
-    relay = {**CONFIG, "messages": {"transport": "relay"}}
-    with pytest.raises(cli.ColonyError, match='"relay" \\(Agent Relay\\) is not built yet'):
-        run_as("lead", capsys, monkeypatch, config=relay)
-    with pytest.raises(cli.ColonyError, match="not built yet"):
-        wait.say(relay, Namespace(person=None, to="burak-lead", sentence="hello"))
+def test_an_unknown_transport_stops_the_wait_and_say(gh, capsys, monkeypatch):
+    pigeon = {**CONFIG, "messages": {"transport": "pigeon"}}
+    with pytest.raises(cli.ColonyError, match="\"github\" or \"relay\", not 'pigeon'"):
+        run_as("lead", capsys, monkeypatch, config=pigeon)
+    with pytest.raises(cli.ColonyError, match="not 'pigeon'"):
+        wait.say(pigeon, Namespace(person=None, to="burak-lead", sentence="hello"))
     assert gh.calls() == []
+
+
+# The relay transport
+
+
+@pytest.mark.parametrize("name, printed", [
+    ("relay", ["#13 for builder-1: and take #13 next (from lead)"]),
+    ("github", ["#12 for builder-1: start this card (from lead)", "#13 for builder-1: and take #13 next (from lead)"]),
+])
+def test_a_relay_wait_skips_a_line_that_also_came_through_the_relay(gh, capsys, monkeypatch, tmp_path, name, printed):
+    config = {**CONFIG, "messages": {"transport": name}}
+    gh.answer(ok(comment(1, f"for builder-1: start this card (from lead)\n{transport.MARK}", issue=12),
+                 comment(2, "for builder-1: and take #13 next (from lead)", issue=13)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch, config=config)
+    assert code == 0 and out.splitlines() == printed
+    seen = json.loads((tmp_path / ".colony" / "demo" / "builder-1.json").read_text())["seen"]
+    assert "1:for builder-1: start this card (from lead)" in seen  # the relayed line is taken, and never prints later
+
+
+def test_a_relayed_urgent_line_leaves_the_lead_digest_to_its_time(gh, capsys, monkeypatch):
+    config = {**CONFIG, "messages": {"lead_digest_minutes": 1, "transport": "relay"}}
+    urgent = f"for serdar-lead: urgent: I merge dev into main in 10 minutes (from burak-lead)\n{transport.MARK}"
+    gh.answer(ok(comment(1, DIGEST_LINE), comment(2, urgent, issue=5, login="burak-gh")))
+    code, out, clock = run_as("lead", capsys, monkeypatch, config=config)
+    assert code == 0 and out == f"#7 {DIGEST_LINE}\n" and clock.t == 60  # the urgent line came by relay already
+
+
+# Stale cards, from the cycle module
+
+
+def stale_module(monkeypatch, stale_lines, minutes=10):
+    """Stand in for colony.cycle with the given stale_lines and check interval."""
+    cycle = types.SimpleNamespace(stale_lines=stale_lines, STALE_CHECK_MINUTES=minutes)
+    monkeypatch.setitem(sys.modules, "colony.cycle", cycle)
+
+
+def test_the_leads_wait_adds_each_stale_line_once(gh, capsys, monkeypatch):
+    calls = []
+    stale = "#41 for lead: stale: builder-2 has had no update on #41 for 3 hours"
+    stale_module(monkeypatch, lambda config, now: calls.append((config, now)) or [stale], minutes=0)
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and out == f"{stale}\n" and clock.t == 60  # gathered at the start, printed at the digest
+    assert len(calls) == 1 and calls[0][0] is CONFIG
+    assert abs(datetime.now(timezone.utc) - calls[0][1]) < timedelta(minutes=1)
+    gh.answer(*[NOT_MODIFIED] * 5, ok(comment(1, DIGEST_LINE)))
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and out == f"#7 {DIGEST_LINE}\n"  # the same stale line never prints twice
+    assert len(calls) == 3  # at the start of each wait, and at the digest that passed empty
+
+
+def test_the_stale_check_runs_at_most_once_per_its_interval_across_waits(gh, capsys, monkeypatch):
+    calls = []
+    stale_module(monkeypatch, lambda config, now: calls.append(now) or [])
+    for id in (1, 2):
+        gh.answer(*[NOT_MODIFIED] * 5, ok(comment(id, "for lead: urgent: main is red (from builder-2)")))
+        assert run_as("lead", capsys, monkeypatch)[0] == 0
+    assert len(calls) == 1  # the second wait, and both digests that passed empty, came within 10 minutes
+
+
+def test_a_builders_wait_runs_no_stale_check(gh, capsys, monkeypatch):
+    stale_module(monkeypatch, lambda config, now: pytest.fail("a builder's wait checked for stale cards"))
+    gh.answer(ok(comment(1, "for builder-1: start this card (from lead)")))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#7 for builder-1: start this card (from lead)\n"
+
+
+@pytest.mark.parametrize("cycle, err", [
+    (None, ""),  # colony.cycle doesn't import: skipped quietly
+    (types.SimpleNamespace(), ""),  # it imports, with no stale_lines yet
+    (types.SimpleNamespace(stale_lines=lambda config, now: 1 / 0), "stale-card check failed, the wait tries again"),
+])
+def test_a_missing_or_failing_stale_check_never_stops_the_leads_wait(gh, capsys, monkeypatch, cycle, err):
+    monkeypatch.setitem(sys.modules, "colony.cycle", cycle)
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    gh.answer(ok(comment(1, "for lead: urgent: main is red (from builder-2)")))
+    assert wait.run(CONFIG, Namespace(person=None, waiting_on=None), clock=Clock()) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "#7 for lead: urgent: main is red (from builder-2)\n"
+    assert (err in captured.err) if err else captured.err == ""

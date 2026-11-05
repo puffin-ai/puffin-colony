@@ -5,11 +5,14 @@ first line for it that the lead signed. The lead's wait gathers its lines and en
 at once on a line that can't wait (see `taken`). Leads talk to each other as `<person>-lead` on one issue per repo,
 `Colony: coordination`. Every 15 seconds the wait asks `gh api` for the repo's issue comments changed since its
 last read, sending the last ETag, so a quiet poll costs nothing against the rate limit. Its state lives in
-~/.colony/<project>/<session>.json, and a session's first wait reads the last hour.
+~/.colony/<project>/<session>.json, and a session's first wait reads the last hour. Lines are posted through
+transport.send. With transport = "relay", a line that also came through Agent Relay is skipped, so it is acted on
+once. When colony.cycle imports, the lead's wait also gathers its cycle.stale_lines.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -146,38 +149,81 @@ def coordination_issue(repo: str, project: str) -> int:
     return numbers[0]
 
 
-def poll(repo: str, state: dict, me: Session) -> bool:
+def poll(repo: str, state: dict, me: Session, mark: str | None = None) -> bool:
     """Read the comments changed since state["since"] once, add the new lines `me` takes to state["pending"], and
-    say whether a full page came. The read time moves to the newest comment, so the next poll asks only after it."""
+    say whether a full page came. The read time moves to the newest comment, so the next poll asks only after it.
+    A comment that carries `mark` (transport.MARK, with relay on) reached `me` through the relay too: its lines go
+    into seen and never print."""
     path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
     _, state["etag"], comments = gh_get(path, state.get("etag"))
     seen = state.setdefault("seen", [])
     for comment in comments:
-        card = str(comment.get("issue_url", "")).rsplit("/", 1)[-1]
-        for line, cant_wait in taken(comment.get("body") or "", me, card):
+        card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
+        relayed = mark is not None and mark in body.splitlines()
+        for line, cant_wait in taken(body, me, card):
             key = f"{comment['id']}:{line}"
             if key not in seen:
                 seen.append(key)
-                state["pending"].append([f"#{card} {line}", cant_wait])
+                if not relayed:
+                    state["pending"].append([f"#{card} {line}", cant_wait])
     if comments:
         state["since"] = comments[-1]["updated_at"]
     del seen[:-KEEP_SEEN]
     return len(comments) >= PAGE
 
 
-def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None) -> int:
+def stale_check(config: dict):
+    """The lead's stale-card check, cycle.stale_lines(config, now), with the seconds between checks (the cycle's
+    STALE_CHECK_MINUTES), or None when colony.cycle doesn't import cleanly or has no stale_lines: the cycle is
+    another module's, and its absence never stops a wait."""
+    try:
+        cycle = importlib.import_module(f"{__package__}.cycle")
+        stale_lines = cycle.stale_lines
+        every = float(getattr(cycle, "STALE_CHECK_MINUTES", DIGEST_MINUTES)) * 60
+    except Exception:
+        return None
+    return lambda: stale_lines(config, datetime.now(timezone.utc)), every
+
+
+def add_stale(state: dict, stale) -> None:
+    """Gather each line the stale-card check returns, such as a `stale:` line for a card with no update, once. The
+    check runs at most once per its interval, across waits; a failing check says so on stderr and gathers nothing."""
+    if stale is None:
+        return
+    check, every = stale
+    now = time.time()
+    if now - float(state.get("stale_at", 0)) < every:
+        return
+    state["stale_at"] = now
+    try:
+        lines = [str(line) for line in check()]
+    except Exception as e:
+        print(f"{cli.NAME} wait: the stale-card check failed, the wait tries again in {every / 60:g} minutes: {e}",
+              file=sys.stderr)
+        return
+    seen = state.setdefault("seen", [])
+    for line in lines:
+        if f"stale:{line}" not in seen:
+            seen.append(f"stale:{line}")
+            state["pending"].append([line, False])
+
+
+def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
+         mark: str | None = None, stale=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
-    when one can't wait. Gathered lines stay in the state file until they print."""
+    when one can't wait. Gathered lines stay in the state file until they print. `mark` skips relayed lines (poll),
+    and `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval."""
     clock = clock or CLOCK
     path = state_path(project, me.name)
     state = read_json(path, {})
     state.setdefault("since", (datetime.now(timezone.utc) - LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
     state.setdefault("pending", [])
     failures, digest_at = 0, clock.now() + digest
+    add_stale(state, stale)
     while True:
         try:
-            more = poll(repo, state, me)
+            more = poll(repo, state, me, mark)
             failures = 0
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             failures, more = failures + 1, False
@@ -192,18 +238,10 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             return 0
         if clock.now() >= digest_at:
             digest_at = clock.now() + digest
+            add_stale(state, stale)
         write_json(path, state)
         if not more:
             clock.sleep(INTERVAL)
-
-
-def transport(config: dict) -> None:
-    """The [messages] transport the lines travel by. "github", the default, is built. "relay" is the hook for Agent
-    Relay, which would deliver each line at once and keep GitHub as the record; until it is built, it stops here."""
-    name = config.get("messages", {}).get("transport", "github")
-    if name != "github":
-        raise cli.ColonyError('[messages] transport = "relay" (Agent Relay) is not built yet: use "github", the default'
-                              if name == "relay" else f'[messages] transport is "github" or "relay", not {name!r}')
 
 
 def lead_name(config: dict, args) -> str:
@@ -211,20 +249,30 @@ def lead_name(config: dict, args) -> str:
     return f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
 
 
+def lead_session(config: dict, name: str) -> Session:
+    """The lead as its wait sees it: answering to `lead` and to `name`, its `<person>-lead`, with the people's logins
+    and the cards the batch waits on."""
+    people = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+    cards = read_json(state_path(config["project"]["name"], f"{cli.LEAD}-waiting"), [])
+    return Session(cli.LEAD, frozenset({cli.LEAD, name}), people, frozenset(str(card) for card in cards))
+
+
 def run(config: dict, args, clock=None) -> int:
     """`colony wait`: wait as $COLONY_SESSION on the repo colony.toml names. The lead's --waiting-on lists the cards
     the batch waits on, and the lead's wait makes sure the coordination issue exists for other leads to post on."""
+    from colony import transport
+
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
-    transport(config)
+    mark = transport.MARK if transport.kind(config) == "relay" else None
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
-        return wait(repo, project, Session(me, frozenset({me})), clock=clock)
+        return wait(repo, project, Session(me, frozenset({me})), clock=clock, mark=mark)
     waiting_path = state_path(project, f"{cli.LEAD}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -232,27 +280,25 @@ def run(config: dict, args, clock=None) -> int:
         coordination_issue(repo, project)
     except (GhError, ValueError, KeyError) as e:
         print(f"{cli.NAME} wait: no coordination issue yet, the next wait tries again: {e}", file=sys.stderr)
-    people = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
-    waiting = frozenset(str(card) for card in read_json(waiting_path, []))
-    lead = Session(me, frozenset({me, lead_name(config, args)}), people, waiting)
     minutes = float(config.get("messages", {}).get("lead_digest_minutes", DIGEST_MINUTES))
-    return wait(repo, project, lead, minutes * 60, clock)
+    lead = lead_session(config, lead_name(config, args))
+    return wait(repo, project, lead, minutes * 60, clock, mark, stale_check(config))
 
 
 def say(config: dict, args) -> int:
-    """`colony say <lead-name> "<sentence>"`: post a line for another lead on the coordination issue."""
+    """`colony say <lead-name> "<sentence>"`: post a line for another lead on the coordination issue (transport.send)."""
+    from colony import transport
+
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
-    transport(config)
+    transport.kind(config)
     me, to, sentence = lead_name(config, args), args.to.lower(), " ".join(args.sentence.split())
     if not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as burak-lead (you are {me})")
     line = f"for {to}: {sentence} (from {me})"
     if not sentence or len(line) >= MAX_LINE:
         raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
-    repo = config["project"]["repo"]
-    number = coordination_issue(repo, config["project"]["name"])
-    gh("issue", "comment", str(number), "--repo", repo, "--body", line)
+    number = transport.send(config, to, line)
     print(f"#{number} {line}")
     return 0
 
