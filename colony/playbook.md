@@ -8,7 +8,17 @@ Agents talk only in lines. A line is one comment on a card (a GitHub issue), und
 
     for <name>: <one sentence> (from <name>)
 
-The names are `lead` and each builder's name. Post a line with `gh issue comment <n> --body "<line>"`. `colony wait` prints the lines addressed to you.
+The names are `lead` and each builder's name. Post a line with `gh issue comment <n> --body "<line>"`. `colony wait` prints the lines addressed to you. A person's line carries no `(from …)`.
+
+A sentence starts with its kind, when it has one:
+- `done, …`: the card is pushed. It reaches the lead in its next digest, or at once when the batch waits on that card.
+- `question: …?`: a question that stops your work until it is answered. A question you keep building past, on your own default, goes without the word.
+- `blocked: …`: you can't go on, and why.
+- `urgent: …`: anything else that can't wait, such as a broken `{base}`.
+
+A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`.
+
+Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `serdar-lead`: `colony say burak-lead "<sentence>"`. Use it to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules.
 
 ## Stop list
 
@@ -23,7 +33,7 @@ A builder that meets one sends it to the lead as a question. Only the lead asks 
 
 ## Lead
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command. When it exits, read the line it printed, start it again at once, then act on the line.
+You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 1. Turn each request into cards. A card is a GitHub issue titled `<builder>: <what>`, with up to 3 done-when results and the folders it touches: `gh issue create --title "<builder>: <what>" --body "<done-when list and folders>"`. Give cards that touch the same folders to the same builder.
 2. Open builders as the cards need them. Up to `max_builders` (default 4) run on this machine: `colony open <name>`. For more, print `colony join <name>` and ask the person to paste it on another computer.
@@ -48,4 +58,4 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 5. Commit, run `git push origin <name>/<n>`, and post one line on the card: `for lead: done, <name>/<n> pushed, <the fast check's last line> (from <name>)`.
 6. Take the next card at once.
 
-Ask no person anything. When you are unsure, send the lead a question with your own default, `for lead: <question>? I'm going with <default> (from <name>)`, and keep building on that default. When the lead answers otherwise, change it. Never push to `{base}`, and never do anything on the stop list.
+Ask no person anything. When you are unsure, send the lead a question with your own default, `for lead: <question>? I'm going with <default> (from <name>)`, and keep building on that default. Only when you can't go on, post `for lead: blocked: <why> (from <name>)`, or `question:` for a question with no safe default. When the lead answers otherwise, change it. Never push to `{base}`, and never do anything on the stop list.

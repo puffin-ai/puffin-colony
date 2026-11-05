@@ -508,6 +508,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("wait", help=f"wait for the lines addressed to ${SESSION_ENV}, then print them")
     p.set_defaults(run=wait)
+    from colony import wait as watcher  # wait's --waiting-on, and `say`, live in wait.py
+    watcher.add_commands(sub, p)
 
     p = sub.add_parser("batch", help="take finished cards through review, checks and a walk to a pull request")
     p.add_argument("--name", required=True, help="the batch name")
