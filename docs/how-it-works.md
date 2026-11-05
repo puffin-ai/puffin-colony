@@ -72,7 +72,7 @@ After setup, `colony` opens your lead.
      "Read .colony/playbook.md, Lead section, and start."
    ```
    Remote Control lets you follow the session from the Claude apps under that title.
-5. **It opens in a new cmux workspace** when `cmux` is on your PATH, or in this terminal. `--here` keeps it in this terminal.
+5. **It opens where it can.** It uses a new cmux workspace when cmux takes its commands (inside cmux). It uses this terminal when you run it at one, or when you pass `--here`. Otherwise, as when a lead opens builders from inside its own session, it starts a background Claude session under Remote Control. You follow that session in the Claude app, or with `claude attach <id>`.
 
 `colony --dry-run` prints the command line and the env names, never their values, and runs nothing.
 
@@ -94,7 +94,7 @@ Each card has up to 3 done-when results and the folders it touches. Cards that t
 colony open builder-2
 ```
 
-`colony open` needs cmux. Without it, the lead prints `colony join <name>` for a new terminal. For more builders than one machine should run, the lead prints a `colony join <name>` line for you to paste on another computer. On first use there, `join` says what is missing: a clone of the repo, the `claude` login for the account it picked, or `gh auth`.
+`colony open` uses cmux when it can, and otherwise starts the builder as a background session you can follow in the Claude app. For more builders than one machine should run, the lead prints a `colony join <name>` line for you to paste on another computer. On first use there, `join` says what is missing: a clone of the repo, the `claude` login for the account it picked, or `gh auth`.
 
 A builder's name is lowercase letters, digits, dots and dashes, such as `builder-2`, and it can't be `lead`. Each builder starts with:
 
@@ -210,7 +210,7 @@ You type only `colony`, and `colony join <name>` when the lead asks. The agents 
 | --- | --- |
 | `colony` | Setup the first time, then your lead |
 | `colony join <name>` | A builder on this computer, after checking what it lacks |
-| `colony open <name>` | A builder on this computer in a new cmux workspace (the lead runs it) |
+| `colony open <name>` | A builder on this computer, in cmux or as a background session (the lead runs it) |
 | `colony wait [--waiting-on N,N]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. |
 | `colony say <lead-name> "<sentence>"` | A lead's line for another lead, on the `Colony: coordination` issue |
 | `colony batch --name <n> --card N=BRANCH …` | The gate loop, to one PR |

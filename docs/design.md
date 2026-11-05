@@ -19,7 +19,7 @@ The lead and the builders use these internal subcommands. A person never needs t
 - `colony batch …`: the gate loop, as before
 - `colony status`
 - `colony wait`: the line watcher, below
-- `colony open <name>`: opens a builder here, in cmux, on the account with the most room
+- `colony open <name>`: opens a builder here, in cmux or as a background session under Remote Control, on the account with the most room
 
 ## What setup writes into the repo
 
