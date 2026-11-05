@@ -2,21 +2,46 @@
 
 Colony gives agents real work in your repo. They read code, run commands, start your stack, commit and push. This page says what Colony never does, what its agents ask you first, and what you should know before your first batch.
 
-Some guarantees are locks in Colony's code. Others are rules the agents follow. This page keeps the two apart.
+Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on every session. Others are rules the agents follow. This page keeps them apart.
 
 ## Locks in the code
 
-- **It never pushes to your base branch.** A batch makes one push, naming its own branch in full: `refs/heads/<project>/batch-<name>`. It refuses to push any branch that is the base branch or doesn't start with `<project>/batch-`. Fixers commit and never push. Setup pushes only `colony/setup`.
+- **It never pushes to your base branch.** A batch makes one push, naming its own branch in full: `refs/heads/<project>/batch-<name>`. It refuses to push any branch that is the base branch or doesn't start with `<project>/batch-`. The retro pushes only `<project>/retro-<batch>`, under the same check. Fixers commit and never push. Setup pushes only `colony/setup`.
 - **It never prints env values.** `--dry-run` prints the names of the variables it would set, never their values. The values in `check_env_file` go only into the checks' environment.
-- **The gate's agents never bill an API key.** The reviewer, walker and fixers run with `ANTHROPIC_API_KEY` removed from their environment, so they always run on your Claude Code login.
+- **A line never carries a secret.** `colony post`, `colony say` and the hooks refuse a line that holds a token's shape, or the value of an env variable whose name says it is a key, token, secret or password.
+- **The gate's agents never bill an API key.** The reviewer, walker, fixers and retro run with `ANTHROPIC_API_KEY` removed from their environment, so they always run on your Claude Code login. The lead and builders drop it too, unless `use_api_key = true`.
 - **Your checks get no provider keys at a zero budget.** While `provider_dollars` is 0, the checks run without `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so your app's own evals can't spend.
 - **A batch can't loop for ever.** It stops after `max_rounds`, when the checks fail the same way twice in a row, when a fixer commits nothing, or when an agent fails twice.
-- **Removed tests are shown.** The PR body lists every test file the batch deletes, so a test can't vanish without you seeing it.
+- **Removed tests are shown.** The PR body lists every test file the batch deletes, so a test can't vanish without you seeing it. `colony tier` puts a deleted test, a skip mark or a new suppression on the risk list.
+- **Only the lead asks you.** `colony needs`, `colony handover` and `colony say` refuse to run outside the lead's session.
 - **Setup reads settings folders by name only.** It never reads the files inside them.
 
-## Rules the agents follow: the stop list
+## Hooks
 
-No agent does these without your yes:
+`colony hooks install` merges three hooks into `.claude/settings.json`, and keeps every hook and setting already there. Run it again to bring Colony's hooks up to date. `--dry-run` shows what it would write.
+
+| Hook | When it runs | What it does |
+| --- | --- | --- |
+| The wait guard | Before every Bash call | Refuses a foreground sleep over 10 seconds, a loop that sleeps, an endless loop, `watch`, `gh run watch` and `gh pr checks --watch`. Its message says to use `run_in_background` or `colony wait`. A command sent to the background passes. |
+| `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
+| `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
+
+The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3`. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+
+## The suppressions ledger
+
+`colony suppressions` counts each kind of lint and type suppression in each tracked file: `# noqa`, `# type: ignore`, `eslint-disable`, `@ts-expect-error`, `@ts-ignore`, skipped tests, `nolint`, `#[allow(...)]`, `@SuppressWarnings` and more. It compares the counts with `.colony/suppressions.json`.
+
+- A count above the record fails, with the reminder that no agent weakens a check to make it pass.
+- A count below the record fails too, until `colony suppressions --update` lowers the record. The record only shrinks: `--update` never raises a count or adds a file.
+
+Setup writes the first record and adds `&& colony suppressions` to your `checks`, so every batch runs it.
+
+## Rules the agents follow
+
+**The core** in `.colony/core.md` loads in every session. Its duties: report each check's real result, quote the output behind every success claim, never weaken a check, keep secrets out of output, and add no dependency or spend without your yes. See [presets.md](presets.md#the-three-levels).
+
+**The stop list.** No agent does these without your yes:
 
 - spend money: paid services, or model calls above the budget;
 - show, copy or move a secret: keys, tokens, passwords, `.env` values;
@@ -24,20 +49,21 @@ No agent does these without your yes:
 - add, remove or upgrade a dependency;
 - merge into the base branch, or push to it.
 
-A builder that meets one sends it to the lead as a question. Only the lead asks you, in one short question with its own pick as the default.
+A builder that meets one sends it to the lead as a question. Only the lead asks you, on your Needs issue, with its own pick as the default.
 
-The stop list lives in `.colony/playbook.md`, and the `lean` rules repeat it. These are instructions, not locks: a model can still get one wrong. The locks above, and the second locks below, are there for that case.
+The core and the stop list are instructions, not locks: a model can still get one wrong. The locks and hooks above, and the second locks below, are there for that case.
 
 ## What the agents can do
 
-- **The reviewer, walker and fixers** run headless with `claude -p --permission-mode auto`. That is Claude Code's auto mode, where a classifier approves or blocks each action instead of asking you. Each works in its own worktree. The reviewer is told to change nothing, the walker to leave the batch's worktree alone, and fixers not to push.
-- **The lead and builders** run interactive, under your own Claude Code permission settings. They ask what your settings say to ask. They inherit the shell you start `colony` from.
-- **Every lead and builder starts with Remote Control**, under a title such as `myapp-lead`, so you can follow it from your Claude account.
+- **The reviewer, walker, fixers and retro** run headless with `claude -p --permission-mode auto`. That is Claude Code's auto mode, where a classifier approves or blocks each action instead of asking you. Each works in its own worktree. The reviewer is told to change nothing, the walker to leave the batch's worktree alone, and fixers not to push.
+- **The lead, builders, researcher and spec agent** run interactive, under the role's `permission_mode`, `auto` by default, and your own Claude Code permission settings. They inherit the shell you start `colony` from.
+- **The researcher and the spec agent** change no app code, and work on their own `research/` or `spec/` branch.
+- **Every interactive session starts with Remote Control**, under a title such as `myapp-lead`, so you can follow it from your Claude account.
 
 ## Second locks you should add
 
 - **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused.
-- **Start `colony` from a shell without `ANTHROPIC_API_KEY`,** so the lead and builders use your login too.
+- **Start `colony` from a shell without `ANTHROPIC_API_KEY`.**
 - **Keep `.env` files and `check_env_file` out of git.**
 - **Run `--dry-run` first,** for setup and for your first batch.
 - **Read the PR's "Removed tests" section** before you merge.
@@ -45,8 +71,10 @@ The stop list lives in `.colony/playbook.md`, and the `lean` rules repeat it. Th
 ## What leaves your machine
 
 - **Code and prompts go to Anthropic,** the same as in any Claude Code session.
-- **Cards, lines and PRs go to your GitHub repo.** On a public repo they are public, so keep secrets and personal data out of them.
+- **Cards, lines, the board, your Needs issue and PRs go to GitHub.** On a public repo they are public, so keep secrets and personal data out of them.
 - **The batch reports are committed** to the batch branch: the review, walk and check summaries, the minutes and the PR body. The raw logs stay local.
+- **The relay stays local.** With `transport = "relay"`, Colony talks only to the Agent Relay core's socket on your computer.
+- **The researcher fetches public pages** to cite them, and pays for no source.
 - **Context7,** when you accept it, sends library lookups to its service. Playwright runs on your machine.
 
 ## Accounts
