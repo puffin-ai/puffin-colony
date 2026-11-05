@@ -1,0 +1,34 @@
+# Solo mode's defaults: one person, a small project. The repo's .colony/colony.toml overrides any key, so a person
+# turns a feature on with `knowledge = true` (or another) under [features] there.
+
+[project]
+base = "main"
+preset = "lean"
+worktrees = "~/worktrees"
+
+[roles]
+lead     = { model = "claude-opus-5-5", effort = "high" }
+builder  = { model = "claude-opus-5-5", effort = "medium" }
+reviewer = { model = "claude-opus-5-5", effort = "high" }
+walker   = { model = "claude-opus-5-5", effort = "medium" }
+fixer    = { model = "claude-opus-5-5", effort = "medium" }
+
+[gate]
+check = "full"                     # a batch runs [project] checks
+review = true                      # and a fresh reviewer reads every round
+walk = false                       # true walks the changed screens in a browser too
+rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]
+max_rounds = 5
+
+[budget]
+provider_dollars = 0
+
+[messages]
+lead_digest_minutes = 10
+
+[features]                         # the commands each mode runs: false refuses the command
+knowledge = false                  # colony check-docs
+specs = false                      # colony spec
+research = false                   # colony research
+board = false                      # colony board, and the lead's stale-card check
+retro = false                      # colony retro

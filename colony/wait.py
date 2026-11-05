@@ -1,14 +1,25 @@
 """colony wait and colony say: the lines a session waits for, and a lead's line for another lead.
 
-A line is one line of an issue comment, `for <name>: <one sentence> (from <name>)`. A builder's wait ends on the
-first line for it that the lead signed. The lead's wait gathers its lines and ends every `lead_digest_minutes`, or
-at once on a line that can't wait (see `taken`). Leads talk to each other as `<person>-lead` on one issue per repo,
-`Colony: coordination`. Every 15 seconds the wait asks `gh api` for the repo's issue comments changed since its
-last read, sending the last ETag, so a quiet poll costs nothing against the rate limit. Its state lives in
-~/.colony/<project>/<session>.json, and a session's first wait reads the last hour. Lines are posted through
-transport.send. With transport = "relay", a line that also came through Agent Relay is skipped, so it is acted on
-once. Every line goes out by `colony post` on a card, or `colony say` lead to lead. When colony.cycle imports,
-the lead's wait also gathers its cycle.stale_lines.
+A line is one line of an issue comment, `for <name>: <one sentence> (from <name>)`. A line is addressed to a session
+when it starts with `for <name>:`, or contains `@<login>` for the session's person, or `@all` (see `taken`): a
+person's line reaches their lead, and a builder takes only lines its lead signed. A builder's wait ends on the
+first line for it. The lead's wait gathers its lines and ends every `lead_digest_minutes`, or at once on a line that
+can't wait. Leads talk to each other as `<person>-lead` on one issue per repo, `Colony: coordination`. Every 15
+seconds the wait asks `gh api` for the repo's issue comments changed since its last read, sending the last ETag, so
+a quiet poll costs nothing against the rate limit. Its state lives in ~/.colony/<project>/<session>.json, and a
+session's first wait reads the last hour. Lines are posted through transport.send. With transport = "relay", a line
+that also came through Agent Relay is skipped, so it is acted on once. Every line goes out by `colony post` on a
+card, or `colony say` lead to lead. When colony.cycle imports and the card board is on, the lead's wait also
+gathers its cycle.stale_lines.
+
+Hack mode puts every line on one board issue, `[messages] board`, after a `[<Name>'s Claude]` prefix (transport.send).
+There a person is their GitHub login, the leads are peers named `<login>-lead`, and each signs its lines with that
+name, so a builder takes lines from its own person's lead alone.
+
+The unread cache, for the prompt hook: the state file's `unread` lists, as `{card, author, body, url}`, each line
+addressed to this session that the wait gathered and hasn't printed. The hook prints them and empties the list; the
+wait then drops those lines (`listed` names the ones it put there), so the session never reads a line twice.
+`polled_at` is the time of the wait's last poll, which tells the hook a wait is running.
 """
 from __future__ import annotations
 
@@ -41,6 +52,11 @@ LINE = re.compile(r"for\s+([\w.-]+)\s*:\s*(\S.*)", re.I)
 SIGNED = re.compile(r"\(from\s+([\w.-]+)\)\W*$", re.I)
 CANT_WAIT = re.compile(r"(urgent|blocked|question)\s*:", re.I)
 DONE = re.compile(r"done\b", re.I)
+PREFIX = re.compile(r"^\[[^\[\]\n]{1,80}'s [^\[\]\n]{1,40}\]\s*")  # a board post's `[<Name>'s <agent>]`
+MENTION = re.compile(r"(?<![\w@./+-])@([A-Za-z0-9][A-Za-z0-9-]*)")  # @<login>, never the middle of an email
+LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9-]*[\s,:]*)+")
+ALL = "all"  # @all reaches every lead, and every builder whose lead signed it
+AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
 
 
@@ -50,13 +66,17 @@ class GhError(cli.ColonyError):
 
 @dataclass(frozen=True)
 class Session:
-    """Who waits: its name, the names it takes lines for and signs with, and for the lead, the people's logins and the
-    cards the batch waits on. The lead answers to `lead` on cards, and to `<person>-lead` on the coordination issue."""
+    """Who waits: its name, the names it takes lines for and signs with, and for the lead, the people's logins, the
+    cards the batch waits on, and its own person's logins, which an @<login> line names. The lead answers to `lead`
+    on cards, and to `<person>-lead` on the coordination issue; in hack mode to `<person>-lead` alone. A builder takes
+    lines signed by one of `leads`."""
 
     name: str
     names: frozenset[str]
     people: frozenset[str] = frozenset()
     waiting: frozenset[str] = frozenset()
+    logins: frozenset[str] = frozenset()
+    leads: frozenset[str] = frozenset({cli.LEAD})
 
 
 def state_path(project: str, name: str) -> Path:
@@ -73,33 +93,47 @@ def read_json(path: Path, default):
 
 
 def write_json(path: Path, value) -> None:
-    """Write a value as JSON, making its folder first."""
+    """Write a value as JSON, making its folder first. The file is replaced whole, so a reader such as the prompt
+    hook never sees half of it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value))
+    part = path.with_name(f".{path.name}.{os.getpid()}")
+    part.write_text(json.dumps(value))
+    os.replace(part, path)
+
+
+def mentions(text: str) -> set[str]:
+    """The lowercased logins a text mentions as `@<login>`, `all` among them for @all."""
+    return {login.lower().rstrip("-") for login in MENTION.findall(text)}
 
 
 def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     """The lines of one comment on issue `card` that `me` takes, without their markdown, each with whether it can't
-    wait for the lead's digest.
+    wait for the lead's digest. A board post's `[<Name>'s <agent>]` prefix stays on the line, and is skipped to read it.
 
-    A builder takes a line for it that the lead signed. The lead takes every line for it that it didn't sign, and
-    can't wait on one whose sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done`
-    for a card the batch waits on. A person's line is unsigned, or signed with a login [people] logins lists: agents
-    post through their person's own gh login, so the signature, not the comment's author, tells them apart.
+    A line is addressed to `me` when it starts with `for <name>:` for one of its names, or, for the lead, contains
+    `@<login>` for its person or `@all`, and for a builder `@all`. A builder takes a line addressed to it that one
+    of its leads signed. The lead takes every line addressed to it that it didn't sign, and can't wait on one whose
+    sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done` for a card the batch
+    waits on. A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
+    person's own gh login, so the signature, not the comment's author, tells them apart.
     """
     lines = []
     for raw in body.splitlines():
         line = MARKUP.sub("", raw)
-        found = LINE.match(line)
-        if not found or found[1].lower() not in me.names:
+        text = MARKUP.sub("", PREFIX.sub("", line))
+        found = LINE.match(text)
+        if found and found[1].lower() in me.names:
+            sentence = found[2]
+        elif mentions(text) & (me.logins | {ALL} if me.name == cli.LEAD else {ALL}):
+            sentence = LEADING_MENTIONS.sub("", text)
+        else:
             continue
-        signed = SIGNED.search(line)
+        signed = SIGNED.search(text)
         sender = signed[1].lower() if signed else ""
         if me.name != cli.LEAD:
-            if sender == cli.LEAD:
+            if sender in me.leads:
                 lines.append((line, True))
         elif sender not in me.names:
-            sentence = found[2]
             done = DONE.match(sentence) is not None and card in me.waiting
             lines.append((line, bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done))
     return lines
@@ -150,11 +184,23 @@ def coordination_issue(repo: str, project: str) -> int:
     return numbers[0]
 
 
+def unread_entry(repo: str, comment: dict, card: str, line: str) -> dict:
+    """One line of the unread cache: its issue, the comment's author, the line, and the comment's address."""
+    url = comment.get("html_url") or f"https://github.com/{repo}/issues/{card}#issuecomment-{comment['id']}"
+    return {"card": int(card) if card.isdigit() else card, "author": (comment.get("user") or {}).get("login", ""),
+            "body": line, "url": url}
+
+
+def unread_text(entry: dict) -> str:
+    """An unread entry as the wait prints it, `#<card> <line>`, which is also its gathered line's text."""
+    return f"#{entry.get('card')} {entry.get('body')}"
+
+
 def poll(repo: str, state: dict, me: Session, mark: str | None = None) -> bool:
-    """Read the comments changed since state["since"] once, add the new lines `me` takes to state["pending"], and
-    say whether a full page came. The read time moves to the newest comment, so the next poll asks only after it.
-    A comment that carries `mark` (transport.MARK, with relay on) reached `me` through the relay too: its lines go
-    into seen and never print."""
+    """Read the comments changed since state["since"] once, add the new lines `me` takes to state["pending"] and to
+    the unread cache (state["unread"], with their texts in state["listed"]), and say whether a full page came. The
+    read time moves to the newest comment, so the next poll asks only after it. A comment that carries `mark`
+    (transport.MARK, with relay on) reached `me` through the relay too: its lines go into seen and never print."""
     path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
     _, state["etag"], comments = gh_get(path, state.get("etag"))
     seen = state.setdefault("seen", [])
@@ -166,11 +212,28 @@ def poll(repo: str, state: dict, me: Session, mark: str | None = None) -> bool:
             if key not in seen:
                 seen.append(key)
                 if not relayed:
-                    state["pending"].append([f"#{card} {line}", cant_wait])
+                    entry = unread_entry(repo, comment, card, line)
+                    state["pending"].append([unread_text(entry), cant_wait])
+                    state.setdefault("unread", []).append(entry)
+                    state.setdefault("listed", []).append(unread_text(entry))
     if comments:
         state["since"] = comments[-1]["updated_at"]
     del seen[:-KEEP_SEEN]
     return len(comments) >= PAGE
+
+
+def drop_shown(path: Path, state: dict, listed: set[str]) -> None:
+    """Drop each gathered line the prompt hook already showed: one of `listed`, the lines this wait put in the
+    state file's unread cache, that the file's cache no longer holds. A file with no cache to read drops nothing."""
+    on_file = read_json(path, {})
+    cache = on_file.get("unread") if isinstance(on_file, dict) else None
+    if not isinstance(cache, list):
+        return
+    shown = listed - {unread_text(entry) for entry in cache if isinstance(entry, dict)}
+    if shown:
+        state["pending"] = [item for item in state["pending"] if item[0] not in shown]
+        state["unread"] = [entry for entry in state.get("unread", []) if unread_text(entry) not in shown]
+        state["listed"] = [text for text in state.get("listed", []) if text not in shown]
 
 
 def stale_check(config: dict):
@@ -214,15 +277,19 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `mark` skips relayed lines (poll),
-    and `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval."""
+    and `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
+    A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown)."""
     clock = clock or CLOCK
     path = state_path(project, me.name)
     state = read_json(path, {})
     state.setdefault("since", (datetime.now(timezone.utc) - LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
     state.setdefault("pending", [])
+    state.setdefault("unread", [])
+    state.setdefault("listed", [])
     failures, digest_at = 0, clock.now() + digest
     add_stale(state, stale)
     while True:
+        listed = set(state["listed"])  # what the file's cache holds since the last write, unless the hook took it
         try:
             more = poll(repo, state, me, mark)
             failures = 0
@@ -231,10 +298,12 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             if failures >= GIVE_UP:
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
                 return 1
+        state["polled_at"] = time.time()
+        drop_shown(path, state, listed)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
             print("\n".join(line for line, _ in pending))
-            state["pending"] = []
+            state["pending"], state["unread"], state["listed"] = [], [], []
             write_json(path, state)
             return 0
         if clock.now() >= digest_at:
@@ -246,21 +315,80 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
 
 
 def lead_name(config: dict, args) -> str:
-    """The lead's name on the coordination issue, `<person>-lead`, such as serdar-lead."""
+    """The lead's name on the coordination issue, `<person>-lead`, such as serdar-lead. In hack mode a person is
+    their GitHub login, so the lead is `<login>-lead`."""
     return f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
 
 
+def hack(config: dict) -> bool:
+    """Whether the config runs hack mode, where every line goes to the board issue."""
+    return cli.mode(config) == "hack"
+
+
+def people_names(config: dict) -> dict[str, str]:
+    """[people] names: each GitHub login's name for the post prefix, keyed by the lowercased login."""
+    names = config.get("people", {}).get("names") or {}
+    return {str(login).lower(): str(name) for login, name in names.items()} if isinstance(names, dict) else {}
+
+
+def known_logins(config: dict) -> set[str]:
+    """Every GitHub login colony.toml names, lowercased: [people] logins and names, and in hack mode, where a person
+    is their login, each account's person."""
+    found = {str(login).lower() for login in config.get("people", {}).get("logins", [])} | set(people_names(config))
+    if hack(config):
+        found |= {str(account.get("person", "")).lower() for account in config.get("accounts", {}).values()}
+    return found - {"any", ""}
+
+
+def person_logins(config: dict, person: str) -> frozenset[str]:
+    """A person's GitHub logins, which an @<login> line names: each known login that is the person or whose
+    [people] name is the person's. In hack mode the person is a login."""
+    person, names = person.lower(), people_names(config)
+    found = {login for login in known_logins(config) if person in (login, names.get(login, "").lower())}
+    return frozenset(found | ({person} if hack(config) and person else set()))
+
+
+def display_name(config: dict, person: str) -> str:
+    """The person's name in a post's prefix: their [people] name, else the person as colony.toml writes it."""
+    return people_names(config).get(person.lower()) or person
+
+
+def digest_seconds(config: dict) -> float:
+    """How long the lead's wait gathers lines before it prints them: [messages] lead_digest_minutes, in seconds."""
+    return float(config.get("messages", {}).get("lead_digest_minutes", DIGEST_MINUTES)) * 60
+
+
 def lead_session(config: dict, name: str) -> Session:
-    """The lead as its wait sees it: answering to `lead` and to `name`, its `<person>-lead`, with the people's logins
-    and the cards the batch waits on."""
+    """The lead as its wait sees it: answering to `lead` and to `name`, its `<person>-lead` (in hack mode to `name`
+    alone, since every person's lead reads the one board), with the people's logins, the cards the batch waits on,
+    and its person's logins for @<login> lines."""
     people = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
     cards = read_json(state_path(config["project"]["name"], f"{cli.LEAD}-waiting"), [])
-    return Session(cli.LEAD, frozenset({cli.LEAD, name}), people, frozenset(str(card) for card in cards))
+    person = name.removesuffix(f"-{cli.LEAD}") if name.endswith(f"-{cli.LEAD}") else ""
+    names = {name} if hack(config) else {cli.LEAD, name}
+    logins = person_logins(config, person) if person else frozenset()
+    return Session(cli.LEAD, frozenset(names), people, frozenset(str(card) for card in cards), logins)
+
+
+def builder_session(config: dict, name: str, person: str = "") -> Session:
+    """A builder as its wait sees it: answering to its name, and taking the lines its lead signed, `lead`, or in hack
+    mode, where every person's builders read the one board, its person's `<person>-lead`."""
+    leads = {f"{person.lower()}-{cli.LEAD}"} if hack(config) and person else {cli.LEAD}
+    return Session(name, frozenset({name}), leads=frozenset(leads))
+
+
+def session(config: dict, args, me: str) -> Session:
+    """The session named `me` ($COLONY_SESSION) as its wait sees it: the lead (lead_session), else a builder
+    (builder_session), whose person is needed only in hack mode. The wait and the prompt hook both read lines so."""
+    if me == cli.LEAD:
+        return lead_session(config, lead_name(config, args))
+    return builder_session(config, me, cli.person_of(config, args) if hack(config) else "")
 
 
 def run(config: dict, args, clock=None) -> int:
     """`colony wait`: wait as $COLONY_SESSION on the repo colony.toml names. The lead's --waiting-on lists the cards
-    the batch waits on, and the lead's wait makes sure the coordination issue exists for other leads to post on."""
+    the batch waits on, and outside hack mode the lead's wait makes sure the coordination issue exists for other
+    leads to post on."""
     from colony import transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
@@ -273,55 +401,95 @@ def run(config: dict, args, clock=None) -> int:
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
-        return wait(repo, project, Session(me, frozenset({me})), clock=clock, mark=mark)
+        return wait(repo, project, session(config, args, me), clock=clock, mark=mark)
     waiting_path = state_path(project, f"{cli.LEAD}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
-    try:
-        coordination_issue(repo, project)
-    except (GhError, ValueError, KeyError) as e:
-        print(f"{cli.NAME} wait: no coordination issue yet, the next wait tries again: {e}", file=sys.stderr)
-    minutes = float(config.get("messages", {}).get("lead_digest_minutes", DIGEST_MINUTES))
-    lead = lead_session(config, lead_name(config, args))
-    return wait(repo, project, lead, minutes * 60, clock, mark, stale_check(config))
+    if not hack(config):
+        try:
+            coordination_issue(repo, project)
+        except (GhError, ValueError, KeyError) as e:
+            print(f"{cli.NAME} wait: no coordination issue yet, the next wait tries again: {e}", file=sys.stderr)
+    stale = stale_check(config) if config.get("features", {}).get("board", True) else None
+    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, mark, stale)
+
+
+def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:
+    """Refuse a recipient `@<login>` that names no login colony.toml knows, or the sender's own person; `@all` is
+    always a recipient."""
+    login = to[1:]
+    if not MENTION.fullmatch(to):
+        raise cli.ColonyError(f"{to} is not @<login> or @all (you are {me})")
+    if login != ALL and login not in known_logins(config):
+        raise cli.ColonyError(f"{to} names no login {cli.CONFIG_NAME} knows: add it to [people] logins (you are {me})")
+    if login in own:
+        raise cli.ColonyError(f"{to} is your own person, whose lead you are (you are {me})")
+
+
+def compose(to: str, sentence: str, sender: str) -> str:
+    """A line: `for <to>: <sentence> (from <sender>)`, or for `@<login>` or `@all`, `<to> <sentence> (from
+    <sender>)`, which is also a GitHub mention of the person."""
+    return f"{to} {sentence} (from {sender})" if to.startswith("@") else f"for {to}: {sentence} (from {sender})"
+
+
+def checked(line: str, sentence: str) -> str:
+    """The line, once it holds a sentence and stays under MAX_LINE characters."""
+    if not sentence or len(line) >= MAX_LINE:
+        raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
+    return line
 
 
 def say(config: dict, args) -> int:
-    """`colony say <lead-name> "<sentence>"`: post a line for another lead on the coordination issue (transport.send)."""
+    """`colony say <lead-name|@login|@all> "<sentence>"`: post a line for another lead, or for a person's lead, on the
+    coordination issue, or on the board in hack mode (transport.send)."""
     from colony import transport
 
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
     transport.kind(config)
     me, to, sentence = lead_name(config, args), args.to.lower(), " ".join(args.sentence.split())
-    if not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
-        raise cli.ColonyError(f"say needs another lead's name, such as burak-lead (you are {me})")
-    line = f"for {to}: {sentence} (from {me})"
-    if not sentence or len(line) >= MAX_LINE:
-        raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
+    if to.startswith("@"):
+        check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
+    elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
+        raise cli.ColonyError(f"say needs another lead's name, such as burak-lead, or @login (you are {me})")
+    line = checked(compose(to, sentence, me), sentence)
     number = transport.send(config, to, line)
     print(f"#{number} {line}")
     return 0
 
 
 def post(config: dict, args) -> int:
-    """`colony post <card> <to> "<sentence>" [--urgent]`: post `for <to>: <sentence> (from $COLONY_SESSION)` on the
-    card through transport.send, with `urgent:` first for --urgent. Builders and the lead post every card line so."""
+    """`colony post [<card>] <to> "<sentence>" [--urgent]`: post `for <to>: <sentence> (from $COLONY_SESSION)` on the
+    card through transport.send, with `urgent:` first for --urgent. Builders and the lead post every card line so.
+    `<to>` may be `@<login>`, for that person's lead, or `@all`.
+
+    In hack mode the line goes to the board, so the card is optional and named after the sentence as `(#<card>)`, the
+    lead signs as `<person>-lead`, and a builder's `lead` means its own person's lead."""
     from colony import transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
     transport.kind(config)
+    on_board, card = hack(config), getattr(args, "card", None)
+    sender = lead_name(config, args) if on_board and me == cli.LEAD else me
     to, sentence = args.to.lower(), " ".join(args.sentence.split())
-    if not cli.SESSION_NAME.fullmatch(to) or to == me:
-        raise cli.ColonyError(f"post needs another session's name, such as lead or builder-2 (you are {me})")
+    if to.startswith("@"):
+        own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
+        check_mention(config, to, own, me)
+    else:
+        if on_board and to == cli.LEAD:
+            to = lead_name(config, args)
+        if not cli.SESSION_NAME.fullmatch(to) or to in (me, sender) or to.isdigit():
+            raise cli.ColonyError(f"post needs another session's name, such as lead or builder-2, or @login "
+                                  f"(you are {me})")
+    if card is None and not on_board:
+        raise cli.ColonyError(f'post needs the card first: {cli.NAME} post <card> <name> "<sentence>"')
     if sentence and args.urgent and not CANT_WAIT.match(sentence):
         sentence = f"urgent: {sentence}"
-    line = f"for {to}: {sentence} (from {me})"
-    if not sentence or len(line) >= MAX_LINE:
-        raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
-    number = transport.send(config, to, line, card=args.card)
+    about = f" (#{card})" if on_board and card is not None and sentence else ""
+    line = checked(compose(to, sentence + about, sender), sentence)
+    number = transport.send(config, to, line, card=None if on_board else card)
     print(f"#{number} {line}")
     return 0
 
@@ -345,13 +513,18 @@ def add_commands(sub, wait_parser) -> None:
     """cli.py's route to this module: wait's --waiting-on, and the `say` and `post` commands."""
     wait_parser.add_argument("--waiting-on", type=card_numbers, metavar="N,N",
                              help="the lead: the cards the batch waits on, whose done lines come at once")
-    p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue")
-    p.add_argument("to", metavar="lead-name", help="the other lead, such as burak-lead")
+    p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
+                                   "hack mode)")
+    p.add_argument("to", metavar="lead-name", help="the other lead, such as burak-lead, or @login for that person's "
+                                                   "lead, or @all")
     p.add_argument("sentence", help="one sentence")
     p.set_defaults(run=say)
-    p = sub.add_parser("post", help="post a line for another session on a card, through the transport")
-    p.add_argument("card", type=card_number, help="the card's issue number, such as 41")
-    p.add_argument("to", metavar="name", help="who the line is for, such as lead or builder-2")
+    p = sub.add_parser("post", help="post a line for another session on a card (the board in hack mode), through "
+                                    "the transport")
+    p.add_argument("card", type=card_number, nargs="?",
+                   help="the card's issue number, such as 41; optional in hack mode, where the line goes to the board")
+    p.add_argument("to", metavar="name", help="who the line is for, such as lead or builder-2, or @login for that "
+                                              "person's lead, or @all")
     p.add_argument("sentence", help="one sentence")
     p.add_argument("--urgent", action="store_true", help="start the sentence with urgent:, so it can't wait")
     p.set_defaults(run=post)

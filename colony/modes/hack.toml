@@ -1,0 +1,41 @@
+# Hack mode's defaults: a team, for hours or a weekend. The repo's .colony/colony.toml overrides any key.
+# In hack mode a person is their GitHub login: each [accounts.<name>] table says person = "<login>", and that
+# person's lead is <login>-lead. Every line goes to the pinned board issue, [messages] board.
+
+[project]
+base = "main"                      # the branch `colony merge` lands work on
+preset = "hack"                    # the hack core: honesty, ownership and board duties
+worktrees = "~/worktrees"
+
+[roles]
+lead     = { model = "claude-opus-5-5", effort = "high" }
+builder  = { model = "claude-opus-5-5", effort = "medium" }
+reviewer = { model = "claude-opus-5-5", effort = "high" }      # only for `colony batch --review`
+walker   = { model = "claude-opus-5-5", effort = "medium" }
+fixer    = { model = "claude-opus-5-5", effort = "medium" }
+
+[gate]
+check = "fast"                     # a batch runs [project] fast_check, not the full checks
+review = false                     # `colony batch --review` adds one fresh reviewer
+walk = false
+rubric = ["bugs", "security and privacy", "tests"]
+max_rounds = 3
+merge_after_fast_check = true      # `colony merge <branch>` pushes the base after a passing fast check; false opens a PR
+
+[budget]
+provider_dollars = 0
+
+[messages]
+lead_digest_minutes = 0            # the leads are peers: a line prints as soon as the wait reads it
+# board = 12                       # the pinned `Board: <project>` issue, which setup opens and writes here
+
+[people]
+logins = []                        # each teammate's GitHub login
+names = {}                         # each login's name for the post prefix: { ana = "Ana" } starts posts [Ana's Claude]
+
+[features]                         # the commands each mode runs: false refuses the command
+knowledge = false                  # colony check-docs
+specs = false                      # colony spec
+research = false                   # colony research
+board = false                      # colony board, and the lead's stale-card check
+retro = false                      # colony retro

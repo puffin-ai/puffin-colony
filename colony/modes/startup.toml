@@ -1,0 +1,17 @@
+# Startup mode's defaults: a company's whole life cycle, which is Colony as it ran before modes. A colony.toml with
+# no [project] mode runs this mode. The repo's .colony/colony.toml overrides any key, and setup writes every key
+# load_config requires, so this file holds only the keys each mode sets its own way.
+
+[gate]
+check = "full"                     # a batch runs [project] checks (or web_checks for a round that may)
+review = true                      # a fresh reviewer reads every round, until 0 problems are open
+
+[messages]
+lead_digest_minutes = 10           # the lead reads gathered lines this often
+
+[features]                         # the commands each mode runs: false refuses the command
+knowledge = true                   # colony check-docs
+specs = true                       # colony spec
+research = true                    # colony research
+board = true                       # colony board, and the lead's stale-card check
+retro = true                       # colony retro

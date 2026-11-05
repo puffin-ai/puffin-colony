@@ -2,9 +2,11 @@
 
 `colony` alone runs setup the first time (the repo has no .colony/colony.toml) and opens the lead every time after.
 `colony join <name>` opens a builder on another computer. The lead and the builders use `open`, `wait`, `batch`
-and `status`, and the lead opens a researcher or the spec agent with `research` and `spec`. The cycle's commands
-(cycle.py, board.py), the knowledge checks (vault.py) and the guards (guards.py) add their own. Every command finds
-the repo with `git rev-parse --show-toplevel`. Python 3.11+ standard library only.
+and `status`, and the lead opens a researcher or the spec agent with `research` and `spec`. In hack mode,
+`colony merge <branch>` lands a branch after the fast check (merge.py). The cycle's commands (cycle.py, board.py),
+the knowledge checks (vault.py) and the guards (guards.py) add their own. The repo's `[project] mode`, hack, solo or
+startup, picks the defaults in modes/<mode>.toml that colony.toml overrides. Every command finds the repo with
+`git rev-parse --show-toplevel`. Python 3.11+ standard library only.
 """
 from __future__ import annotations
 
@@ -42,6 +44,10 @@ REQUIRED = {
     "gate": ("rubric", "max_rounds", "walk"),
     "budget": ("provider_dollars",),
 }
+MODES = ("hack", "solo", "startup")
+DEFAULT_MODE = "startup"  # the mode of a colony.toml that names none: Colony as it ran before modes
+# The commands a mode can turn off, each with its [features] key: a false key refuses the command.
+FEATURES = {"check-docs": "knowledge", "spec": "specs", "research": "research", "board": "board", "retro": "retro"}
 
 
 class ColonyError(Exception):
@@ -81,16 +87,36 @@ def config_path() -> Path:
     return repo_root() / DIR / CONFIG_NAME
 
 
+def mode(config: dict) -> str:
+    """The config's `[project] mode`: hack, solo or startup, which a config that names none runs."""
+    return config.get("project", {}).get("mode") or DEFAULT_MODE
+
+
+def merge_tables(defaults: dict, own: dict) -> dict:
+    """`own` laid over `defaults`: a table in both merges key by key, and any other value in `own` wins whole."""
+    merged = dict(defaults)
+    for key, value in own.items():
+        both = isinstance(value, dict) and isinstance(merged.get(key), dict)
+        merged[key] = merge_tables(merged[key], value) if both else value
+    return merged
+
+
 def load_config(path=None) -> dict:
-    """Read the repo's .colony/colony.toml (or `path`), expand `~` in its paths, and check its keys."""
+    """Read the repo's .colony/colony.toml (or `path`) over its mode's defaults (modes/<mode>.toml), expand `~` in
+    its paths, and check its keys."""
     path = Path(path) if path else config_path()
     try:
         with open(path, "rb") as f:
-            config = tomllib.load(f)
+            own = tomllib.load(f)
     except FileNotFoundError:
         raise ColonyError(f"{path} is missing: pull the branch that has it, or run `{NAME}` to set this repo up") from None
     except tomllib.TOMLDecodeError as e:
         raise ColonyError(f"{path}: {e}") from None
+    name = mode(own)
+    if name not in MODES:
+        raise ColonyError(f'{path}: [project] mode is "hack", "solo" or "startup", not {name!r}')
+    config = merge_tables(tomllib.loads(package_file("modes", f"{name}.toml")), own)
+    config.setdefault("project", {})["mode"] = name
     for table, keys in REQUIRED.items():
         for key in keys:
             if key not in config.get(table, {}):
@@ -618,6 +644,13 @@ def wait(config: dict, args) -> int:
     return watcher.run(config, args)
 
 
+def merge(config: dict, args) -> int:
+    """Land a branch on the base after a passing fast check, or open its pull request (merge.run)."""
+    from colony import merge as lander
+
+    return lander.run(config, args)
+
+
 def card(value: str) -> str:
     """Check that a --card value has the shape N=BRANCH, and return it unchanged."""
     number, _, branch = value.partition("=")
@@ -639,7 +672,7 @@ ACCOUNT_HELP = ("the account to open on, instead of the pick ([project] prefer_a
 
 def build_parser() -> argparse.ArgumentParser:
     """The command line: no command for setup or the lead, then the sessions (join, open, research, spec), the lines
-    (wait, say, post), the batch (batch, status), the cycle's, the board, check-docs, the guards', and tools."""
+    (wait, say, post), the gate (batch, status, merge), the cycle's, the board, check-docs, the guards', and tools."""
     from colony import board, cycle, guards, vault
     parser = argparse.ArgumentParser(prog=NAME, description=f"{DISPLAY}: run with no command to open your lead "
                                      f"(or to set up the repo, the first time).")
@@ -686,12 +719,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--person", help="whose accounts the agents use")
     p.add_argument("--account", metavar="NAME", help="the account the agents run on, instead of the pick "
                                                      "([project] prefer_account, else the one with the most room)")
+    p.add_argument("--review", action="store_true",
+                   help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
     p = sub.add_parser("status", help="show a batch's round, open problems, walk, running steps and minutes")
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
+
+    p = sub.add_parser("merge", help="hack mode: merge a branch into the base after a passing fast check, "
+                                     "else open its pull request")
+    p.add_argument("branch", help="the branch to land, such as ana/login-form")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
+    p.set_defaults(run=merge)
 
     for module in (cycle, board, vault, guards):
         module.add_commands(sub)
@@ -712,7 +753,12 @@ def main(argv=None) -> int:
             return setup(args)
         if args.command == "tools":  # setup runs it before colony.toml exists
             return tools(args)
-        return args.run(load_config(), args) or 0
+        config = load_config()
+        feature = FEATURES.get(args.command)
+        if feature and not config["features"][feature]:
+            raise ColonyError(f"`{NAME} {args.command}` is off in {mode(config)} mode: set {feature} = true under "
+                              f"[features] in {DIR}/{CONFIG_NAME} to turn it on")
+        return args.run(config, args) or 0
     except ColonyError as e:
         print(f"{NAME}: {e}", file=sys.stderr)
         return 2

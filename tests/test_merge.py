@@ -1,0 +1,297 @@
+"""Tests for `colony merge <branch>`: real git repositories (a bare origin, the person's clone and a teammate's clone)
+and a stand-in `gh` that logs its calls, so nothing reaches GitHub."""
+import json
+import os
+import subprocess
+import sys
+from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
+from colony import cli, merge
+
+GH_STUB = """#!{python}
+import json, pathlib, sys
+here = pathlib.Path(__file__).resolve().parent
+args = sys.argv[1:]
+with open(here / "gh-calls.jsonl", "a") as log:
+    log.write(json.dumps(args) + "\\n")
+if args[:2] == ["pr", "list"]:
+    sys.stdout.write((here / "open-prs.json").read_text() if (here / "open-prs.json").exists() else "[]")
+else:
+    sys.stdout.write("https://github.com/acme/demo/pull/7\\n")
+"""
+HACK = """
+[project]
+mode = "hack"
+name = "demo"
+repo = "acme/demo"
+worktrees = "{worktrees}"
+checks = "false"
+fast_check = "{fast_check}"
+[accounts.ana]
+config_dir = "~/.claude"
+person = "ana"
+[messages]
+board = 12
+[gate]
+merge_after_fast_check = {allowed}
+"""
+STARTUP = """
+[project]
+name = "demo"
+repo = "acme/demo"
+base = "main"
+worktrees = "{worktrees}"
+checks = "false"
+fast_check = "{fast_check}"
+[accounts.ana]
+config_dir = "~/.claude"
+person = "ana"
+[roles]
+lead = {{ model = "m", effort = "high" }}
+builder = {{ model = "m", effort = "medium" }}
+reviewer = {{ model = "m", effort = "high" }}
+walker = {{ model = "m", effort = "medium" }}
+fixer = {{ model = "m", effort = "medium" }}
+[gate]
+rubric = ["bugs"]
+max_rounds = 5
+walk = false
+merge_after_fast_check = {allowed}
+[budget]
+provider_dollars = 0
+"""
+PASSES = "grep -q good a.txt"
+
+
+def git(cwd, *args) -> str:
+    """Run git in cwd and return its output."""
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def commit(repo: Path, files: dict, message: str) -> None:
+    """Write the files and commit them."""
+    for name, text in files.items():
+        (repo / name).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", message)
+
+
+class World:
+    """The repositories, the stand-in gh's calls, and the config for each test."""
+
+    def __init__(self, tmp: Path, clone: Path, origin: Path, teammate: Path, bin_dir: Path):
+        self.tmp, self.clone, self.origin, self.teammate, self.bin = tmp, clone, origin, teammate, bin_dir
+
+    def config(self, fast_check: str = PASSES, allowed: bool = True, template: str = HACK) -> dict:
+        """A hack config (or the template's), loaded as the command line loads it."""
+        path = self.tmp / "colony.toml"
+        path.write_text(template.format(worktrees=self.tmp / "wt", fast_check=fast_check.replace('"', '\\"'),
+                                        allowed=str(allowed).lower()))
+        return cli.load_config(path)
+
+    def gh_calls(self) -> list[list[str]]:
+        """Each call the stand-in gh got."""
+        log = self.bin / "gh-calls.jsonl"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def origin_main(self) -> str:
+        """The base's commit on origin."""
+        return git(self.origin, "rev-parse", "main")
+
+    def on_origin_main(self, path: str) -> str:
+        """A file's text on origin's base."""
+        return git(self.origin, "show", f"main:{path}")
+
+    def branch(self, name: str, files: dict) -> None:
+        """Make a local branch off main with one commit, and go back to main."""
+        git(self.clone, "checkout", "-q", "-b", name, "main")
+        commit(self.clone, files, name)
+        git(self.clone, "checkout", "-q", "main")
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    """A bare origin with main, the person's clone (the command runs in it), a teammate's clone, a temporary HOME,
+    and the stand-in gh first on PATH."""
+    (tmp_path / "gitconfig").write_text("")
+    for key, value in {"GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                       "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test"}.items():
+        monkeypatch.setenv(key, value)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(GH_STUB.replace("{python}", sys.executable))
+    (bin_dir / "gh").chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    origin, clone, teammate = tmp_path / "origin.git", tmp_path / "repo", tmp_path / "teammate"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    git(tmp_path, "init", "-q", "-b", "main", str(clone))
+    commit(clone, {"a.txt": "start\n", "b.txt": "b\n"}, "base")
+    git(clone, "remote", "add", "origin", str(origin))
+    git(clone, "push", "-q", "origin", "main")
+    git(tmp_path, "clone", "-q", str(origin), str(teammate))
+    monkeypatch.chdir(clone)
+    return World(tmp_path, clone, origin, teammate, bin_dir)
+
+
+def land(config, branch, dry_run=False):
+    """Run `colony merge <branch>`."""
+    return merge.run(config, Namespace(branch=branch, dry_run=dry_run))
+
+
+def test_a_passing_fast_check_lands_the_branch_on_the_base(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(world.config(), "ana/login") == 0
+    assert capsys.readouterr().out.startswith("merged ana/login into main at ")
+    assert world.on_origin_main("a.txt") == "good"
+    git(world.clone, "merge-base", "--is-ancestor", "ana/login", "origin/main")  # the branch's commit is on the base
+    assert git(world.origin, "log", "-1", "--format=%P", "main").count(" ") == 1  # a merge commit, --no-ff
+    assert world.gh_calls() == []
+
+
+def test_a_second_merge_reuses_the_merge_worktree(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/notes", {"b.txt": "notes\n"})
+    config = world.config()
+    assert land(config, "ana/login") == 0
+    (world.tmp / "wt" / "demo-merge" / "left-over.txt").write_text("from the last check\n")
+    assert land(config, "ana/notes") == 0
+    assert world.on_origin_main("a.txt") == "good" and world.on_origin_main("b.txt") == "notes"
+    assert not (world.tmp / "wt" / "demo-merge" / "left-over.txt").exists()
+
+
+def test_a_failing_fast_check_opens_a_pr_and_leaves_the_base(world, capsys):
+    world.branch("ana/broken", {"a.txt": "bad\n"})
+    before = world.origin_main()
+    assert land(world.config(fast_check="echo 3 failed; false"), "ana/broken") == 1
+    out = capsys.readouterr().out
+    assert "not merged: the fast check failed on the merged result: 3 failed." in out
+    assert out.strip().endswith("Pull request: https://github.com/acme/demo/pull/7")
+    assert world.origin_main() == before
+    assert git(world.origin, "rev-parse", "ana/broken") == git(world.clone, "rev-parse", "ana/broken")  # pushed
+    create = [call for call in world.gh_calls() if call[:2] == ["pr", "create"]]
+    assert len(create) == 1
+    args = create[0]
+    assert (args[args.index("--base") + 1], args[args.index("--head") + 1]) == ("main", "ana/broken")
+    assert "the fast check failed on the merged result: 3 failed" in args[args.index("--body") + 1]
+
+
+def test_a_conflict_opens_a_pr_and_leaves_the_base(world, capsys):
+    world.branch("ana/clash", {"a.txt": "good, from ana\n"})
+    commit(world.teammate, {"a.txt": "from the teammate\n"}, "teammate")
+    git(world.teammate, "push", "-q", "origin", "main")
+    before = world.origin_main()
+    assert land(world.config(), "ana/clash") == 1
+    assert "merging it into main conflicts in a.txt" in capsys.readouterr().out
+    assert world.origin_main() == before
+    assert any(call[:2] == ["pr", "create"] for call in world.gh_calls())
+
+
+def test_an_open_pr_for_the_branch_is_reused(world, capsys):
+    world.branch("ana/broken", {"a.txt": "bad\n"})
+    (world.bin / "open-prs.json").write_text('[{"url": "https://github.com/acme/demo/pull/3"}]')
+    assert land(world.config(), "ana/broken") == 1
+    assert capsys.readouterr().out.strip().endswith("Pull request: https://github.com/acme/demo/pull/3")
+    assert not any(call[:2] == ["pr", "create"] for call in world.gh_calls())
+
+
+def test_the_base_moving_under_the_check_is_merged_again_and_never_forced(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    marker = world.tmp / "moved"
+    teammate_push = (f'if [ ! -f "{marker}" ]; then touch "{marker}"; echo more > "{world.teammate}/c.txt"; '
+                     f'git -C "{world.teammate}" add c.txt; git -C "{world.teammate}" commit -qm teammate; '
+                     f'git -C "{world.teammate}" push -q origin main; fi; {PASSES}')
+    assert land(world.config(fast_check=teammate_push), "ana/login") == 0
+    assert capsys.readouterr().out.startswith("merged ana/login into main at ")
+    assert world.on_origin_main("c.txt") == "more"  # the teammate's commit stays on the base
+    assert world.on_origin_main("a.txt") == "good"
+
+
+def test_a_base_that_keeps_moving_opens_a_pr(world, capsys, monkeypatch):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    monkeypatch.setattr(merge, "TRIES", 1)
+    teammate_push = (f'echo more >> "{world.teammate}/c.txt"; git -C "{world.teammate}" add c.txt; '
+                     f'git -C "{world.teammate}" commit -qm teammate; git -C "{world.teammate}" push -q origin main; '
+                     f'{PASSES}')
+    assert land(world.config(fast_check=teammate_push), "ana/login") == 1
+    assert "main moved on 1 times while the fast check ran" in capsys.readouterr().out
+
+
+def test_a_branch_already_on_the_base_has_nothing_to_push(world, capsys):
+    git(world.clone, "branch", "ana/same", "main")
+    before = world.origin_main()
+    assert land(world.config(), "ana/same") == 0
+    assert "ana/same is already in main: nothing to push" in capsys.readouterr().out
+    assert world.origin_main() == before
+
+
+def test_origins_copy_wins_when_the_local_branch_is_behind(world, capsys):
+    world.branch("ana/login", {"a.txt": "start, then\n"})
+    git(world.clone, "push", "-q", "origin", "ana/login")
+    git(world.teammate, "fetch", "-q", "origin")
+    git(world.teammate, "checkout", "-q", "-b", "ana/login", "origin/ana/login")
+    commit(world.teammate, {"a.txt": "good\n"}, "finished on the other computer")
+    git(world.teammate, "push", "-q", "origin", "ana/login")
+    assert land(world.config(), "ana/login") == 0
+    assert world.on_origin_main("a.txt") == "good"
+
+
+@pytest.mark.parametrize("template, allowed, why", [
+    (HACK, False, "[gate] merge_after_fast_check is false, so a person merges it"),
+    (STARTUP, True, "startup mode lands work through pull requests and `colony batch`"),  # a yes counts in hack only
+])
+def test_merging_off_or_another_mode_opens_a_pr_without_merging(world, capsys, template, allowed, why):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    before = world.origin_main()
+    config = world.config(allowed=allowed, template=template)
+    assert land(config, "ana/login") == 0
+    assert capsys.readouterr().out == f"pull request: https://github.com/acme/demo/pull/7 ({why})\n"
+    assert world.origin_main() == before
+    assert not (world.tmp / "wt" / "demo-merge").exists()
+    assert git(world.origin, "rev-parse", "ana/login") == git(world.clone, "rev-parse", "ana/login")
+
+
+def test_dry_run_prints_the_plan_and_runs_nothing(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    before = world.origin_main()
+    assert land(world.config(), "ana/login", dry_run=True) == 0
+    out = capsys.readouterr().out
+    for text in ("colony merge ana/login: dry run, nothing runs.", f"in {world.tmp / 'wt' / 'demo-merge'}, at origin/main",
+                 "git merge --no-ff --no-edit ana/login", f"the fast check: $ {PASSES}",
+                 "when it passes: $ git push origin HEAD:refs/heads/main",
+                 "gh pr create --repo acme/demo --base main --head ana/login"):
+        assert text in out, text
+    assert "--force" not in out
+    assert world.origin_main() == before and world.gh_calls() == []
+    assert not (world.tmp / "wt").exists()
+
+
+def test_a_folder_in_the_way_of_the_merge_worktree_is_never_touched(world):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    mine = world.tmp / "wt" / "demo-merge"
+    mine.mkdir(parents=True)
+    (mine / "notes.txt").write_text("mine\n")
+    with pytest.raises(cli.ColonyError, match="is in the way: it is not this repo's merge worktree"):
+        land(world.config(), "ana/login")
+    assert (mine / "notes.txt").read_text() == "mine\n"
+
+
+@pytest.mark.parametrize("branch, error", [
+    ("main", "merge needs a branch to land on main, other than main itself"),
+    ("origin/main", "other than main itself"),
+    ("--force", "other than main itself"),
+    ("ana/nothing", "ana/nothing is neither a local branch nor on origin"),
+])
+def test_merge_needs_a_branch_that_exists_and_is_not_the_base(world, branch, error):
+    with pytest.raises(cli.ColonyError, match=error):
+        land(world.config(), branch)
+    assert world.gh_calls() == []
+
+
+def test_merge_is_a_command_on_the_command_line():
+    args = cli.build_parser().parse_args(["merge", "ana/login", "--dry-run"])
+    assert (args.branch, args.dry_run, args.run) == ("ana/login", True, cli.merge)

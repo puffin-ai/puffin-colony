@@ -2,8 +2,13 @@
 
 The command line in cli.py calls `run_batch(config, args)` and `batch_status(config, args)` with the dict
 `load_config` returns. The args read are `name`, `card` (a list of `N=BRANCH`), `from_branch` and `dry_run`, and the
-optional `account`, `person` and `repo`. The account rules and the repository root come from cli.py. Each batch's
-reports go to `.colony/reports/<batch>/` in its worktree, and land on the batch branch.
+optional `account`, `person`, `review` and `repo`. The account rules and the repository root come from cli.py. Each
+batch's reports go to `.colony/reports/<batch>/` in its worktree, and land on the batch branch.
+
+The mode's [gate] keys shape the gate: `check` is "full" ([project] checks, or web_checks for a round that may) or
+"fast" ([project] fast_check alone, hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when
+false), and `walk` walks the changed screens. Startup and solo run the full checks and the reviewer, and solo walks
+only when `walk` is true; hack runs the fast check alone.
 """
 
 from __future__ import annotations
@@ -156,6 +161,37 @@ def owner_of(path: str, card_branches, repo, base: str | None = None) -> str:
     return best
 
 
+def fast_gate(config: dict) -> bool:
+    """Whether the gate runs the fast check alone, `[gate] check = "fast"` (hack mode's), instead of the full checks."""
+    return config["gate"]["check"] == "fast"
+
+
+def fast_check(project: dict) -> str:
+    """The fast check's command: [project] fast_check, else the full checks."""
+    return project.get("fast_check") or project["checks"]
+
+
+def trailer(config: dict) -> str:
+    """The line every commit and pull request the runners make ends with: [project] trailer, else the fixer's
+    Assisted-by line."""
+    return config["project"].get("trailer") or f"Assisted-by: claude-code:{config['roles']['fixer']['model']}"
+
+
+def checks_env(config: dict, root: Path) -> dict:
+    """The environment for the checks: check_env_file's values (a path from the repo `root`) added, and provider keys
+    dropped at a zero budget."""
+    project, env = config["project"], dict(os.environ)
+    if project.get("check_env_file"):
+        for line in (root / Path(project["check_env_file"]).expanduser()).read_text().splitlines():
+            key, sep, value = line.strip().removeprefix("export ").partition("=")
+            if sep and key and not key.startswith("#"):
+                env[key.strip()] = value.strip().strip("'\"")
+    if not config.get("budget", {}).get("provider_dollars"):
+        for key in PROVIDER_KEYS:
+            env.pop(key, None)
+    return env
+
+
 def minutes_table(lines) -> str:
     """Sum `HH:MM step minutes [$cost]` lines per kind of step (the name before its first dash) into a Markdown table."""
     if isinstance(lines, str):
@@ -230,6 +266,7 @@ class Batch:
     root: Path
     account: tuple[str, str]
     dry: bool = False
+    review: bool = True
     lock: threading.RLock = field(default_factory=threading.RLock)
     state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False})
 
@@ -248,7 +285,9 @@ class Batch:
         if not cards:
             raise SystemExit("colony batch needs at least one --card N=BRANCH")
         start = getattr(args, "from_branch", None) or f"origin/{config['project']['base']}"
-        return cls(config, name, cards, start, _root(config, args), _account(config, args), bool(getattr(args, "dry_run", False)))
+        review = bool(config["gate"]["review"] or getattr(args, "review", False))
+        return cls(config, name, cards, start, _root(config, args), _account(config, args),
+                   bool(getattr(args, "dry_run", False)), review)
 
     def __post_init__(self) -> None:
         """Work out the names and paths every step uses.
@@ -264,7 +303,7 @@ class Batch:
         self.wt = self.worktrees / f"{self.tag}-batch-{self.name}"
         self.walk_wt = self.worktrees / f"{self.tag}-batch-{self.name}-walk"
         self.reports = self.wt / REPORTS / self.name
-        self.trailer = self.project.get("trailer") or f"Assisted-by: claude-code:{self.config['roles']['fixer']['model']}"
+        self.trailer = trailer(self.config)
 
     def fix_names(self, card: str, r: int) -> tuple[str, Path]:
         """The fix branch and worktree for one card in one round."""
@@ -285,17 +324,8 @@ class Batch:
         return env
 
     def check_env(self) -> dict:
-        """The environment for the checks: check_env_file's values added, and provider keys dropped at a zero budget."""
-        env = dict(os.environ)
-        if self.project.get("check_env_file"):
-            for line in (self.root / Path(self.project["check_env_file"]).expanduser()).read_text().splitlines():
-                key, sep, value = line.strip().removeprefix("export ").partition("=")
-                if sep and key and not key.startswith("#"):
-                    env[key.strip()] = value.strip().strip("'\"")
-        if not self.config.get("budget", {}).get("provider_dollars"):
-            for key in PROVIDER_KEYS:
-                env.pop(key, None)
-        return env
+        """The environment for the checks (checks_env)."""
+        return checks_env(self.config, self.root)
 
     def save(self) -> None:
         """Write state.json for `colony status`."""
@@ -390,13 +420,17 @@ def walker_prompt(b: Batch, r: int, head: str) -> str:
 
 
 def fixer_prompt(b: Batch, r: int, items: list[Finding], checkout: Path, branch: str) -> str:
-    """Fill the fixer template with one card's findings, and the full checks when any finding is in a backend path."""
+    """Fill the fixer template with one card's findings, and the gate's check: the fast check for a fast gate, else
+    the full checks when any finding is in a backend path."""
     lines = []
     for f in items:
         place = f"{f.path}:{f.line} — " if f.path and f.line else f"{f.path} — " if f.path else ""
         lines.append(f"- {place}{f.text}")
     backend = _touches([f.path for f in items], b.project.get("backend_paths", []))
-    checks = b.project["checks"] if backend or not b.project.get("web_checks") else b.project["web_checks"]
+    if fast_gate(b.config):
+        checks = fast_check(b.project)
+    else:
+        checks = b.project["checks"] if backend or not b.project.get("web_checks") else b.project["web_checks"]
     return fill(cli.package_file("prompts", "fixer.md"), project=b.tag, checkout=checkout, branch=branch, round=r,
                 batch=b.name, reports=b.reports, findings="\n".join(lines), checks=checks, trailer=b.trailer)
 
@@ -491,15 +525,19 @@ def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, st
 def gate(b: Batch, r: int) -> list[Finding]:
     """Run round r's checks, review and walk in parallel, record them, and return the findings.
 
-    The round is done, and the findings empty, when the checks pass, the review reports `open: 0`, and the walk
-    passed or was skipped.
+    The checks are the fast check alone for a fast gate (fast_gate), else the full checks. The review runs when
+    b.review is set. The round is done, and the findings empty, when the checks pass, the review reports `open: 0`
+    or was skipped, and the walk passed or was skipped.
     """
     project, settings = b.project, b.config["gate"]
     head = b.git("rev-parse", "HEAD")
     prev = b.state["rounds"][-1] if b.state["rounds"] else None
     changed = b.git("diff", "--name-only", f"{prev['head']}..HEAD" if prev else f"origin/{project['base']}...HEAD").splitlines()
-    full = _touches(changed, project.get("backend_paths", [])) or not b.state["backend_passed"] or not project.get("web_checks")
-    cmd = project["checks"] if full else project["web_checks"]
+    if fast_gate(b.config):
+        full, cmd = False, fast_check(project)
+    else:
+        full = _touches(changed, project.get("backend_paths", [])) or not b.state["backend_passed"] or not project.get("web_checks")
+        cmd = project["checks"] if full else project["web_checks"]
     rewalk = bool(prev and prev["walk"] == "fail")
     walk = bool(settings.get("walk")) and (rewalk or _touches(changed, settings.get("walk_paths") or [""]))
     b.state["round"] = r
@@ -511,18 +549,19 @@ def gate(b: Batch, r: int) -> list[Finding]:
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
-                             f"review-r{r}", review_report, parse_open)
+                             f"review-r{r}", review_report, parse_open) if b.review else None
         walked = pool.submit(walk_round, b, r, head) if walk else None
         passed, last, check_findings = run_checks(b, r, cmd, proc, log, started, clock)
-        review.result()
+        if review:
+            review.result()
         if walked:
             walked.result()
-    review_text = review_report.read_text()
-    open_count = parse_open(review_text)
+    review_text = review_report.read_text() if b.review else ""
+    open_count = parse_open(review_text) if b.review else 0
     walk_text = walk_report.read_text() if walk else ""
     walk_result = parse_walk(walk_text) if walk else "skipped"
     signature = sorted(re.sub(r"\d+(\.\d+)?m?s\b", "", f.text) for f in check_findings)
-    b.state["rounds"].append({"round": r, "head": head, "open": open_count, "walk": walk_result,
+    b.state["rounds"].append({"round": r, "head": head, "open": open_count if b.review else "skipped", "walk": walk_result,
                               "checks": "pass" if passed else "fail", "checks_cmd": cmd, "checks_line": last,
                               "checks_signature": signature})
     b.state["backend_passed"] = b.state["backend_passed"] or (passed and full)
@@ -660,17 +699,25 @@ def plan(b: Batch) -> str:
              f"  a conflict only in {generated}: take the card's side, then $ {project.get('regen', '')}"]
     if project.get("install"):
         lines.append(f"  in each new worktree: $ {project['install']}")
-    lines += [f"  checks, in the background: $ {project['checks']}",
-              f"    or $ {project.get('web_checks')} when a round changes no {backend} file after a passing full run",
-              "  reviewer: $ " + shlex.join(claude_cmd(b.config, "reviewer", "<reviewer prompt>"))]
+    fast = fast_gate(b.config)
+    if fast:
+        lines.append(f"  the fast check, in the background: $ {fast_check(project)}")
+    else:
+        lines += [f"  checks, in the background: $ {project['checks']}",
+                  f"    or $ {project.get('web_checks')} when a round changes no {backend} file after a passing full run"]
+    if b.review:
+        lines.append("  reviewer: $ " + shlex.join(claude_cmd(b.config, "reviewer", "<reviewer prompt>")))
     if settings.get("walk"):
         lines.append("  walker, when a round touches " + ", ".join(settings.get("walk_paths") or ["any file"]) + ": $ "
                      + shlex.join(claude_cmd(b.config, "walker", "<walker prompt>", [b.reports])))
+    done = ["the fast check passes" if fast else "checks pass", *(["open: 0"] if b.review else []),
+            "walk pass or skipped"]
     lines += ["  fixers, in parallel: $ " + shlex.join(claude_cmd(b.config, "fixer", "<fixer prompt>", [b.reports])),
-              f"  rounds: at most {settings.get('max_rounds', 5)}; done at checks pass, open: 0, walk pass or skipped",
+              f"  rounds: at most {settings.get('max_rounds', 5)}; done at {', '.join(done)}",
               "  done: $ " + shlex.join(push_cmd(b)),
-              "        $ " + shlex.join(pr_cmd(b, b.reports / "pr.md")), "", "Prompts for round 1:", "",
-              "--- reviewer", reviewer_prompt(b, 1, head, None, RISKS_PLACE).rstrip(), ""]
+              "        $ " + shlex.join(pr_cmd(b, b.reports / "pr.md")), "", "Prompts for round 1:", ""]
+    if b.review:
+        lines += ["--- reviewer", reviewer_prompt(b, 1, head, None, RISKS_PLACE).rstrip(), ""]
     if settings.get("walk"):
         lines += ["--- walker", walker_prompt(b, 1, head).rstrip(), ""]
     example = [Finding("<path>", 1, "<each finding routed to this card>")]

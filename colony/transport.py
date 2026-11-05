@@ -6,6 +6,10 @@ The relay carries only a line the receiving wait would print at once (wait.taken
 before its digest. A relayed line's comment carries MARK, and a relay wait skips the copy it reads, so a line
 delivered both ways is acted on once, on any computer. When the relay fails, the comment alone carries the line.
 The probe and socket are found as the messaging-agents-on-the-relay skill says; Colony never uses a cloud connector.
+
+In hack mode every line goes to the pinned board issue, `[messages] board`, after the poster's prefix,
+`[<Name>'s Claude]`. An `@<login>` line relays to that person's lead, `<login>-lead`, and an `@all` line goes by
+GitHub alone.
 """
 from __future__ import annotations
 
@@ -136,15 +140,44 @@ def relay(to: str, text: str) -> bool:
     return _not_relayed(json.dumps(error) if error else run.stderr.strip() or run.stdout.strip() or f"exit {run.returncode}")
 
 
+def board_issue(config: dict) -> int:
+    """The hack board's issue number, [messages] board, which setup writes when it opens and pins the issue."""
+    number = config.get("messages", {}).get("board")
+    if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+        raise cli.ColonyError("hack mode posts every line on the board issue: set [messages] board to its number in "
+                              f"{cli.DIR}/{cli.CONFIG_NAME} (setup opens and pins it)")
+    return number
+
+
+def prefix(config: dict) -> str:
+    """A board post's prefix, `[<Name>'s Claude]`, for this session's person ($COLONY_PERSON, else the one person)."""
+    person = os.environ.get(cli.PERSON_ENV) or cli.default_person(config)
+    return f"[{wait.display_name(config, person)}'s {wait.AGENT}]"
+
+
+def relay_name(config: dict, to: str) -> str | None:
+    """The session the relay delivers a line for `to` to: `to` itself, `<login>-lead` for `@<login>` in hack mode,
+    where a person's lead has their login's name, and none for `@all` or another mode's `@<login>`."""
+    if not to.startswith("@"):
+        return to
+    login = to[1:]
+    return f"{login}-{cli.LEAD}" if wait.hack(config) and login != wait.ALL else None
+
+
 def due_at_once(config: dict, to: str, line: str, card: int) -> bool:
-    """Whether the wait of the session `to` would print `line`, on issue `card`, at once (wait.taken)."""
-    me = wait.lead_session(config, to) if to == cli.LEAD or to.endswith(f"-{cli.LEAD}") else \
-        wait.Session(to, frozenset({to}))
-    return any(at_once for _, at_once in wait.taken(line, me, str(card)))
+    """Whether the wait of the session `to` (a relay_name) would print `line`, on issue `card`, at once (wait.taken):
+    a builder's line, a line that can't wait, or any line for a lead whose digest is 0, as in hack mode."""
+    if to == cli.LEAD or to.endswith(f"-{cli.LEAD}"):
+        me = wait.lead_session(config, to)
+    else:  # a lead's builder: in hack mode, its lead is the sender's person's
+        me = wait.builder_session(config, to, os.environ.get(cli.PERSON_ENV, "") if wait.hack(config) else "")
+    no_digest = me.name == cli.LEAD and wait.digest_seconds(config) <= 0
+    return any(at_once or no_digest for _, at_once in wait.taken(line, me, str(card)))
 
 
 def send(config: dict, to: str, line: str, card: int | None = None) -> int:
-    """Post `line` for the session `to` on issue `card`, or on the coordination issue when None, and return the issue.
+    """Post `line` for `to` (a session, `@<login>` or `@all`) on issue `card`, or on the coordination issue when None,
+    and return the issue. In hack mode the line goes to the board issue instead, after the poster's prefix.
 
     The comment is the record. With transport = "relay", a line due at once goes through the relay first, and its
     comment then carries MARK. When the relay fails, the comment goes without MARK, so the wait still delivers it.
@@ -154,10 +187,16 @@ def send(config: dict, to: str, line: str, card: int | None = None) -> int:
     if why:
         raise cli.ColonyError(f"a line never carries a secret, and this one holds {why}")
     repo, to = config["project"]["repo"], to.lower()
-    number = int(card) if card is not None else wait.coordination_issue(repo, config["project"]["name"])
-    relayed = relay_on and due_at_once(config, to, line, number) and relay(to, f"#{number} {line}")
+    if wait.hack(config):
+        number, body = board_issue(config), f"{prefix(config)} {line}"
+    else:
+        number = int(card) if card is not None else wait.coordination_issue(repo, config["project"]["name"])
+        body = line
+    target = relay_name(config, to)
+    relayed = relay_on and target is not None and due_at_once(config, target, line, number) and \
+        relay(target, f"#{number} {body}")
     try:
-        wait.gh("issue", "comment", str(number), "--repo", repo, "--body", f"{line}\n{MARK}" if relayed else line)
+        wait.gh("issue", "comment", str(number), "--repo", repo, "--body", f"{body}\n{MARK}" if relayed else body)
     except wait.GhError as e:
         if relayed:
             raise wait.GhError(f"the relay delivered the line, but GitHub kept no record of it: {e}") from None
