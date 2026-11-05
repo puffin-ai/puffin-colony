@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from colony import cli, transport, wait
+from colony import board, cli, cycle, transport, wait
 
 GH_STUB = """#!{python}
 import json, pathlib, sys
@@ -424,6 +424,28 @@ def test_a_builders_wait_runs_no_stale_check(gh, capsys, monkeypatch):
 ])
 def test_a_missing_or_failing_stale_check_never_stops_the_leads_wait(gh, capsys, monkeypatch, cycle, err):
     monkeypatch.setitem(sys.modules, "colony.cycle", cycle)
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    gh.answer(ok(comment(1, "for lead: urgent: main is red (from builder-2)")))
+    assert wait.run(CONFIG, Namespace(person=None, waiting_on=None), clock=Clock()) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "#7 for lead: urgent: main is red (from builder-2)\n"
+    assert (err in captured.err) if err else captured.err == ""
+
+
+@pytest.mark.parametrize("found, err", [
+    (None, ""),  # no board yet: no stale lines, and nothing to say
+    (cli.ColonyError("gh project list failed (the gh login needs the project scope)"),
+     "stale-card check failed, the wait tries again in 10 minutes: gh project list failed"),
+])
+def test_the_real_cycles_stale_check_never_stops_the_leads_wait_on_a_missing_board(gh, capsys, monkeypatch, found,
+                                                                                  err):
+    def find_board(config):
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    monkeypatch.setitem(sys.modules, "colony.cycle", cycle)  # the real module, which the fixture hid
+    monkeypatch.setattr(board, "find_board", find_board)
     monkeypatch.setenv("COLONY_SESSION", "lead")
     gh.answer(ok(comment(1, "for lead: urgent: main is red (from builder-2)")))
     assert wait.run(CONFIG, Namespace(person=None, waiting_on=None), clock=Clock()) == 0

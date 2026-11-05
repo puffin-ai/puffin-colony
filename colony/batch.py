@@ -24,6 +24,7 @@ from typing import NamedTuple
 from colony import cli
 
 REPORTS = f"{cli.DIR}/reports"  # each batch's reports folder, inside its worktree
+RISKS_PLACE = "- the batch's risk list, from `colony tier` at each round's head"  # a dry run's stand-in
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 OPEN = re.compile(r"open:\s*(\d+)\b", re.I)
 WALK = re.compile(r"walk:\s*(pass|fail)\b", re.I)
@@ -339,14 +340,12 @@ def _root(config: dict, args=None) -> Path:
 
 
 def _account(config: dict, args) -> tuple[str, str]:
-    """Pick the agents' account as (name, config_dir): --account, else the person's account with the most room.
+    """Pick the agents' account as (name, config_dir), as cli.choose_account does: --account, else
+    `[project] prefer_account` while it has room, else the person's account with the most room.
 
     The person is --person, else the session's COLONY_PERSON, else cli.default_person.
     """
-    name = getattr(args, "account", None)
-    if name:
-        return name, str(Path(config["accounts"][name]["config_dir"]).expanduser())
-    return cli.pick_account(config, cli.person_of(config, args))
+    return cli.choose_account(config, args)
 
 
 # Prompts
@@ -357,15 +356,28 @@ def _cards_text(b: Batch) -> str:
     return ", ".join(f"#{n} (`{ref}`)" for n, ref in b.cards.items())
 
 
-def reviewer_prompt(b: Batch, r: int, head: str, prev: dict | None) -> str:
-    """Fill the reviewer template for round r, reviewing from the base, or from the previous round's head."""
+def risk_list(b: Batch, head: str) -> str:
+    """The batch's risk list from the base to `head`, the reviewer's attention list (cycle.risk_text), or a line that
+    says why it couldn't be read: the list guides the review and never stops a batch."""
+    from colony import cycle
+
+    try:
+        return cycle.risk_text(b.config, f"origin/{b.project['base']}", head, b.wt)
+    except cli.ColonyError as e:
+        return f"- the risk list could not be read ({str(e).splitlines()[0][:200]}): read every changed path with care"
+
+
+def reviewer_prompt(b: Batch, r: int, head: str, prev: dict | None, risks: str) -> str:
+    """Fill the reviewer template for round r, reviewing from the base, or from the previous round's head, with the
+    batch's risk list (risk_list) as its attention list."""
     gate = b.config["gate"]
     earlier = b.reports / f"review-{r - 1}.md"
     previous = "" if prev is None else f"This is round {r}. The previous report is {earlier}: mark each of its findings fixed or open."
     return fill(cli.package_file("prompts", "reviewer.md"), project=b.tag, checkout=b.wt, branch=b.branch, head=head,
                 diff_range=f"origin/{b.project['base']}...HEAD" if prev is None else f"{prev['head']}..HEAD",
                 generated=", ".join(f"`{g}`" for g in b.project.get("generated", [])), cards=_cards_text(b),
-                previous=previous, rubric="\n".join(f"{i}. {item}" for i, item in enumerate(gate["rubric"], 1)),
+                previous=previous, risks=risks,
+                rubric="\n".join(f"{i}. {item}" for i, item in enumerate(gate["rubric"], 1)),
                 rules=", ".join(f"`{rule}`" for rule in gate.get("rules", [])), report=b.reports / f"review-{r}.md")
 
 
@@ -498,8 +510,8 @@ def gate(b: Batch, r: int) -> list[Finding]:
         proc = subprocess.Popen(cmd, shell=True, cwd=b.wt, env=b.check_env(), stdout=out, stderr=subprocess.STDOUT)
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
-        review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev), b.wt, f"review-r{r}",
-                             review_report, parse_open)
+        review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
+                             f"review-r{r}", review_report, parse_open)
         walked = pool.submit(walk_round, b, r, head) if walk else None
         passed, last, check_findings = run_checks(b, r, cmd, proc, log, started, clock)
         review.result()
@@ -580,8 +592,20 @@ def removed_tests(b: Batch) -> list[str]:
     return [line.split("\t")[1] for line in out.splitlines() if line.startswith("D") and TEST_PATH.search(line.split("\t")[1])]
 
 
+def card_stats(b: Batch) -> str:
+    """The cards' predicted and actual minutes and tokens (cycle.stats_table), or a line that says why they couldn't
+    be read: the table informs the PR and never stops it."""
+    from colony import cycle
+
+    try:
+        return cycle.stats_table(b.config, dict(b.cards), root=b.root)
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
+        return f"The card stats could not be read: {str(e).splitlines()[0][:200] if str(e) else type(e).__name__}."
+
+
 def pr_body(b: Batch) -> str:
-    """The pull request body: the cards, the open problems by round, the check results, the removed tests, and the minutes."""
+    """The pull request body: the cards, the open problems by round, the check results, the removed tests, the
+    minutes, and the card stats."""
     rounds = b.state["rounds"]
     minutes = (b.reports / "minutes.md").read_text().splitlines() if (b.reports / "minutes.md").exists() else []
     return "\n".join([
@@ -592,6 +616,7 @@ def pr_body(b: Batch) -> str:
         "## Checks", *[f"- Round {x['round']}: `{x['checks_cmd']}` {x['checks']}: {x['checks_line']}" for x in rounds], "",
         "## Removed tests", *([f"- `{p}`" for p in removed_tests(b)] or ["None."]), "",
         "## Minutes", minutes_table(minutes), "",
+        "## Card stats", card_stats(b), "",
         f"The round reports are in `{REPORTS}/{b.name}/`.", "", b.trailer, ""])
 
 
@@ -645,7 +670,7 @@ def plan(b: Batch) -> str:
               f"  rounds: at most {settings.get('max_rounds', 5)}; done at checks pass, open: 0, walk pass or skipped",
               "  done: $ " + shlex.join(push_cmd(b)),
               "        $ " + shlex.join(pr_cmd(b, b.reports / "pr.md")), "", "Prompts for round 1:", "",
-              "--- reviewer", reviewer_prompt(b, 1, head, None).rstrip(), ""]
+              "--- reviewer", reviewer_prompt(b, 1, head, None, RISKS_PLACE).rstrip(), ""]
     if settings.get("walk"):
         lines += ["--- walker", walker_prompt(b, 1, head).rstrip(), ""]
     example = [Finding("<path>", 1, "<each finding routed to this card>")]

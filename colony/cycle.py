@@ -3,7 +3,8 @@ stale-card lines for the lead's wait.
 
 - `colony tier` prints TINY, SMALL or FEATURE, the lowest tier a branch's diff allows, then its risk list, which is
   the batch reviewer's attention list.
-- `colony needs` posts a decision for a person on their `Needs <Person>` issue, with the lead's default.
+- `colony needs` posts a decision for a person on their `Needs <Person>` issue, with a default, from the lead or
+  from a session the lead opened, such as the spec agent or a researcher.
 - `colony handover` posts the lead's handover on `Colony: coordination` and prints the command for a fresh lead.
 - `colony stats` sums each card's predicted and actual minutes and tokens, from its lines and its builder's
   Claude Code transcripts.
@@ -374,15 +375,15 @@ def find_issue(repo: str, title: str, body: str) -> int:
     return int(url.strip().rstrip("/").rsplit("/", 1)[-1])
 
 
-def needs_line(lead: str, person: str, question: str, default: str) -> str:
-    """The line a lead posts on a Needs issue, such as
+def needs_line(lead: str, person: str, question: str, default: str, sender: str | None = None) -> str:
+    """The line posted on a Needs issue for the person's lead, signed by `sender` (the lead by default), such as
     `for serdar-lead: Serdar decides: keep 30 s? Default: yes (from serdar-lead)`."""
     question, default = " ".join(question.split()), " ".join(default.split()).rstrip(".")
     if not question or not default:
         raise cli.ColonyError("needs takes a question and its --default")
     if question[-1] not in "?.!":
         question += "?"
-    line = f"for {lead}: {person_title(person)} decides: {question} Default: {default} (from {lead})"
+    line = f"for {lead}: {person_title(person)} decides: {question} Default: {default} (from {sender or lead})"
     if len(line) >= wait.MAX_LINE:
         raise cli.ColonyError(f"a line stays under {wait.MAX_LINE} characters, and this one has {len(line)}: put the "
                               "detail in a committed file and link it")
@@ -390,11 +391,15 @@ def needs_line(lead: str, person: str, question: str, default: str) -> str:
 
 
 def needs(config: dict, args) -> int:
-    """`colony needs "<question>" --default "<x>" [--person p]`: post a decision on the person's Needs issue."""
-    _lead_only("needs")
+    """`colony needs "<question>" --default "<x>" [--person p]`: post a decision on the person's Needs issue, for
+    their lead. Any session may post one, such as the spec agent's approval question, and signs it with
+    $COLONY_SESSION; the lead signs as `<person>-lead`, so its own wait skips the line."""
+    me = os.environ.get(cli.SESSION_ENV, "").lower()
+    if not me:
+        raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name: needs signs its line with it")
     person = (args.needs_person or cli.person_of(config, args)).lower()
     lead, repo = wait.lead_name(config, args), config["project"]["repo"]
-    line = needs_line(lead, person, args.question, args.default)
+    line = needs_line(lead, person, args.question, args.default, lead if me == cli.LEAD else me)
     body = (f"The decisions only {person_title(person)} makes, one line each with the lead's default. The lead keeps "
             "working on the default. Answer with a comment `for <the lead's name>: <your answer>`, and your answer "
             "wins.")
@@ -823,7 +828,7 @@ def add_commands(sub) -> None:
     p.add_argument("--why", action="store_true", help="print each reason after the tier")
     p.set_defaults(run=tier)
 
-    p = sub.add_parser("needs", help="the lead: post a decision on the person's Needs issue, with your default")
+    p = sub.add_parser("needs", help="post a decision on the person's Needs issue, with your default")
     p.add_argument("question", help="the question, one sentence")
     p.add_argument("--default", required=True, help="what you do until the person answers")
     p.add_argument("--person", dest="needs_person", metavar="PERSON", help="whose decision it is, you by default")

@@ -2,7 +2,9 @@
 
 `colony` alone runs setup the first time (the repo has no .colony/colony.toml) and opens the lead every time after.
 `colony join <name>` opens a builder on another computer. The lead and the builders use `open`, `wait`, `batch`
-and `status`. Every command finds the repo with `git rev-parse --show-toplevel`. Python 3.11+ standard library only.
+and `status`, and the lead opens a researcher or the spec agent with `research` and `spec`. The cycle's commands
+(cycle.py, board.py), the knowledge checks (vault.py) and the guards (guards.py) add their own. Every command finds
+the repo with `git rev-parse --show-toplevel`. Python 3.11+ standard library only.
 """
 from __future__ import annotations
 
@@ -30,7 +32,11 @@ LEAD = "lead"
 LEAD_PROMPT = "Read {dir}/playbook.md, Lead section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, Builder section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
+RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
+# Roles a colony.toml may leave out: each one missing takes the builder's settings.
+BUILDER_LIKE = (RESEARCHER, SPEC)
+FULL = 90.0  # an account whose saved 5-hour usage is at or past this percent has no room for prefer_account
 REQUIRED = {
     "project": ("name", "repo", "base", "worktrees", "checks"),
     "gate": ("rubric", "max_rounds", "walk"),
@@ -89,10 +95,13 @@ def load_config(path=None) -> dict:
         for key in keys:
             if key not in config.get(table, {}):
                 raise ColonyError(f"{path}: [{table}] needs {key!r}")
-    for role in ROLES:
+    roles = config.setdefault("roles", {})
+    for role in ROLES + tuple(role for role in BUILDER_LIKE if role in roles):
         for key in ("model", "effort"):
-            if key not in config.get("roles", {}).get(role, {}):
+            if key not in roles.get(role, {}):
                 raise ColonyError(f"{path}: [roles] {role} needs {key!r}")
+    for role in BUILDER_LIKE:
+        roles.setdefault(role, dict(roles["builder"]))
     if not config.get("accounts"):
         raise ColonyError(f"{path}: needs at least one [accounts.<name>] table")
     for name, account in config["accounts"].items():
@@ -101,6 +110,9 @@ def load_config(path=None) -> dict:
                 raise ColonyError(f"{path}: [accounts.{name}] needs {key!r}")
         account["config_dir"] = os.path.expanduser(account["config_dir"])
     project = config["project"]
+    if project.get("prefer_account") and project["prefer_account"] not in config["accounts"]:
+        raise ColonyError(f"{path}: [project] prefer_account names {project['prefer_account']!r}, which no "
+                          "[accounts.<name>] table holds")
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = os.path.expanduser(project[key])
@@ -147,8 +159,15 @@ def five_hour_usage(config_dir: str) -> float | None:
         return None
 
 
+def has_room(config_dir: str) -> bool:
+    """Whether an account's folder is on this computer and its saved 5-hour usage, if any, is under FULL percent."""
+    used = five_hour_usage(config_dir)
+    return Path(config_dir).is_dir() and (used is None or used < FULL)
+
+
 def pick_account(config: dict, person: str) -> tuple[str, str]:
-    """The person's account with the most room on this computer, as (name, config_dir).
+    """The person's account for a new session, as (name, config_dir): `[project] prefer_account` when it is the
+    person's and has room, else the person's account with the most room on this computer.
 
     Accounts whose person is `any` count for everyone, and folders this computer has come first. The lowest
     saved 5-hour usage wins, the earlier account on a tie. When no account has a saved figure, the first one wins.
@@ -156,9 +175,24 @@ def pick_account(config: dict, person: str) -> tuple[str, str]:
     mine = [(name, a["config_dir"]) for name, a in config["accounts"].items() if a["person"] in (person, "any")]
     if not mine:
         raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
+    preferred = config.get("project", {}).get("prefer_account")
+    for name, folder in mine:
+        if name == preferred and has_room(folder):
+            return name, folder
     mine = [(name, folder) for name, folder in mine if Path(folder).is_dir()] or mine
     saved = [(used, i) for i, (_, folder) in enumerate(mine) if (used := five_hour_usage(folder)) is not None]
     return mine[min(saved)[1]] if saved else mine[0]
+
+
+def choose_account(config: dict, args) -> tuple[str, str]:
+    """The account a session or batch runs on, as (name, config_dir): --account when given, else pick_account for
+    the session's person."""
+    name = getattr(args, "account", None)
+    if name:
+        if name not in config["accounts"]:
+            raise ColonyError(f"--account {name!r} is not in {CONFIG_NAME}: choose from {', '.join(config['accounts'])}")
+        return name, config["accounts"][name]["config_dir"]
+    return pick_account(config, person_of(config, args))
 
 
 def git_user() -> set[str]:
@@ -231,14 +265,15 @@ def where_to_open(args) -> str:
 
 
 def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
-    """Open one session on the person's account with the most room: in cmux, in this terminal, or in the background.
+    """Open one session on --account, else the person's account (pick_account): in cmux, in this terminal, or in the
+    background.
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
     `claude attach`. A dry run prints the command, the env names (never their values) and where it would
     open, and runs nothing.
     """
     person = person_of(config, args)
-    account, config_dir = pick_account(config, person)
+    account, config_dir = choose_account(config, args)
     title = f"{config['project']['name']}-{session}"
     env = session_env(person, session, config_dir)
     argv = claude_argv(config, role, title, config_dir, prompt)
@@ -288,18 +323,34 @@ OUTSIDE_SKILLS = {
     "test-first": ("obra/superpowers", "22f0b463e7a5e579904dd6211a520321035526f7", "skills/test-driven-development",
                    "test-driven-development"),
 }
-# The one yes-or-no list setup shows, in order: each tool's default (yes, no, or ask for no default) and what it is.
-TOOLS = {
-    "playwright": ("yes", "Playwright MCP, the walker's browser. It installs a package: npx downloads @playwright/mcp "
-                          "on first use."),
-    "context7": ("yes", "Context7 MCP, current docs for every library. A hosted server: nothing is installed."),
-    "role-skills": ("yes", f"{DISPLAY}'s role skills, {', '.join(ROLE_SKILLS)}: the playbook split per role, "
-                           "copied from the package."),
-    "ui-design": ("ask", "A UI design skill, Anthropic's frontend-design. Its files download from "
-                         "github.com/anthropics/skills."),
-    "test-first": ("no", "A test-first skill, superpowers' test-driven-development. Its files download from "
-                         "github.com/obra/superpowers."),
-}
+# The tools `colony tools` writes, in the order setup's one yes-or-no list shows them (see offered).
+TOOLS = ("playwright", "context7", "role-skills", "starter-skills", "relay", "ui-design", "test-first")
+RELAY_LINE = 'transport = "relay"'  # the [messages] line a yes to relay puts in colony.toml
+
+
+def offered() -> dict[str, tuple[str, str]]:
+    """Each tool with its default (yes, no, or ask for no default) and what it is. The relay's default is yes when
+    this computer runs an Agent Relay core."""
+    from colony import guards, transport
+
+    relay = transport.relay_available()
+    return {
+        "playwright": ("yes", "Playwright MCP, the walker's browser. It installs a package: npx downloads "
+                              "@playwright/mcp on first use."),
+        "context7": ("yes", "Context7 MCP, current docs for every library. A hosted server: nothing is installed."),
+        "role-skills": ("yes", f"{DISPLAY}'s role skills, {', '.join(ROLE_SKILLS)}: the playbook split per role, "
+                               "copied from the package."),
+        "starter-skills": ("yes", f"{DISPLAY}'s starter skills, {', '.join(guards.STARTER_SKILLS)}, copied from the "
+                                  "package. A skill the repo already has is kept."),
+        "relay": ("yes" if relay else "no",
+                  "Instant lines: each line also goes at once through this computer's Agent Relay core, and the issue "
+                  "comment stays the record. " + ("A core runs on this computer." if relay else
+                                                  "No core runs on this computer now.")),
+        "ui-design": ("ask", "A UI design skill, Anthropic's frontend-design. Its files download from "
+                             "github.com/anthropics/skills."),
+        "test-first": ("no", "A test-first skill, superpowers' test-driven-development. Its files download from "
+                             "github.com/obra/superpowers."),
+    }
 
 
 def setup(args) -> int:
@@ -310,8 +361,11 @@ def setup(args) -> int:
         print(f"setup plan: {DIR}/{CONFIG_NAME} is missing, so {NAME} sets up {root} in this terminal.")
         print(f"  command: claude <the setup prompt from {NAME} {__version__}, {len(prompt)} characters>")
         print("  it reads the repo, asks at most 5 questions and one yes-or-no list of tools, and writes:")
-        print(f"    {DIR}/{CONFIG_NAME}, {DIR}/rules/, {DIR}/playbook.md, and one line in CLAUDE.md after asking")
-        print("    an AGENTS.md per app with the puffin preset, and .mcp.json and .claude/skills/ for the tools accepted")
+        print(f"    {DIR}/{CONFIG_NAME}, {DIR}/rules/, {DIR}/playbook.md, {DIR}/core.md and {DIR}/prompts/, "
+              "and an AGENTS.md per app")
+        print("    the knowledge vault, and for the items accepted: .mcp.json, .claude/skills/, the hooks in "
+              ".claude/settings.json,")
+        print("    the board, and two lines in CLAUDE.md that load the core and point to the playbook")
         print("  then opens one pull request with them. Nothing ran.")
         return 0
     if shutil.which("claude") is None:
@@ -324,7 +378,8 @@ def setup(args) -> int:
 def tools_list() -> str:
     """The one yes-or-no list of tools setup shows the person, with each tool's default and what it installs."""
     lines = ["Tools for this repo, one yes or no each, with the default in brackets:"]
-    lines += [f"  {name:<12} [{default}] {text}" for name, (default, text) in TOOLS.items()]
+    width = max(map(len, TOOLS))
+    lines += [f"  {name:<{width}} [{default}] {text}" for name, (default, text) in offered().items()]
     return "\n".join(lines)
 
 
@@ -350,16 +405,28 @@ def merge_mcp(path: Path, names: list[str]) -> list[str]:
     return added
 
 
-def copy_role_skills(root: Path) -> list[str]:
-    """Copy the package's role skills into the repo's .claude/skills/, and return the folders written."""
-    written = []
-    for name in ROLE_SKILLS:
+def _copy_tree(source, target: Path) -> None:
+    """Copy a package folder, with its subfolders, into `target`."""
+    target.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        if item.is_dir():
+            _copy_tree(item, target / item.name)
+        else:
+            (target / item.name).write_bytes(item.read_bytes())
+
+
+def copy_skills(root: Path, names, keep: bool = False) -> tuple[list[str], list[str]]:
+    """Copy the package's named skills into the repo's .claude/skills/, and return the folders written and kept.
+    With `keep`, a skill folder the repo already has stays as it is."""
+    written, kept = [], []
+    for name in names:
         target = root / ".claude" / "skills" / name
-        target.mkdir(parents=True, exist_ok=True)
-        for item in resources.files(__package__).joinpath("skills", name).iterdir():
-            (target / item.name).write_text(item.read_text())
+        if keep and target.exists():
+            kept.append(f".claude/skills/{name}/")
+            continue
+        _copy_tree(resources.files(__package__).joinpath("skills", name), target)
         written.append(f".claude/skills/{name}/")
-    return written
+    return written, kept
 
 
 def _gh_api(path: str, raw: bool = False) -> bytes:
@@ -397,9 +464,12 @@ def fetch_skill(root: Path, tool: str) -> str:
 def tools(args) -> int:
     """`colony tools`: print the list setup offers, or write the named tools into this repo after the person's yes.
 
-    The MCP servers merge into .mcp.json, the role skills copy from the package, and an outside skill downloads
-    at its pinned commit through gh. It ends by printing the [tools] table for colony.toml.
+    The MCP servers merge into .mcp.json, the role and starter skills copy from the package, and an outside skill
+    downloads at its pinned commit through gh. It ends by printing the [tools] table for colony.toml, and with relay,
+    the [messages] transport line.
     """
+    from colony import guards, transport
+
     if not args.names:
         print(tools_list())
         return 0
@@ -408,7 +478,8 @@ def tools(args) -> int:
         raise ColonyError(f"{unknown[0]!r} is not a tool: choose from {', '.join(TOOLS)}")
     chosen = [name for name in TOOLS if name in args.names]
     mcps = [name for name in chosen if name in MCP_SERVERS]
-    skills = [*(ROLE_SKILLS if "role-skills" in chosen else ())]
+    skills = [*(ROLE_SKILLS if "role-skills" in chosen else ()),
+              *(guards.STARTER_SKILLS if "starter-skills" in chosen else ())]
     skills += [OUTSIDE_SKILLS[name][3] for name in chosen if name in OUTSIDE_SKILLS]
     root = repo_root()
     if args.dry_run:
@@ -417,6 +488,8 @@ def tools(args) -> int:
             print(f"  .mcp.json: add {', '.join(mcps)}, keeping every entry already there")
         for skill in skills:
             print(f"  .claude/skills/{skill}/")
+        if "relay" in chosen:
+            print(f"  {DIR}/{CONFIG_NAME}: [messages] {RELAY_LINE}")
         print("Nothing ran.")
         return 0
     if mcps:
@@ -425,11 +498,19 @@ def tools(args) -> int:
         print(f"wrote .mcp.json: added {', '.join(added) or 'nothing'}"
               + (f", kept the entries already there for {', '.join(kept)}" if kept else ""))
     if "role-skills" in chosen:
-        print("wrote", ", ".join(copy_role_skills(root)))
+        print("wrote", ", ".join(copy_skills(root, ROLE_SKILLS)[0]))
+    if "starter-skills" in chosen:
+        written, kept = copy_skills(root, guards.STARTER_SKILLS, keep=True)
+        also = f", and kept {', '.join(kept)}, which the repo already has" if kept else ""
+        print(f"wrote {', '.join(written) or 'no starter skill'}{also}")
     for name in chosen:
         if name in OUTSIDE_SKILLS:
             print("wrote", fetch_skill(root, name))
     print(f"\nAdd this table to {DIR}/{CONFIG_NAME}:\n[tools]\nmcp = {json.dumps(mcps)}\nskills = {json.dumps(skills)}")
+    if "relay" in chosen:
+        print(f"\nand set this line in its [messages] table:\n{RELAY_LINE}")
+        if not transport.relay_available():
+            print("No Agent Relay core runs on this computer now: until one does, each line goes by GitHub alone.")
     return 0
 
 
@@ -448,6 +529,43 @@ def open_builder(config: dict, args) -> int:
     return launch(config, args, args.name, "builder", builder_prompt(args.name))
 
 
+def brief(name: str) -> tuple[str, str]:
+    """A role's brief and where it came from: the repo's own {dir}/prompts/<name>.md, which setup copies with the
+    project's values in, else the package's prompts/<name>.md."""
+    own = repo_root() / DIR / "prompts" / f"{name}.md"
+    if own.is_file():
+        return own.read_text(), f"{DIR}/prompts/{name}.md"
+    return package_file("prompts", f"{name}.md"), f"the package's prompts/{name}.md"
+
+
+def open_brief(config: dict, args, role: str, **values: str) -> int:
+    """Open a researcher or the spec agent on this computer, whose first prompt is its brief filled in: `{project}`,
+    `{knowledge}` (the vault folder, `[knowledge] vault`) and the request (`{question}` or `{feature}`)."""
+    from colony import batch, vault
+
+    for key, value in values.items():
+        values[key] = " ".join(value.split())
+        if not values[key]:
+            raise ColonyError(f"{NAME} {args.command} needs the {key}, in quotes")
+    text, source = brief(role)
+    try:
+        prompt = batch.fill(text, project=config["project"]["name"], knowledge=vault.read_settings(config).vault,
+                            **values)
+    except KeyError as e:
+        raise ColonyError(f"{source}: {e.args[0]}") from None
+    return launch(config, args, role, role, prompt)
+
+
+def research(config: dict, args) -> int:
+    """`colony research "<question>"`: open a researcher, which answers one question with cited sources."""
+    return open_brief(config, args, RESEARCHER, question=args.question)
+
+
+def spec(config: dict, args) -> int:
+    """`colony spec "<feature>"`: open the spec agent, which writes a FEATURE's requirements, design and tasks."""
+    return open_brief(config, args, SPEC, feature=args.feature)
+
+
 def origin_url() -> str:
     """The URL of this checkout's origin remote, or an empty string when it has none."""
     return _out(["git", "remote", "get-url", "origin"])
@@ -461,7 +579,7 @@ def join_missing(config: dict, args) -> list[str]:
     if shutil.which("claude") is None:
         missing.append("claude: install Claude Code, then sign in with /login")
     else:
-        account, folder = pick_account(config, person_of(config, args))
+        account, folder = choose_account(config, args)
         if not signed_in(folder):
             missing.append(f"the claude login for account {account}: open claude on that account and run /login")
     if shutil.which("gh") is None or subprocess.run(["gh", "auth", "status"], capture_output=True).returncode:
@@ -515,12 +633,19 @@ def builder_name(value: str) -> str:
     return value
 
 
+ACCOUNT_HELP = ("the account to open on, instead of the pick ([project] prefer_account while it has room, else the "
+                "one with the most room)")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    """The command line: no command for setup or the lead, then join, open, wait, batch and status."""
+    """The command line: no command for setup or the lead, then the sessions (join, open, research, spec), the lines
+    (wait, say, post), the batch (batch, status), the cycle's, the board, check-docs, the guards', and tools."""
+    from colony import board, cycle, guards, vault
     parser = argparse.ArgumentParser(prog=NAME, description=f"{DISPLAY}: run with no command to open your lead "
                                      f"(or to set up the repo, the first time).")
     parser.add_argument("--version", action="version", version=f"{DISPLAY} {__version__}")
     parser.add_argument("--person", help=f"whose accounts to use (needed when {CONFIG_NAME} names several people)")
+    parser.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
     parser.add_argument("--here", action="store_true", help="open in this terminal even when cmux is on PATH")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and the env names, and run nothing")
     parser.set_defaults(run=lead)
@@ -531,9 +656,21 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(command, help=text)
         p.add_argument("name", type=builder_name, help="the builder's name, such as builder-2")
         p.add_argument("--person", help="whose accounts to use")
+        p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
         p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
         if command == "join":
             p.add_argument("--here", action="store_true", help="open in this terminal even when cmux is on PATH")
+        p.set_defaults(run=run)
+
+    for command, run, field, text in (
+            ("research", research, "question", "open a researcher on one question, answered with cited sources"),
+            ("spec", spec, "feature", "open the spec agent on a FEATURE: requirements, design and tasks")):
+        p = sub.add_parser(command, help=text)
+        p.add_argument(field, help=f"the {field}, in quotes")
+        p.add_argument("--person", help="whose accounts to use")
+        p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
+        p.add_argument("--here", action="store_true", help="open in this terminal even when cmux is on PATH")
+        p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
         p.set_defaults(run=run)
 
     p = sub.add_parser("wait", help=f"wait for the lines addressed to ${SESSION_ENV}, then print them")
@@ -547,6 +684,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="a card's issue number and branch; repeat for each card")
     p.add_argument("--from", dest="from_branch", metavar="BRANCH", help="build on this branch instead of origin/<base>")
     p.add_argument("--person", help="whose accounts the agents use")
+    p.add_argument("--account", metavar="NAME", help="the account the agents run on, instead of the pick "
+                                                     "([project] prefer_account, else the one with the most room)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
@@ -554,7 +693,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
 
-    p = sub.add_parser("tools", help="list the MCPs and skills setup offers, or write the named ones (setup runs it)")
+    for module in (cycle, board, vault, guards):
+        module.add_commands(sub)
+
+    p = sub.add_parser("tools", help="list the MCPs, skills and relay setup offers, or write the named ones "
+                                     "(setup runs it)")
     p.add_argument("names", nargs="*", metavar="tool", help=f"the tools to write: {', '.join(TOOLS)}")
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
     p.set_defaults(run=tools)

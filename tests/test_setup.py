@@ -88,7 +88,9 @@ def test_a_broken_mcp_json_is_left_as_it_is(tmp_path):
 def test_tools_without_names_prints_the_list_before_any_config_exists(repo, capsys):
     assert cli.main(["tools"]) == 0
     out = capsys.readouterr().out
-    for name, (default, _) in cli.TOOLS.items():
+    offered = cli.offered()
+    assert list(offered) == list(cli.TOOLS)
+    for name, (default, _) in offered.items():
         assert re.search(rf"^  {name} +\[{default}\] ", out, re.M), name
     assert "npx downloads @playwright/mcp" in out
 
@@ -141,3 +143,80 @@ def test_each_role_skill_names_itself_triggers_on_its_role_and_points_to_the_pla
         assert fields["name"] == name
         assert "Use when" in fields["description"], name
         assert ".colony/playbook.md" in text[front.end():]
+
+
+# Colony 0.2: the starter skills and the relay in the tools list, and the setup prompt with the three sections spliced in
+
+SETUP = cli.fill_names(cli.package_file("prompts", "setup.md"))
+
+
+def test_tools_copies_the_starter_skills_and_keeps_one_the_repo_has(repo, capsys):
+    from colony import guards
+
+    mine = repo / ".claude" / "skills" / "tdd" / "SKILL.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("our own tdd skill")
+    assert cli.main(["tools", "starter-skills"]) == 0
+    for name in guards.STARTER_SKILLS:
+        if name != "tdd":
+            copied = repo / ".claude" / "skills" / name / "SKILL.md"
+            assert copied.read_text() == (PACKAGE / "skills" / name / "SKILL.md").read_text(), name
+    assert mine.read_text() == "our own tdd skill"
+    out = capsys.readouterr().out
+    assert "and kept .claude/skills/tdd/, which the repo already has" in out
+    assert f"skills = {json.dumps(list(guards.STARTER_SKILLS))}" in out
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_the_relay_defaults_to_yes_only_where_a_core_runs(repo, capsys, monkeypatch, running):
+    from colony import transport
+
+    monkeypatch.setattr(transport, "relay_available", lambda: running)
+    assert cli.main(["tools"]) == 0
+    assert re.search(rf"^  relay +\[{'yes' if running else 'no'}\] Instant lines", capsys.readouterr().out, re.M)
+    assert cli.main(["tools", "relay"]) == 0
+    out = capsys.readouterr().out
+    assert 'and set this line in its [messages] table:\ntransport = "relay"' in out
+    assert ("No Agent Relay core runs on this computer now" in out) is not running
+    assert not (repo / ".mcp.json").exists() and not (repo / ".claude").exists()
+
+
+def test_setup_asks_five_questions_and_one_list_that_folds_in_the_new_items():
+    asked = SETUP.split("## 2. Ask everything in one message", 1)[1].split("## 3.", 1)[0]
+    assert re.findall(r"^(\d)\. ", asked, re.M) == ["1", "2", "3", "4", "5"]
+    assert "one yes-or-no list" in asked and asked.count("?") <= 6
+    for item, default in (("knowledge", "yes"), ("hooks", "yes"), ("board", "yes"), ("pointer", "yes")):
+        assert f"- `{item}` [{default}]:" in asked, item
+    assert "Its `relay` item says whether this computer runs an Agent Relay core" in SETUP
+    assert "`knowledge/`" in asked and "adopt it in place" in asked
+
+
+def test_setup_runs_each_tracks_steps_in_order():
+    order = ["{name}.toml.example", "presets/<preset>/core.md", "presets/lean/rules/", "presets/puffin/rules/",
+             "prompts/spec.md", "knowledge/templates/", "check-docs --index", "colony tools ", "colony hooks install",
+             "colony suppressions --update", "colony board init", "@.colony/core.md", "gh pr create"]
+    steps = SETUP.split("## 3. Write the config", 1)[1]  # steps 1 and 2 name some of them as they ask
+    at = [steps.find(text.replace("{name}", "colony")) for text in order]
+    assert -1 not in at, [text for text, i in zip(order, at) if i == -1]
+    assert at == sorted(at)
+    assert [int(n) for n in re.findall(r"^## (\d)\. ", SETUP, re.M)] == list(range(1, 10))
+    assert "`docs.md`" in SETUP and "presets/puffin/docs.md" not in SETUP
+
+
+def test_every_package_path_and_command_the_setup_prompt_names_exists():
+    paths = set(re.findall(rf"`{re.escape(str(PACKAGE))}/([^`\s]+)`", SETUP))
+    assert len(paths) > 10
+    for path in paths:
+        for preset in ("lean", "puffin"):
+            assert (PACKAGE / path.replace("<preset>", preset)).exists(), path
+    sub = next(a for a in cli.build_parser()._actions if a.__class__.__name__ == "_SubParsersAction")
+    for command in set(re.findall(r"`colony ([a-z-]+)", SETUP)):
+        assert command in sub.choices, command
+
+
+def test_the_never_list_allows_what_the_spliced_steps_write():
+    never = SETUP.split("## Never", 1)[1]
+    for allowed in ("`.colony/`", "the knowledge vault at `<vault>/`", "`.claude/rules/`",
+                    "the hooks in `.claude/settings.json`", "`.ignore`", "`.claude/skills/`", "`.mcp.json`"):
+        assert allowed in never, allowed
+    assert not (PACKAGE / "prompts" / "setup-knowledge.md").exists()  # spliced into setup.md, not kept twice

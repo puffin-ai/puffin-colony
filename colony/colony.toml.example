@@ -15,22 +15,26 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
+prefer_account = ""                # optional: an account sessions and batches open on whenever it has room
 
-# One table per Claude Code settings folder. person = "any" shares an account with everyone.
+# One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
+# --account, else prefer_account while it is under 90% of its 5-hour window, else the person's account with the most room.
 [accounts.main]
 config_dir = "~/.claude"
 person = "you"
 
 [roles]
-lead     = { model = "claude-opus-5-5", effort = "high" }
-builder  = { model = "claude-opus-5-5", effort = "medium" }
-reviewer = { model = "claude-opus-5-5", effort = "high" }
-walker   = { model = "claude-opus-5-5", effort = "medium" }   # add agent = "<name>" to walk with a subagent
-fixer    = { model = "claude-opus-5-5", effort = "medium" }
+lead       = { model = "claude-opus-5-5", effort = "high" }
+builder    = { model = "claude-opus-5-5", effort = "medium" }
+reviewer   = { model = "claude-opus-5-5", effort = "high" }
+walker     = { model = "claude-opus-5-5", effort = "medium" }   # add agent = "<name>" to walk with a subagent
+fixer      = { model = "claude-opus-5-5", effort = "medium" }
+researcher = { model = "claude-opus-5-5", effort = "high" }     # `colony research`; left out, it takes the builder's
+spec       = { model = "claude-opus-5-5", effort = "high" }     # `colony spec`; left out, it takes the builder's
 
 [gate]
 rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]   # the reviewer's checklist
-rules = [".colony/rules/*.md"]     # the files the reviewer checks against, plus the repo's own CLAUDE.md or AGENTS.md
+rules = [".colony/core.md", ".colony/rules/*.md"]   # what the reviewer checks against, plus the repo's CLAUDE.md or AGENTS.md
 max_rounds = 5
 walk = true                        # walk the changed screens in a browser
 walk_paths = []                    # a round that changes none of these skips the walk; empty walks every round
@@ -41,7 +45,29 @@ use_api_key = false                # true lets sessions bill ANTHROPIC_API_KEY i
 
 [messages]
 lead_digest_minutes = 10           # the lead reads gathered lines this often; urgent, blocked, questions and your lines come at once
-transport = "github"               # lines live on issue comments; "relay" (Agent Relay) is planned
+transport = "github"               # "github" (the default): lines live on issue comments. "relay": each line that can't
+                                   # wait also goes at once through this computer's Agent Relay core, and the comment
+                                   # stays the record; when the relay fails, the comment alone carries the line
 
 [people]
 logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once
+
+[knowledge]
+vault = "knowledge"                # the knowledge vault's folder at the top of the repo
+# Each check `colony check-docs` runs is "off", "warn" or "fail"; --strict fails on warn too.
+page_types = "fail"                # every page declares a type its .types/ folder defines
+links = "fail"                     # every [[link]] and relative link resolves
+orphans = "fail"                   # another page links to every page
+readme_maps = "fail"               # every folder README links each page and subfolder beside it
+code_paths = "fail"                # every repo path a live page names in a code span exists
+size_caps = "warn"                 # each type's size cap, the living spec's among them
+dated_caps = "fail"                # a cap with a from date holds every page created since that day
+copied_text = "fail"               # no paragraph stands on two pages
+rule_budget = "fail"               # every rule stays within its budget in characters, 12000 by default
+replaced_records = "fail"          # a replaced decision record says so
+decision_log = "fail"              # decisions.md is what the decision records generate
+rule_budgets = { performance = 16000 }   # the puffin preset's performance.md runs past the default budget
+
+[board]
+# number = 3                       # optional: the GitHub Project the cards live on; without it, `colony board init`
+                                   # makes "Colony: <name>" and every command finds the board by that title

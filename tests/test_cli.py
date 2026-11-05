@@ -222,8 +222,8 @@ def test_setup_opens_claude_with_the_setup_prompt_filled_in(home, host):
     assert "No .colony/colony.toml yet, so Puffin Colony starts setup." in run.stdout
     prompt = claude_log.read_text()
     assert prompt.startswith("You are setting up Puffin Colony in this repository.")
-    assert f"copy `{PACKAGE}/colony.toml.example`" in prompt
-    assert f"`{PACKAGE}/presets/lean/` into `.colony/rules/`" in prompt
+    assert f"Copy `{PACKAGE}/colony.toml.example` to `.colony/colony.toml`" in prompt
+    assert f"`{PACKAGE}/presets/lean/rules/`" in prompt and f"`{PACKAGE}/presets/<preset>/core.md`" in prompt
     assert "This repo runs Puffin Colony: read .colony/playbook.md." in prompt
     for placeholder in ("{name}", "{dir}", "{package}", "{display}"):
         assert placeholder not in prompt
@@ -361,7 +361,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
 def test_the_version_comes_from_the_package(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
-    assert capsys.readouterr().out.strip() == "Puffin Colony 0.1.0"
+    assert capsys.readouterr().out.strip() == "Puffin Colony 0.2.0"
 
 
 def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config, capsys):
@@ -372,3 +372,155 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
     run_lead(config, capsys, dry_run=False)
     args = cmux_log.read_text().splitlines()
     assert args[args.index("--command") + 1].startswith("claude --remote-control demo-lead ")
+
+
+# Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
+
+COMMANDS = ("join", "open", "research", "spec", "wait", "say", "post", "batch", "status", "tier", "needs", "handover",
+            "stats", "retro", "board", "check-docs", "suppressions", "hooks", "tools")
+
+
+def test_the_command_line_holds_every_tracks_commands(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    sub = next(a for a in cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    assert tuple(sub.choices) == COMMANDS
+    for command in COMMANDS:
+        assert f"\n    {command} " in out, command
+
+
+def test_research_opens_a_researcher_whose_brief_holds_the_question(config, capsys):
+    assert cli.main(["research", "Which queue fits a 10k jobs a day load?", "--dry-run", "--person", "ana"]) == 0
+    out = capsys.readouterr().out
+    assert "command: claude --remote-control demo-researcher --model m --effort medium " in out
+    assert "You are the researcher for demo." in out
+    assert "The question: Which queue fits a 10k jobs a day load?" in out
+    assert "`knowledge/.types/research-report.md`" in out
+    assert "{question}" not in out and "{knowledge}" not in out and "{project}" not in out
+    assert "dry run: demo-researcher on account first" in out
+
+
+def test_spec_names_the_vault_colony_toml_sets(host, capsys):
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG + '[knowledge]\nvault = "docs/vault/"\n')
+    assert cli.main(["spec", "  dark   mode ", "--dry-run", "--person", "ana"]) == 0
+    out = capsys.readouterr().out
+    assert "You are the spec agent for demo." in out and "The feature: dark mode" in out
+    assert "`docs/vault/specs/plans/<feature>/`" in out
+    assert "dry run: demo-spec on account first" in out
+
+
+def test_a_brief_setup_copied_into_the_repo_wins_over_the_package(config, host, capsys):
+    (host / ".colony" / "prompts").mkdir()
+    (host / ".colony" / "prompts" / "spec.md").write_text("Our own spec brief for demo.\n\nThe feature: {feature}\n")
+    assert cli.main(["spec", "export to CSV", "--dry-run", "--person", "ana"]) == 0
+    out = capsys.readouterr().out
+    assert "Our own spec brief for demo." in out and "The feature: export to CSV" in out
+    assert "You are the spec agent" not in out
+
+
+@pytest.mark.parametrize("brief, error", [
+    ("The question: {question}\nUnknown: {nope}\n", ".colony/prompts/researcher.md: the template needs a value for {nope}"),
+    (None, "colony research needs the question, in quotes"),
+])
+def test_a_brief_with_an_unknown_placeholder_or_an_empty_request_is_refused(config, host, capsys, brief, error):
+    if brief:
+        (host / ".colony" / "prompts").mkdir()
+        (host / ".colony" / "prompts" / "researcher.md").write_text(brief)
+    assert cli.main(["research", "?" if brief else "   ", "--dry-run", "--person", "ana"]) == 2
+    assert error in capsys.readouterr().err
+
+
+def test_a_config_without_the_researcher_or_spec_role_takes_the_builders_settings(config):
+    assert "researcher" not in CONFIG and "spec =" not in CONFIG  # an 0.1 colony.toml keeps loading
+    for role in (cli.RESEARCHER, cli.SPEC):
+        assert config["roles"][role] == config["roles"]["builder"] == {"model": "m", "effort": "medium"}
+    config["roles"]["builder"]["effort"] = "low"
+    assert config["roles"][cli.SPEC]["effort"] == "medium"  # a copy, not the builder's own table
+
+
+def test_a_researcher_role_colony_toml_names_needs_its_model_and_effort(host):
+    (host / "colony.toml").write_text(CONFIG.replace("[gate]", 'researcher = { model = "m" }\n[gate]'))
+    with pytest.raises(cli.ColonyError, match=r"\[roles\] researcher needs 'effort'"):
+        cli.load_config(host / "colony.toml")
+    (host / "colony.toml").write_text(CONFIG.replace("[gate]", 'spec = { model = "s", effort = "max" }\n[gate]'))
+    assert cli.load_config(host / "colony.toml")["roles"]["spec"] == {"model": "s", "effort": "max"}
+
+
+def test_the_example_config_holds_the_new_tables(home):
+    from colony import vault
+
+    config = cli.load_config(PACKAGE / "colony.toml.example")
+    assert config["roles"]["researcher"]["model"] and config["roles"]["spec"]["effort"]
+    assert config["messages"]["transport"] == "github"
+    assert "board" in config and config["project"]["prefer_account"] == ""
+    knowledge = config["knowledge"]
+    assert knowledge["vault"] == "knowledge"
+    assert {name: knowledge[name] for name in vault.CHECKS} == vault.CHECKS  # each check, with its default mode
+    assert vault.read_settings(config).vault == "knowledge"
+
+
+def test_every_shipped_rule_fits_the_example_configs_rule_budgets(home):
+    from colony import vault
+
+    settings = vault.read_settings(cli.load_config(PACKAGE / "colony.toml.example"))
+    for path in [*(PACKAGE / "presets").glob("*/rules/*.md"), *(PACKAGE / "knowledge" / "rules").glob("*.md")]:
+        budget = settings.rule_budgets.get(path.stem, settings.rule_chars)
+        assert len(path.read_text()) <= budget, f"{path.relative_to(PACKAGE)} runs past its budget of {budget}"
+
+
+def test_prefer_account_wins_while_it_has_room(home):
+    config = accounts(home, "ana", "ana", "any")
+    config["project"] = {"prefer_account": "c"}
+    write_usage(home / "a", 5, timedelta(hours=2))
+    write_usage(home / "b", 40, timedelta(hours=2))
+    write_usage(home / "c", 60, timedelta(hours=2))
+    assert cli.pick_account(config, "ana") == ("c", str(home / "c"))  # not the most room, but preferred
+    write_usage(home / "c", 90, timedelta(hours=2))
+    assert cli.pick_account(config, "ana")[0] == "a"  # full: the most room wins again
+    write_usage(home / "c", 95, timedelta(hours=-1))
+    assert cli.pick_account(config, "ana")[0] == "c"  # its window reset
+
+
+def test_prefer_account_needs_its_folder_here_and_to_be_the_persons(home):
+    config = accounts(home, "ana", "bo")
+    (home / "a").mkdir()
+    config["project"] = {"prefer_account": "b"}
+    assert cli.pick_account(config, "ana")[0] == "a"  # bo's account never opens ana's session
+    config = accounts(home, "ana", "ana")
+    (home / "a").mkdir(exist_ok=True)
+    config["project"] = {"prefer_account": "b"}
+    assert cli.pick_account(config, "ana")[0] == "a"  # no folder b on this computer
+
+
+def test_prefer_account_must_name_an_account(host):
+    (host / "colony.toml").write_text(CONFIG.replace('checks = "make check"', 'checks = "make check"\n'
+                                                                             'prefer_account = "admin"'))
+    with pytest.raises(cli.ColonyError, match="prefer_account names 'admin', which no"):
+        cli.load_config(host / "colony.toml")
+
+
+@pytest.mark.parametrize("argv", [["--account", "admin"], ["join", "builder-2", "--account", "admin"],
+                                  ["open", "builder-2", "--account", "admin"], ["research", "q", "--account", "admin"],
+                                  ["spec", "f", "--account", "admin"],
+                                  ["batch", "--name", "b", "--card", "1=x", "--account", "admin"]])
+def test_every_command_that_opens_a_session_or_a_batch_takes_account(argv):
+    assert cli.build_parser().parse_args(argv).account == "admin"
+
+
+def test_account_overrides_the_pick_and_refuses_an_unknown_one(home, config, capsys):
+    config["accounts"]["admin"] = {"config_dir": str(home / "admin"), "person": "bo"}
+    config["project"]["prefer_account"] = "first"
+    code, out = run_lead(config, capsys, account="admin")
+    assert code == 0 and "on account admin" in out
+    assert "CLAUDE_CONFIG_DIR" in out.split("env:", 1)[1].splitlines()[0]
+    with pytest.raises(cli.ColonyError, match="--account 'nobody' is not in colony.toml: choose from first, admin"):
+        run_lead(config, capsys, account="nobody")
+
+
+def test_account_reaches_the_lead_from_the_command_line(home, host, capsys):
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG + '[accounts.admin]\nconfig_dir = "~/admin"\nperson = "ana"\n')
+    assert cli.main(["--dry-run", "--person", "ana", "--account", "admin"]) == 0
+    assert "dry run: demo-lead on account admin" in capsys.readouterr().out

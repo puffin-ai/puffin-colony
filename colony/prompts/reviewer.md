@@ -5,6 +5,9 @@ Diff to review: `git -C {checkout} diff {diff_range}`, leaving out the generated
 Cards in this batch, each with its done-when list (`gh issue view <n>`): {cards}
 {previous}
 
+Read these places first. They are the batch's risk list, from `colony tier`: the changed paths that touch sign-in, payments, migrations, secrets, deletion, a public API, dependencies, config, or a check. Each one needs a closer look, and none is a finding by itself:
+{risks}
+
 Check the batch against each item of this checklist:
 {rubric}
 The rules are {rules}. A must-line in an area's AGENTS.md counts under the item it belongs to. Wherever the batch uses a library in a way that looks risky, check it against the installed docs.

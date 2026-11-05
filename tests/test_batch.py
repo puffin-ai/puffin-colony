@@ -34,7 +34,10 @@ print(json.dumps({"total_cost_usd": 0.25, "duration_ms": 90000, "is_error": Fals
 
 GH_STUB = r'''#!/bin/sh
 printf '%s\n' "$@" >> "$COLONY_GH_LOG"
-echo https://example.test/pull/1
+case "$1 $2" in
+  "issue view") printf '%s' '{"title": "builder-1: the card", "body": "predicted: S, 20 min", "comments": []}' ;;
+  *) echo https://example.test/pull/1 ;;
+esac
 '''
 
 
@@ -242,7 +245,10 @@ def test_a_batch_loops_a_fix_to_its_card_and_opens_the_pr(repo, config, stubs, c
     assert "| 1 | 3 | skipped | pass |" in body and "| 2 | 0 | skipped | pass |" in body
     assert "| review | 2 | 3.0 | $0.50 |" in body and "None." in body
     gh = stubs["gh"].read_text().splitlines()
-    assert gh[:3] == ["pr", "create", "--repo"] and "demo/batch-b1" in gh and "main" in gh
+    create = gh.index("create") - 1  # after the card stats read each card with `gh issue view`
+    assert gh[create:create + 3] == ["pr", "create", "--repo"] and "demo/batch-b1" in gh and "main" in gh
+    assert gh[:3] == ["issue", "view", "11"]
+    assert "## Card stats\n" in body and "| #11 | builder-1 | S | no start line | 20 |" in body
     assert stubs["claude"].read_text().count("You are a fast builder") == 1
     assert batch.batch_status(config, Namespace(name="b1", repo=str(repo))) == 0
     status = capsys.readouterr().out
@@ -265,3 +271,49 @@ def test_a_conflict_outside_generated_paths_stops_the_batch(repo, config, stubs,
     assert batch.run_batch(config, batch_args(repo, "11=card/a")) == 1
     assert "already exists; pick another --name" in capsys.readouterr().out
     assert git(repo, "rev-parse", "demo/batch-b1") == stopped
+
+
+# Colony 0.2: the reviewer's risk list, the card stats in the PR body, and the agents' account
+
+
+def test_the_reviewer_reads_the_batch_risk_list_first(repo, config):
+    git(repo, "checkout", "-q", "-b", "card/d", "main")
+    commit(repo, {"auth/session.py": "TOKEN_TTL = 30\n", "a.txt": "d\n"}, "sessions")
+    git(repo, "push", "-q", "origin", "main")
+    b = batch.Batch.from_args(config, batch_args(repo, "14=card/d"))
+    b.wt = repo
+    prompt = batch.reviewer_prompt(b, 1, "card/d", None, batch.risk_list(b, "card/d"))
+    rest = prompt.split("Read these places first.", 1)[1]
+    assert "- auth: auth/session.py" in rest.split("Check the batch", 1)[0]
+    assert re.search(r"\{\w+\}", prompt) is None
+    assert batch.risk_list(b, "main") == "- none found"
+
+
+def test_a_risk_list_git_cant_read_never_stops_the_review(repo, config):
+    config["project"]["base"] = "gone"
+    b = batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
+    b.wt = repo
+    assert batch.risk_list(b, "card/a").startswith("- the risk list could not be read (the base origin/gone names no")
+
+
+def test_card_stats_that_cant_be_read_leave_a_line_in_the_pr_body(repo, config, monkeypatch):
+    from colony import cycle
+
+    def unreadable(*args, **kwargs):
+        raise cli.ColonyError("gh issue view failed: HTTP 502\nmore detail")
+
+    monkeypatch.setattr(cycle, "stats_table", unreadable)
+    b = batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
+    assert batch.card_stats(b) == "The card stats could not be read: gh issue view failed: HTTP 502."
+
+
+def test_the_agents_run_on_account_else_on_prefer_account_while_it_has_room(repo, config, tmp_path):
+    config["accounts"]["admin"] = {"config_dir": str(tmp_path / "admin"), "person": "pat"}
+    for folder in ("admin", "account"):
+        (tmp_path / folder).mkdir()
+    assert batch.Batch.from_args(config, batch_args(repo, "11=card/a")).account[0] == "one"
+    config["project"]["prefer_account"] = "admin"
+    assert batch.Batch.from_args(config, batch_args(repo, "11=card/a")).account == ("admin", str(tmp_path / "admin"))
+    args = batch_args(repo, "11=card/a")
+    args.account = "one"
+    assert batch.Batch.from_args(config, args).account[0] == "one"

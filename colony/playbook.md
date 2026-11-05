@@ -128,7 +128,7 @@ Ask no person anything. When you are unsure, send the lead a question with your 
 The spec agent writes a FEATURE's spec before any card exists. Its steps are in `.colony/prompts/spec.md`, and the person approves the requirements before the lead cuts a card.
 
 1. Make a card titled `spec: <feature>` for it, and set `Tier=FEATURE` on the board.
-2. Start the spec agent as a subagent whose brief is `.colony/prompts/spec.md`, with its `The feature:` line holding the person's request in their words and the card's number.
+2. Open the spec agent as its own session with `colony spec "<the person's request in their words>, card #<n>"`. Its first prompt is `.colony/prompts/spec.md`, with the request on its `The feature:` line, and it runs as the session `spec`, on the account `colony` picks.
 3. It writes the requirements, the design and the tasks in `knowledge/specs/plans/<feature>/`, posts each open question with `colony needs`, asks the person to approve the requirements, and pushes `spec/<feature>`. It changes no code.
 4. Tell the person in chat that the approval blocks the feature. Until the person says yes, cut no card from it, and keep the other cards moving.
 5. On the yes, put `spec/<feature>` into the next batch as the spec card's branch, and turn each task of its tasks page into a card, with the task's contract as the card's body.
@@ -138,6 +138,6 @@ The spec agent writes a FEATURE's spec before any card exists. Its steps are in 
 The researcher answers one outside question nobody here knows yet, with cited sources. Its steps are in `.colony/prompts/researcher.md`.
 
 1. Make a card titled `research: <topic>` for the question.
-2. Start the researcher as a subagent whose brief is `.colony/prompts/researcher.md`, with its `The question:` line holding one question and the card's number.
+2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.

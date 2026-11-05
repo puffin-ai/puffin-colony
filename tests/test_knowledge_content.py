@@ -16,7 +16,8 @@ KNOWLEDGE = PACKAGE / "knowledge"
 TYPES_DIR = KNOWLEDGE / "types"
 RULES_DIR = KNOWLEDGE / "rules"
 TEMPLATES = KNOWLEDGE / "templates"
-PROMPTS = {name: PACKAGE / "prompts" / f"{name}.md" for name in ("researcher", "spec", "setup-knowledge")}
+# setup.md holds the vault's setup steps, spliced in from the K1 track's setup-knowledge section.
+PROMPTS = {name: PACKAGE / "prompts" / f"{name}.md" for name in ("researcher", "spec", "setup")}
 
 PAGE_TYPES = """
 architecture archive-record build-checklist building-block decision-record design-spec diagram-type
@@ -33,8 +34,10 @@ PLACEHOLDERS = {"product", "knowledge", "apps"}
 PROMPT_PLACEHOLDERS = {
     "researcher": {"project", "question", "knowledge"},
     "spec": {"project", "feature", "knowledge"},
-    # Setup fills its own names; the three vault placeholders appear as text for it to fill.
-    "setup-knowledge": {"package", "dir", "name"} | PLACEHOLDERS,
+    # Setup fills its own names; the vault's, the presets', the playbook's and the briefs' placeholders appear as text
+    # for the setup session to fill.
+    "setup": {"package", "dir", "name", "display"} | PLACEHOLDERS
+             | {"web_app", "service", "fast_check", "checks", "base", "install", "project"},
 }
 
 CONTENT = sorted(KNOWLEDGE.rglob("*.md"))

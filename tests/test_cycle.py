@@ -245,14 +245,28 @@ def test_needs_for_another_person_posts_on_their_issue(gh, lead):  # noqa: F811
                                                     "Default: tomorrow (from serdar-lead)")
 
 
-def test_needs_is_for_the_lead_and_one_short_line(gh, lead, monkeypatch):  # noqa: F811
+def test_needs_needs_a_session_and_one_short_line(gh, lead, monkeypatch):  # noqa: F811
     with pytest.raises(cli.ColonyError, match="under 300 characters"):
         cycle.needs_line("serdar-lead", "serdar", "why " * 80, "yes")
-    monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
+    monkeypatch.delenv(cli.SESSION_ENV)
     args = parse("needs", "a question", "--default", "x")
-    with pytest.raises(cli.ColonyError, match="for the lead"):
+    with pytest.raises(cli.ColonyError, match="set COLONY_SESSION to this session's name"):
         args.run(CONFIG, args)
     assert gh.calls() == []
+
+
+@pytest.mark.parametrize("session", ["spec", "researcher"])
+def test_a_session_the_lead_opened_posts_needs_signed_with_its_name(gh, lead, monkeypatch, capsys, session):  # noqa: F811
+    monkeypatch.setenv(cli.SESSION_ENV, session)
+    gh.answer("issue list", [{"number": 4, "title": "Needs Serdar"}])
+    args = parse("needs", "Approve the requirements of export?", "--default", "no cards until you approve")
+    assert args.run(CONFIG, args) == 0
+    line = ("for serdar-lead: Serdar decides: Approve the requirements of export? Default: no cards until you approve "
+            f"(from {session})")
+    assert gh.called("issue", "comment") == [["issue", "comment", "4", "--repo", "acme/demo", "--body", line]]
+    assert capsys.readouterr().out.strip() == f"#4 {line}"
+    lead_wait = cycle.wait.lead_session(CONFIG, "serdar-lead")
+    assert [taken for taken, _ in cycle.wait.taken(line, lead_wait, "4")] == [line]  # the lead's wait takes it
 
 
 # The handover
