@@ -233,12 +233,17 @@ def launch(config: dict, args, session: str, role: str, prompt: str, cmux_only: 
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
     print(f"Opening {title} on account {account}, in {where}.", flush=True)
+    # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
+    # subscription, so a session drops it unless colony.toml says to use it.
+    keep_key = config.get("budget", {}).get("use_api_key", False)
     if in_cmux:
-        cmd = ["cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(argv)]
+        command = argv if keep_key else ["env", "-u", "ANTHROPIC_API_KEY", *argv]
+        cmd = ["cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
         cmd += [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
         return subprocess.run(cmd).returncode
     os.chdir(root)
-    os.execvpe(argv[0], argv, {**os.environ, **env})
+    inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
+    os.execvpe(argv[0], argv, {**inherited, **env})
 
 
 # The placeholders the puffin preset's files hold, which the setup session fills with this repo's values:

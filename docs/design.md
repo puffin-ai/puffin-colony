@@ -40,7 +40,7 @@ Setup reads the repo and fills in what it can without asking: the stack (package
 ## Presets (`colony/presets/<name>/` in the package)
 
 - **`lean`**: about 6 short files, each under 400 words, generic and written fresh: `coding.md`, `testing.md` (a bug fix carries a regression test, new logic carries a test, a style change carries none), `security.md`, `performance.md`, `accessibility.md`, and `git.md` (branches, commits, PRs, never pushing to base).
-- **`puffin`**: a `manifest.txt` listing Puffin's rule files (`guide/rules/*.md`) and area files. Setup copies them in when they exist. Outside Puffin it fetches them from the public repo once Puffin Colony is public, and until then refuses with a clear message.
+- **`puffin`**: Puffin's engineering rules, generalized and shipped with Colony: frontend, backend and process rules, plus per-stack essentials (Next.js, FastAPI, generic) and a docs reading aid. It works in any repo. See docs/presets.md.
 - **`own`**: no new rules. The repo's own CLAUDE.md and AGENTS.md are the rules.
 
 ## The playbook (`.colony/playbook.md`)

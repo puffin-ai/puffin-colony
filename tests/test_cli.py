@@ -260,7 +260,7 @@ def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, c
     args = cmux_log.read_text().splitlines()
     assert code == 0
     assert args[:5] == ["new-workspace", "--name", "demo-lead", "--cwd", str(host)]
-    assert args[args.index("--command") + 1].startswith("claude --remote-control demo-lead ")
+    assert args[args.index("--command") + 1].startswith("env -u ANTHROPIC_API_KEY claude --remote-control demo-lead ")
     for pair in ("COLONY_SESSION=lead", "COLONY_PERSON=ana", f"CLAUDE_CONFIG_DIR={home / 'first'}",
                  "CLAUDE_CODE_RETRY_WATCHDOG=1", "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS=21600000",
                  "CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000"):
@@ -357,3 +357,13 @@ def test_each_lean_rule_is_short_and_has_must_and_must_not_lines(name):
 
 def test_the_lean_preset_holds_only_its_six_files():
     assert sorted(p.stem for p in (PACKAGE / "presets" / "lean").iterdir()) == sorted(LEAN)
+
+
+def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config, capsys):
+    """A set ANTHROPIC_API_KEY bills that key instead of the subscription, so it is dropped by default."""
+    cmux_log = make_stub(home / "bin", "cmux")
+    make_stub(home / "bin", "claude")
+    config["budget"]["use_api_key"] = True
+    run_lead(config, capsys, dry_run=False)
+    args = cmux_log.read_text().splitlines()
+    assert args[args.index("--command") + 1].startswith("claude --remote-control demo-lead ")

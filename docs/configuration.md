@@ -130,3 +130,9 @@ Colony sets these for the lead and each builder. You don't set them yourself.
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `250000` |
 
 `--dry-run` prints these names, never their values.
+
+## Added in 0.1
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `budget.use_api_key` | `false` | `true` lets sessions bill `ANTHROPIC_API_KEY`. Otherwise Colony drops it, so sessions use the account's subscription. |

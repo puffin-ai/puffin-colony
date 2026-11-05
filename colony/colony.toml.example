@@ -37,3 +37,11 @@ walk_paths = []                    # a round that changes none of these skips th
 
 [budget]
 provider_dollars = 0               # model spend inside the app's own evals; above 0 only with the person's yes
+use_api_key = false                # true lets sessions bill ANTHROPIC_API_KEY instead of the account's subscription
+
+[messages]
+lead_digest_minutes = 10           # the lead reads gathered lines this often; urgent, blocked, questions and your lines come at once
+transport = "github"               # lines live on issue comments; "relay" (Agent Relay) is planned
+
+[people]
+logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once
