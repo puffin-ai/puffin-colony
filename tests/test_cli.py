@@ -357,10 +357,3 @@ def test_each_lean_rule_is_short_and_has_must_and_must_not_lines(name):
 
 def test_the_lean_preset_holds_only_its_six_files():
     assert sorted(p.stem for p in (PACKAGE / "presets" / "lean").iterdir()) == sorted(LEAN)
-
-
-def test_the_puffin_manifest_lists_puffins_rule_and_area_files():
-    lines = [line for line in (PACKAGE / "presets" / "puffin" / "manifest.txt").read_text().splitlines()
-             if line.strip() and not line.startswith("#")]
-    assert len(lines) == 14
-    assert all(line.startswith("guide/rules/") or line.endswith("/AGENTS.md") for line in lines)

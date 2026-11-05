@@ -17,7 +17,7 @@ colony = "colony.cli:main"
 packages = ["colony"]
 
 [tool.setuptools.package-data]
-colony = ["playbook.md", "colony.toml.example", "prompts/*.md", "presets/*/*"]
+colony = ["playbook.md", "colony.toml.example", "prompts/*.md", "presets/**/*.md", "skills/*/SKILL.md"]
 
 [tool.setuptools.dynamic]
 version = { attr = "colony.__version__" }

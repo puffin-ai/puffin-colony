@@ -241,6 +241,37 @@ def launch(config: dict, args, session: str, role: str, prompt: str, cmux_only: 
     os.execvpe(argv[0], argv, {**os.environ, **env})
 
 
+# The placeholders the puffin preset's files hold, which the setup session fills with this repo's values:
+# the web app's folder, the Python service's folder, and the fast and full checks.
+PRESET_PLACEHOLDERS = ("web_app", "service", "fast_check", "checks")
+
+# The MCP servers setup can add to the repo's .mcp.json, under these names.
+MCP_SERVERS = {
+    "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+    "context7": {"type": "http", "url": "https://mcp.context7.com/mcp"},
+}
+ROLE_SKILLS = ("colony-lead", "colony-builder", "colony-reviewer", "colony-walker")  # shipped in skills/
+# Outside skills, each pinned to a commit: (repo, commit, folder in that repo, the skill's folder name here).
+OUTSIDE_SKILLS = {
+    "ui-design": ("anthropics/skills", "ca45fc496a3436251f191354091d557da31c15b5", "skills/frontend-design",
+                  "frontend-design"),
+    "test-first": ("obra/superpowers", "22f0b463e7a5e579904dd6211a520321035526f7", "skills/test-driven-development",
+                   "test-driven-development"),
+}
+# The one yes-or-no list setup shows, in order: each tool's default (yes, no, or ask for no default) and what it is.
+TOOLS = {
+    "playwright": ("yes", "Playwright MCP, the walker's browser. It installs a package: npx downloads @playwright/mcp "
+                          "on first use."),
+    "context7": ("yes", "Context7 MCP, current docs for every library. A hosted server: nothing is installed."),
+    "role-skills": ("yes", f"{DISPLAY}'s role skills, {', '.join(ROLE_SKILLS)}: the playbook split per role, "
+                           "copied from the package."),
+    "ui-design": ("ask", "A UI design skill, Anthropic's frontend-design. Its files download from "
+                         "github.com/anthropics/skills."),
+    "test-first": ("no", "A test-first skill, superpowers' test-driven-development. Its files download from "
+                         "github.com/obra/superpowers."),
+}
+
+
 def setup(args) -> int:
     """First run: an interactive claude session in this terminal whose first message is the setup prompt."""
     root = repo_root()
@@ -248,8 +279,9 @@ def setup(args) -> int:
     if args.dry_run:
         print(f"setup plan: {DIR}/{CONFIG_NAME} is missing, so {NAME} sets up {root} in this terminal.")
         print(f"  command: claude <the setup prompt from {NAME} {__version__}, {len(prompt)} characters>")
-        print("  it reads the repo, asks at most 5 questions, and writes:")
+        print("  it reads the repo, asks at most 5 questions and one yes-or-no list of tools, and writes:")
         print(f"    {DIR}/{CONFIG_NAME}, {DIR}/rules/, {DIR}/playbook.md, and one line in CLAUDE.md after asking")
+        print("    an AGENTS.md per app with the puffin preset, and .mcp.json and .claude/skills/ for the tools accepted")
         print("  then opens one pull request with them. Nothing ran.")
         return 0
     if shutil.which("claude") is None:
@@ -257,6 +289,118 @@ def setup(args) -> int:
     print(f"No {DIR}/{CONFIG_NAME} yet, so {DISPLAY} starts setup.", flush=True)
     os.chdir(root)
     os.execvp("claude", ["claude", prompt])
+
+
+def tools_list() -> str:
+    """The one yes-or-no list of tools setup shows the person, with each tool's default and what it installs."""
+    lines = ["Tools for this repo, one yes or no each, with the default in brackets:"]
+    lines += [f"  {name:<12} [{default}] {text}" for name, (default, text) in TOOLS.items()]
+    return "\n".join(lines)
+
+
+def merge_mcp(path: Path, names: list[str]) -> list[str]:
+    """Add the named servers to a .mcp.json, keeping every entry already there, and return the names it added.
+
+    A server the file already names keeps its own entry. A file that is not a JSON object with an
+    `mcpServers` object is left as it is, with an error that says so.
+    """
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+        except ValueError as e:
+            raise ColonyError(f"{path} is not valid JSON ({e}): fix it, then run this again") from None
+    if not isinstance(data, dict) or not isinstance(data.setdefault("mcpServers", {}), dict):
+        raise ColonyError(f"{path} must hold a JSON object with an mcpServers object: fix it, then run this again")
+    added = [name for name in names if name not in data["mcpServers"]]
+    for name in added:
+        data["mcpServers"][name] = json.loads(json.dumps(MCP_SERVERS[name]))
+    if added:
+        path.write_text(json.dumps(data, indent=2) + "\n")
+    return added
+
+
+def copy_role_skills(root: Path) -> list[str]:
+    """Copy the package's role skills into the repo's .claude/skills/, and return the folders written."""
+    written = []
+    for name in ROLE_SKILLS:
+        target = root / ".claude" / "skills" / name
+        target.mkdir(parents=True, exist_ok=True)
+        for item in resources.files(__package__).joinpath("skills", name).iterdir():
+            (target / item.name).write_text(item.read_text())
+        written.append(f".claude/skills/{name}/")
+    return written
+
+
+def _gh_api(path: str, raw: bool = False) -> bytes:
+    """One read-only `gh api` call's output, or an error naming the call and gh's message."""
+    cmd = ["gh", "api", path] + (["-H", "Accept: application/vnd.github.raw+json"] if raw else [])
+    try:
+        run = subprocess.run(cmd, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise ColonyError(f"gh api {path}: {e}") from None
+    if run.returncode:
+        raise ColonyError(f"gh api {path} failed: {run.stderr.decode(errors='replace').strip()[:300]}")
+    return run.stdout
+
+
+def _download(repo: str, commit: str, folder: str, target: Path) -> None:
+    """Write every file of a repo's folder at a commit into `target`, keeping its subfolders."""
+    for entry in json.loads(_gh_api(f"repos/{repo}/contents/{folder}?ref={commit}")):
+        name = entry["name"]
+        if name in ("", ".", "..") or "/" in name or "\\" in name:
+            raise ColonyError(f"{repo} lists a file named {name!r}: nothing more was downloaded")
+        if entry["type"] == "dir":
+            _download(repo, commit, entry["path"], target / name)
+        elif entry["type"] == "file":
+            target.mkdir(parents=True, exist_ok=True)
+            (target / name).write_bytes(_gh_api(f"repos/{repo}/contents/{entry['path']}?ref={commit}", raw=True))
+
+
+def fetch_skill(root: Path, tool: str) -> str:
+    """Download an outside skill at its pinned commit into the repo's .claude/skills/, and return its folder."""
+    repo, commit, folder, name = OUTSIDE_SKILLS[tool]
+    _download(repo, commit, folder, root / ".claude" / "skills" / name)
+    return f".claude/skills/{name}/"
+
+
+def tools(args) -> int:
+    """`colony tools`: print the list setup offers, or write the named tools into this repo after the person's yes.
+
+    The MCP servers merge into .mcp.json, the role skills copy from the package, and an outside skill downloads
+    at its pinned commit through gh. It ends by printing the [tools] table for colony.toml.
+    """
+    if not args.names:
+        print(tools_list())
+        return 0
+    unknown = [name for name in args.names if name not in TOOLS]
+    if unknown:
+        raise ColonyError(f"{unknown[0]!r} is not a tool: choose from {', '.join(TOOLS)}")
+    chosen = [name for name in TOOLS if name in args.names]
+    mcps = [name for name in chosen if name in MCP_SERVERS]
+    skills = [*(ROLE_SKILLS if "role-skills" in chosen else ())]
+    skills += [OUTSIDE_SKILLS[name][3] for name in chosen if name in OUTSIDE_SKILLS]
+    root = repo_root()
+    if args.dry_run:
+        print(f"tools plan for {root}: {', '.join(chosen)}")
+        if mcps:
+            print(f"  .mcp.json: add {', '.join(mcps)}, keeping every entry already there")
+        for skill in skills:
+            print(f"  .claude/skills/{skill}/")
+        print("Nothing ran.")
+        return 0
+    if mcps:
+        added = merge_mcp(root / ".mcp.json", mcps)
+        kept = [name for name in mcps if name not in added]
+        print(f"wrote .mcp.json: added {', '.join(added) or 'nothing'}"
+              + (f", kept the entries already there for {', '.join(kept)}" if kept else ""))
+    if "role-skills" in chosen:
+        print("wrote", ", ".join(copy_role_skills(root)))
+    for name in chosen:
+        if name in OUTSIDE_SKILLS:
+            print("wrote", fetch_skill(root, name))
+    print(f"\nAdd this table to {DIR}/{CONFIG_NAME}:\n[tools]\nmcp = {json.dumps(mcps)}\nskills = {json.dumps(skills)}")
+    return 0
 
 
 def lead(config: dict, args) -> int:
@@ -377,6 +521,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", help="show a batch's round, open problems, walk, running steps and minutes")
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
+
+    p = sub.add_parser("tools", help="list the MCPs and skills setup offers, or write the named ones (setup runs it)")
+    p.add_argument("names", nargs="*", metavar="tool", help=f"the tools to write: {', '.join(TOOLS)}")
+    p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
+    p.set_defaults(run=tools)
     return parser
 
 
@@ -386,6 +535,8 @@ def main(argv=None) -> int:
     try:
         if args.command is None and not config_path().exists():
             return setup(args)
+        if args.command == "tools":  # setup runs it before colony.toml exists
+            return tools(args)
         return args.run(load_config(), args) or 0
     except ColonyError as e:
         print(f"{NAME}: {e}", file=sys.stderr)
