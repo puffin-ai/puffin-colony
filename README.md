@@ -80,6 +80,15 @@ These come from one team's first batch: Puffin Calendar, on 2026-11-05. It is on
 | A tiny change | about 2 minutes |
 | The whole batch | about 2.5 hours, mostly checks |
 
+The same day, Colony ran a batch on its own for the first time, with nobody relaying messages ([Puffin PR #1310](https://github.com/Puffin-Calendar/puffin-calendar/pull/1310)):
+
+| What | Result |
+| --- | --- |
+| Setup on Puffin's repo | 2.6 minutes and $1.00. It wrote the config, playbook, skills and one AGENTS.md row, and opened its own setup PR |
+| Two cards, from the job to an open PR | about 66 minutes. The lead opened a builder and handed out the cards. It answered the builder's question on the card in minutes, then ran the gate |
+| The gate | open problems 1 → 0 in 2 rounds, with the walk and the checks passing both times |
+| Agent cost | $9.58 at API prices: $5.90 walk, $2.38 review, $1.30 fix |
+
 ## Presets
 
 Setup asks which rules your agents follow. You can edit them any time: they are plain Markdown files in `.colony/rules/`.
