@@ -52,7 +52,7 @@ You talk with the person and run the life cycle. All session, keep `colony wait`
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`.
-2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`. Work only there.
+2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
 3. Run `{fast_check}`, and fix what it reports.
 4. Write a test for a bug fix or for new logic. A style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 5. Commit, run `git push origin <name>/<n>`, and post one line on the card: `for lead: done, <name>/<n> pushed, <the fast check's last line> (from <name>)`.

@@ -35,7 +35,7 @@ When an answer is unclear, take the default and say so. When the person leaves a
   - `puffin`: follow "The puffin preset" below.
   - `own`: write no rules. `[gate] rules` lists the repo's own `CLAUDE.md` and `AGENTS.md` files.
   - Put question 5's answers, if any, in `{dir}/rules/project.md` as must-not lines, whichever preset was chosen.
-- **`{dir}/playbook.md`**: copy `{package}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{fast_check}` and `{checks}`, with this project's value, and drop the sentence that explains the placeholders. Change nothing else.
+- **`{dir}/playbook.md`**: copy `{package}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{install}`, `{fast_check}` and `{checks}`, with this project's value, and drop the sentence that explains the placeholders. Change nothing else.
 - **The tools**: run `{name} tools` with the names the person said yes to, such as `{name} tools playwright context7 role-skills`, and skip it when they said yes to none. It merges the MCP servers into `.mcp.json` and keeps every entry already there, copies the role skills into `.claude/skills/`, and downloads an outside skill at its pinned commit. Never edit `.mcp.json` by hand. Add the `[tools]` table it prints to `{dir}/{name}.toml`. When it fails, say why in one line and go on without that tool.
 
 ### The puffin preset
