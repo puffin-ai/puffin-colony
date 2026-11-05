@@ -1,0 +1,39 @@
+# Puffin Colony's settings. Setup copies this file to .colony/colony.toml in your repo and fills in every value.
+
+[project]
+name = "myapp"                     # short name: session titles, branch prefixes and worktree names
+repo = "owner/myapp"               # the GitHub repo, as owner/name
+base = "main"                      # PRs go here; colony never pushes to it
+preset = "lean"                    # the rules setup copied: lean, puffin or own
+max_builders = 4                   # builders the lead opens on this machine; more join from other computers
+worktrees = "~/worktrees"          # where builders and batches make their worktrees
+fast_check = "npm test"            # a builder's quick check
+checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs
+web_checks = ""                    # optional: a lighter check for a round that changed no backend_paths file
+backend_paths = []                 # optional: folders whose change needs the full checks
+generated = []                     # files a build writes, such as "src/generated/*"; a conflict there is rebuilt
+regen = ""                         # the command that rebuilds the generated files
+check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
+install = "npm ci"                 # run in each new worktree
+
+# One table per Claude Code settings folder. person = "any" shares an account with everyone.
+[accounts.main]
+config_dir = "~/.claude"
+person = "you"
+
+[roles]
+lead     = { model = "claude-opus-5-5", effort = "high" }
+builder  = { model = "claude-opus-5-5", effort = "medium" }
+reviewer = { model = "claude-opus-5-5", effort = "high" }
+walker   = { model = "claude-opus-5-5", effort = "medium" }   # add agent = "<name>" to walk with a subagent
+fixer    = { model = "claude-opus-5-5", effort = "medium" }
+
+[gate]
+rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]   # the reviewer's checklist
+rules = [".colony/rules/*.md"]     # the files the reviewer checks against, plus the repo's own CLAUDE.md or AGENTS.md
+max_rounds = 5
+walk = true                        # walk the changed screens in a browser
+walk_paths = []                    # a round that changes none of these skips the walk; empty walks every round
+
+[budget]
+provider_dollars = 0               # model spend inside the app's own evals; above 0 only with the person's yes

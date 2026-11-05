@@ -1,0 +1,36 @@
+# The puffin preset: Puffin's engineering rules, minus the product.
+#
+# Setup reads this file when the person picks `puffin`. Each line below is a path in Puffin's
+# repository, Puffin-Calendar/puffin-calendar. A line ending in AGENTS.md is an app's area file;
+# every other line is a rule file.
+#
+# When every listed file exists in this repository, setup copies each rule file into .colony/rules/
+# under its own name, and uses each area file as the model for the matching app's AGENTS.md here.
+# It rewrites Puffin-only names (the product, its folders and its commands) into this repo's,
+# and leaves out design-principles' glass design system specifics.
+#
+# When they don't exist here, setup copies nothing and says, in one line:
+#   The puffin preset isn't public yet, so it works only inside Puffin's own repository. Choose lean or own.
+# Once Puffin Colony is public, setup fetches the same paths from the public repository instead.
+
+# Frontend rules
+guide/rules/performance.md
+guide/rules/full-stack.md
+guide/rules/accessibility.md
+guide/rules/coding.md
+guide/rules/design-principles.md
+guide/rules/testing.md
+
+# Backend rules
+guide/rules/performance-service.md
+guide/rules/security-and-privacy.md
+guide/rules/database.md
+
+# Process rules
+guide/rules/commits.md
+guide/rules/pull-requests.md
+guide/rules/writing.md
+
+# Area files
+apps/web/AGENTS.md
+apps/backend/AGENTS.md
