@@ -7,6 +7,12 @@ setup copies them. Without that folder, any `type:` a page declares counts. Each
 `--strict` fails on the warnings too. `--staged` checks only the staged pages, with the checks that read one page at
 a time, for a pre-commit hook. Every run ends with a count per check.
 
+A repo adds its own checks as plug-ins: `[knowledge] plugins` lists Python files in the repo, each with a `CHECKS`
+table of its checks and their default modes, an optional `ONE_PAGE` tuple of the ones `--staged` runs, and
+`run(check, repo, vault, files)`, which returns the check's problems as (path, line, message). `files` is the set of
+staged files under `--staged`, else None. A plug-in check takes its mode from `[knowledge]` like a built-in one, and
+counts in the same tally.
+
 Every full run, and `--index` alone, also rewrites the decision log, `<vault>/decisions.md`, from the decision
 records. The run fails when the log it found differed, so a stale or hand-edited log never lands.
 Python 3.11+ standard library only.
@@ -14,13 +20,14 @@ Python 3.11+ standard library only.
 from __future__ import annotations
 
 import functools
+import importlib.util
 import itertools
 import os
 import re
 import subprocess
 import urllib.parse
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,6 +108,16 @@ Problem = tuple[Path, int, str]  # the file, its line (0 for the whole file) and
 
 
 @dataclass
+class Plugin:
+    """A repo's own checks, from one file `[knowledge] plugins` names."""
+
+    path: str
+    checks: dict[str, str]
+    one_page: tuple[str, ...]
+    run: Callable[..., list]
+
+
+@dataclass
 class Settings:
     """What `[knowledge]` in colony.toml sets, with every default filled in."""
 
@@ -112,6 +129,44 @@ class Settings:
     rule_budgets: dict[str, int] = field(default_factory=dict)
     code_roots: tuple[str, ...] | None = None  # None: every top-level folder of the repo
     copy_words: int = DEFAULT_COPY_WORDS
+    plugins: list[Plugin] = field(default_factory=list)
+
+
+def load_plugin(repo: Path, name: str, index: int) -> Plugin:
+    """Load one plug-in file from the repo, and check that it has CHECKS, a valid ONE_PAGE and run."""
+    path = (repo / name).resolve()
+    if not inside(path, repo.resolve()) or path.suffix != ".py" or not path.is_file():
+        raise cli.ColonyError(f"[knowledge] plugins: {name} is not a Python file in this repo")
+    spec = importlib.util.spec_from_file_location(f"{cli.NAME}_docs_plugin_{index}", path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        raise cli.ColonyError(f"[knowledge] plugins: {name} failed to load: {type(e).__name__}: {e}") from None
+    checks, one_page, run = getattr(module, "CHECKS", None), getattr(module, "ONE_PAGE", ()), getattr(module, "run", None)
+    if not isinstance(checks, dict) or not checks or any(mode not in MODES for mode in checks.values()):
+        raise cli.ColonyError(f"{name}: CHECKS must map each check to off, warn or fail")
+    if not callable(run):
+        raise cli.ColonyError(f"{name}: needs run(check, repo, vault, files)")
+    if not set(one_page) <= set(checks):
+        raise cli.ColonyError(f"{name}: ONE_PAGE names a check not in its CHECKS")
+    return Plugin(name, dict(checks), tuple(one_page), run)
+
+
+def plugin_problems(plugin: Plugin, check: str, vault: Vault, files: set[Path] | None) -> list[Problem]:
+    """Run one plug-in check, with each problem's path made absolute and its shape checked."""
+    try:
+        found = plugin.run(check, vault.repo, vault.root, files)
+    except Exception as e:
+        raise cli.ColonyError(f"{plugin.path}: {check} crashed, so the run counts as failed: "
+                              f"{type(e).__name__}: {e}") from None
+    problems = []
+    for item in found or ():
+        if not (isinstance(item, (tuple, list)) and len(item) == 3 and isinstance(item[1], int)):
+            raise cli.ColonyError(f"{plugin.path}: {check} returned {item!r}, not (path, line, message)")
+        path = Path(item[0])
+        problems.append((path if path.is_absolute() else vault.repo / path, item[1], str(item[2])))
+    return problems
 
 
 def _number(value, where: str) -> int:
@@ -145,10 +200,18 @@ def read_settings(config: dict, strict: bool = False) -> Settings:
     if not isinstance(table, dict):
         raise cli.ColonyError("[knowledge] must be a table")
     settings = Settings()
+    if "plugins" in table:
+        repo = cli.repo_root()
+        settings.plugins = [load_plugin(repo, name, i) for i, name in enumerate(_names(table["plugins"], "plugins"))]
+    for plugin in settings.plugins:
+        for name, mode in plugin.checks.items():
+            if name in settings.modes:
+                raise cli.ColonyError(f"{plugin.path}: its check {name!r} has the name of another check")
+            settings.modes[name] = mode
     for key, value in table.items():
-        if key in CHECKS or value in MODES:
-            if key not in CHECKS:
-                raise cli.ColonyError(f"[knowledge] has no check {key!r}: the checks are {', '.join(CHECKS)}")
+        if key in settings.modes or value in MODES:
+            if key not in settings.modes:
+                raise cli.ColonyError(f"[knowledge] has no check {key!r}: the checks are {', '.join(settings.modes)}")
             if value not in MODES:
                 raise cli.ColonyError(f"[knowledge] {key} must be off, warn or fail, not {value!r}")
             settings.modes[key] = value
@@ -714,7 +777,7 @@ def check_docs(config: dict, args) -> int:
         log_problems = check_decision_log(vault)
         if log_problems:  # the other checks read the log as this run wrote it
             vault = Vault(vault.repo, settings)
-    pages, rules = vault.pages, rule_files(vault)
+    pages, rules, files = vault.pages, rule_files(vault), None
     if staged:
         files = staged_files(vault.repo)
         pages, rules = [page for page in pages if page in files], [path for path in rules if path in files]
@@ -734,11 +797,16 @@ def check_docs(config: dict, args) -> int:
         "replaced_records": lambda: check_replaced_records(vault, pages),
         "decision_log": lambda: log_problems,
     }
+    one_page = set(ONE_PAGE)
+    for plugin in settings.plugins:
+        one_page |= set(plugin.one_page)
+        for name in plugin.checks:
+            runs[name] = functools.partial(plugin_problems, plugin, name, vault, files)
     problems: list[Problem] = []
     warnings: list[Problem] = []
     tally: list[str] = []
     for name, mode in settings.modes.items():
-        if staged and name not in ONE_PAGE:
+        if staged and name not in one_page:
             continue
         if mode == OFF:
             tally.append(f"{name} off")
@@ -751,7 +819,7 @@ def check_docs(config: dict, args) -> int:
             print(f"{vault.rel(path)}{f':{number}' if number else ''}: {mark}{message}")
     print(f"check-docs: {', '.join(tally)}")
     if staged:
-        print(f"check-docs: --staged skips {', '.join(name for name in CHECKS if name not in ONE_PAGE)}")
+        print(f"check-docs: --staged skips {', '.join(name for name in settings.modes if name not in one_page)}")
     scope = f"{len(pages)} {'staged ' if staged else ''}page(s)"
     if problems:
         print(f"check-docs: {len(problems)} problem(s) and {len(warnings)} warning(s) across {scope}")

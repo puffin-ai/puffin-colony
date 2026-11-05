@@ -1,6 +1,7 @@
 """Tests for `colony check-docs`: each test writes a small vault into a temporary git repo, breaks one rule, and reads
 what the run prints and returns."""
 import argparse
+import re
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -457,3 +458,79 @@ def test_add_commands_routes_check_docs():
     vault.add_commands(parser.add_subparsers(dest="command"))
     args = parser.parse_args(["check-docs", "--staged", "--strict"])
     assert args.run is vault.check_docs and args.staged and args.strict and not args.index
+
+
+# Plug-ins: a repo's own checks beside the built-in ones
+
+PLUGIN = '''
+from pathlib import Path
+
+CHECKS = {"no_glass": "fail", "nav_citations": "warn"}
+ONE_PAGE = ("no_glass",)
+
+
+def run(check, repo, vault, files):
+    pages = sorted(Path(vault).rglob("*.md")) if files is None else sorted(p for p in files if p.suffix == ".md")
+    if check == "no_glass":
+        return [(page, n, "says glass") for page in pages
+                for n, line in enumerate(page.read_text().splitlines(), 1) if "glass" in line]
+    return [("knowledge/README.md", 0, "no NAV citation")]
+'''
+
+
+def plugged(repo, capsys, files=None, knowledge=None, plugin=PLUGIN, **flags):
+    """Write the vault and the plug-in at tools/docs_checks.py, then run the checks with it."""
+    (repo / "tools").mkdir(exist_ok=True)
+    (repo / "tools" / "docs_checks.py").write_text(plugin)
+    return checked(repo, capsys, files, {"plugins": ["tools/docs_checks.py"], **(knowledge or {})}, **flags)
+
+
+def test_a_plugins_checks_run_in_their_modes_and_count_in_the_tally(repo, capsys):
+    code, out = plugged(repo, capsys, {"knowledge/notes/a.md": page("note", "# A\\n\\nA glass wall.")})
+    assert code == 1, out
+    assert "knowledge/notes/a.md:" in out and ": says glass" in out
+    assert "knowledge/README.md: warning: no NAV citation" in out
+    tally = next(line for line in out.splitlines() if line.startswith("check-docs: page_types"))
+    assert tally.endswith("no_glass 1, nav_citations 1 (warn)")
+
+
+def test_a_plugin_check_takes_its_mode_from_the_config(repo, capsys):
+    code, out = plugged(repo, capsys, {"knowledge/notes/a.md": page("note", "# A\\n\\nA glass wall.")},
+                        {"no_glass": "warn", "nav_citations": "off"})
+    assert "no_glass 1 (warn)" in out and "nav_citations off" in out
+    code, out = run(capsys, {"plugins": ["tools/docs_checks.py"], "nav_citations": "warn"}, strict=True)
+    assert code == 1 and "nav_citations 1," not in out and "nav_citations 1" in out
+
+
+def test_staged_runs_only_a_plugins_one_page_checks_on_the_staged_files(repo, capsys):
+    write(repo, {"knowledge/notes/a.md": page("note", "# A\\n\\nA glass wall.")})
+    (repo / "tools").mkdir()
+    (repo / "tools" / "docs_checks.py").write_text(PLUGIN)
+    subprocess.run(["git", "add", "knowledge/notes/a.md"], cwd=repo, check=True)
+    code, out = run(capsys, {"plugins": ["tools/docs_checks.py"]}, staged=True)
+    assert code == 1 and ": says glass" in out
+    assert "nav_citations" not in out.split("--staged skips")[0] and "nav_citations" in out.split("--staged skips")[1]
+
+
+@pytest.mark.parametrize("plugin, message", [
+    ("CHECKS = {'links': 'fail'}\ndef run(*a): return []", "its check 'links' has the name of another check"),
+    ("CHECKS = {'x': 'loud'}\ndef run(*a): return []", "CHECKS must map each check to off, warn or fail"),
+    ("CHECKS = {'x': 'fail'}", "needs run(check, repo, vault, files)"),
+    ("CHECKS = {'x': 'fail'}\nONE_PAGE = ('y',)\ndef run(*a): return []", "ONE_PAGE names a check not in its CHECKS"),
+    ("import nothing_by_this_name", "failed to load: ModuleNotFoundError"),
+])
+def test_a_bad_plugin_is_an_error(repo, capsys, plugin, message):
+    with pytest.raises(cli.ColonyError, match=re.escape(message)):
+        plugged(repo, capsys, plugin=plugin)
+
+
+def test_a_plugin_check_that_crashes_fails_the_run_instead_of_passing(repo, capsys):
+    with pytest.raises(cli.ColonyError, match="tools/docs_checks.py: x crashed, so the run counts as failed"):
+        plugged(repo, capsys, plugin="CHECKS = {'x': 'fail'}\ndef run(*a): raise KeyError('nav')")
+    with pytest.raises(cli.ColonyError, match="returned 'oops', not"):
+        plugged(repo, capsys, plugin="CHECKS = {'x': 'fail'}\ndef run(*a): return ['oops']")
+
+
+def test_a_plugin_outside_the_repo_is_refused(repo, capsys):
+    with pytest.raises(cli.ColonyError, match="is not a Python file in this repo"):
+        checked(repo, capsys, knowledge={"plugins": ["../elsewhere.py"]})

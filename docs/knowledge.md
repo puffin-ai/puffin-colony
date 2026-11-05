@@ -115,3 +115,19 @@ Each check's mode is `off`, `warn` or `fail`, set in `[knowledge]`. See [configu
 - `--staged` checks only the staged pages, with the six checks that read one page at a time: page types, links, code paths, both caps, and the rule budget. It suits a pre-commit hook.
 - `--strict` turns every `warn` into `fail`.
 - `--index` only rewrites the decision log.
+
+### Your own checks
+
+A repo adds its own checks as plug-ins, Python files named in `[knowledge] plugins`. A plug-in looks like this:
+
+```python
+CHECKS = {"nav_citations": "fail"}   # each check and its default mode
+ONE_PAGE = ("nav_citations",)        # optional: the checks --staged runs on the staged files
+
+
+def run(check, repo, vault, files):
+    """Return the check's problems as (path, line, message). `files` is the staged set under --staged, else None."""
+    return []
+```
+
+Its checks take their modes from `[knowledge]` like the built-in ones, print the same way, and count in the same tally. A plug-in check whose name clashes with another check, or which crashes, stops the run with an error, so a broken check never passes.

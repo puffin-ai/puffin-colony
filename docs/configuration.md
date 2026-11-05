@@ -138,6 +138,7 @@ The knowledge vault and its checks. See [knowledge.md](knowledge.md).
 | `rule_budgets` | `{ performance = 16000 }` | A budget for one rule, by its file name. The example sets this one for the `puffin` preset's long `performance.md`. |
 | `code_roots` | `["src", "apps"]` | The top folders whose paths `code_paths` checks. Default: every top folder of the repo. |
 | `copy_words` | `20` | The shortest paragraph, in words, that `copied_text` compares. Default 20. |
+| `plugins` | `["tools/docs_checks.py"]` | The repo's own checks, as Python files in the repo. Each file has `CHECKS`, its checks with their default modes, an optional `ONE_PAGE` for the ones `--staged` runs, and `run(check, repo, vault, files)`, which returns `(path, line, message)` problems. Its checks take modes here like the built-in ones, and count in the same tally. A plug-in that crashes fails the run. |
 
 ```toml
 [knowledge]
