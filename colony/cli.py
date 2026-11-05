@@ -205,15 +205,37 @@ def session_env(person: str, session: str, config_dir: str) -> dict[str, str]:
 def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: str) -> list[str]:
     """A session's command line: Remote Control under its title, the role's model and effort, and the first prompt."""
     settings = config["roles"][role]
-    argv = ["claude", "--remote-control", title, "--model", settings["model"], "--effort", settings["effort"], prompt]
+    argv = ["claude", "--remote-control", title, "--model", settings["model"], "--effort", settings["effort"],
+            "--permission-mode", settings.get("permission_mode", "auto"), prompt]
     # The default folder also drops a CLAUDE_CONFIG_DIR inherited from the caller's shell.
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
 
-def launch(config: dict, args, session: str, role: str, prompt: str, cmux_only: bool = False) -> int:
-    """Open one session on the person's account with the most room, in a new cmux workspace or in this terminal.
+def cmux_usable() -> bool:
+    """Whether cmux is on PATH and takes commands from this process, which it does only inside cmux."""
+    if shutil.which("cmux") is None:
+        return False
+    try:
+        return subprocess.run(["cmux", "workspace", "list"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
-    A dry run prints the command, the env names (never their values) and where it would open, and runs nothing.
+
+def where_to_open(args) -> str:
+    """cmux when it takes us, this terminal for --here or a person at a terminal, else a background session."""
+    if getattr(args, "here", False):
+        return "terminal"
+    if cmux_usable():
+        return "cmux"
+    return "terminal" if sys.stdin.isatty() else "background"
+
+
+def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
+    """Open one session on the person's account with the most room: in cmux, in this terminal, or in the background.
+
+    A background session runs under Remote Control, so the person follows it in the Claude app, or with
+    `claude attach`. A dry run prints the command, the env names (never their values) and where it would
+    open, and runs nothing.
     """
     person = person_of(config, args)
     account, config_dir = pick_account(config, person)
@@ -221,10 +243,9 @@ def launch(config: dict, args, session: str, role: str, prompt: str, cmux_only: 
     env = session_env(person, session, config_dir)
     argv = claude_argv(config, role, title, config_dir, prompt)
     root = str(repo_root())
-    in_cmux = not getattr(args, "here", False) and shutil.which("cmux") is not None
-    if cmux_only and not in_cmux:
-        raise ColonyError(f"open needs cmux on PATH; in a new terminal run: {NAME} join {session}")
-    where = f"a new cmux workspace at {root}" if in_cmux else f"this terminal at {root}"
+    mode = where_to_open(args)
+    where = {"cmux": f"a new cmux workspace at {root}", "terminal": f"this terminal at {root}",
+             "background": f"a background session at {root}; follow it in the Claude app or with `claude attach`"}[mode]
     if args.dry_run:
         print("command:", shlex.join(argv))
         print("env:", " ".join(env))
@@ -236,13 +257,17 @@ def launch(config: dict, args, session: str, role: str, prompt: str, cmux_only: 
     # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
     # subscription, so a session drops it unless colony.toml says to use it.
     keep_key = config.get("budget", {}).get("use_api_key", False)
-    if in_cmux:
+    inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
+    if mode == "cmux":
         command = argv if keep_key else ["env", "-u", "ANTHROPIC_API_KEY", *argv]
         cmd = ["cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
         cmd += [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
         return subprocess.run(cmd).returncode
+    if mode == "background":
+        at = argv.index("claude") + 1
+        background = [*argv[:at], "--bg", "--name", title, *argv[at:]]
+        return subprocess.run(background, cwd=root, env={**inherited, **env}).returncode
     os.chdir(root)
-    inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
     os.execvpe(argv[0], argv, {**inherited, **env})
 
 
@@ -420,7 +445,7 @@ def builder_prompt(name: str) -> str:
 
 def open_builder(config: dict, args) -> int:
     """Open a builder on this computer in a new cmux workspace (the lead runs this)."""
-    return launch(config, args, args.name, "builder", builder_prompt(args.name), cmux_only=True)
+    return launch(config, args, args.name, "builder", builder_prompt(args.name))
 
 
 def origin_url() -> str:

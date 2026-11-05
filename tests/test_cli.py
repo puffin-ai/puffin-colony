@@ -70,6 +70,8 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
     for key in (cli.SESSION_ENV, cli.PERSON_ENV, "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(key, raising=False)
+    # A person at a terminal, unless a test says otherwise: with no cmux, the session opens right here.
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True, raising=False)
     return tmp_path
 
 
@@ -198,7 +200,7 @@ def test_no_command_shows_the_setup_plan_when_the_repo_has_no_config(host, capsy
 def test_no_command_opens_the_lead_when_the_repo_has_a_config(config, capsys):
     assert cli.main(["--dry-run", "--person", "ana"]) == 0
     out = capsys.readouterr().out
-    assert f"command: claude --remote-control demo-lead --model m --effort high {LEAD_PROMPT}" in out
+    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in out
     assert "setup" not in out
 
 
@@ -232,7 +234,7 @@ def test_lead_dry_run_without_cmux_uses_this_terminal_and_hides_values(home, con
     claude_log = make_stub(home / "bin", "claude")
     code, out = run_lead(config, capsys)
     assert code == 0
-    assert f"command: claude --remote-control demo-lead --model m --effort high {LEAD_PROMPT}" in out
+    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in out
     assert f"env: {ENV_NAMES}\n" in out
     assert "dry run: demo-lead on account first, in this terminal" in out
     assert str(home / "first") not in out and "21600000" not in out
@@ -243,14 +245,14 @@ def test_lead_dry_run_with_cmux_opens_a_workspace_and_runs_nothing(home, config,
     cmux_log = make_stub(home / "bin", "cmux")
     code, out = run_lead(config, capsys)
     assert code == 0 and "in a new cmux workspace" in out
-    assert not cmux_log.exists()
+    assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
 
 def test_here_forces_this_terminal_when_cmux_is_on_path(home, config, capsys):
     cmux_log = make_stub(home / "bin", "cmux")
     _, out = run_lead(config, capsys, here=True)
     assert "in this terminal" in out
-    assert not cmux_log.exists()
+    assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
 
 def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, capsys):
@@ -277,7 +279,7 @@ def test_join_dry_run_says_what_is_missing_and_shows_the_builder(home, config, c
     assert "missing: claude: install Claude Code" in out
     assert "missing: gh auth: run `gh auth login`" in out
     assert gh_log.read_text().split() == ["auth", "status"]
-    assert f"command: claude --remote-control demo-builder-2 --model m --effort medium {builder_prompt('builder-2')}" in out
+    assert f"command: claude --remote-control demo-builder-2 --model m --effort medium --permission-mode auto {builder_prompt('builder-2')}" in out
     assert f"env: {ENV_NAMES}\n" in out
 
 
@@ -311,14 +313,31 @@ def test_open_dry_run_opens_the_builder_in_cmux(home, config, capsys):
     cmux_log = make_stub(home / "bin", "cmux")
     assert cli.open_builder(config, builder_args("builder-1")) == 0
     out = capsys.readouterr().out
-    assert f"--model m --effort medium {builder_prompt('builder-1')}" in out
+    assert f"--model m --effort medium --permission-mode auto {builder_prompt('builder-1')}" in out
     assert "dry run: demo-builder-1 on account first, in a new cmux workspace" in out
-    assert not cmux_log.exists()
+    assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
 
-def test_open_without_cmux_says_to_join_instead(config):
-    with pytest.raises(cli.ColonyError, match="in a new terminal run: colony join builder-1"):
-        cli.open_builder(config, builder_args("builder-1"))
+def test_open_without_cmux_or_a_terminal_opens_a_background_session(home, config, capsys, monkeypatch):
+    """The lead runs `colony open` inside its own session, with no cmux to talk to and no terminal."""
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    cli.open_builder(config, builder_args("builder-1"))
+    assert "in a background session" in capsys.readouterr().out
+
+
+def test_a_background_session_runs_claude_with_bg_and_its_name(home, host, config, monkeypatch):
+    claude_log = make_stub(home / "bin", "claude")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    cli.open_builder(config, builder_args("builder-1", dry_run=False))
+    args = claude_log.read_text().splitlines()
+    assert args[:4] == ["--bg", "--name", "demo-builder-1", "--remote-control"]
+    assert "--permission-mode" in args and args[args.index("--permission-mode") + 1] == "auto"
+
+
+def test_cmux_that_refuses_this_process_counts_as_no_cmux(home, config, capsys):
+    make_stub(home / "bin", "cmux", code=1)
+    _, out = run_lead(config, capsys)
+    assert "in this terminal" in out
 
 
 @pytest.mark.parametrize("name", ["lead", "Builder 2", "x_y"])
@@ -335,7 +354,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
     assert run.returncode == 0, run.stderr
     assert "command: env -u CLAUDE_CONFIG_DIR claude --remote-control demo-lead" in run.stdout
     assert "env: COLONY_SESSION COLONY_PERSON CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
-    assert "on account first, in this terminal" in run.stdout
+    assert "on account first, in a background session" in run.stdout  # a subprocess has no terminal
     assert not claude_log.exists()
 
 
