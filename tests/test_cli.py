@@ -1,6 +1,7 @@
 """Tests for the command line: config, account choice, setup or lead, join and open."""
 import argparse
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,14 @@ provider_dollars = 0
 ENV_NAMES = ("COLONY_SESSION COLONY_PERSON CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
              "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS CLAUDE_CODE_AUTO_COMPACT_WINDOW")
 LEAD_PROMPT = "'Read .colony/playbook.md, Lead section, and start.'"
+
+
+SETTINGS_FLAG = re.compile(r" --settings '[^']*'")
+
+
+def no_settings(out: str) -> str:
+    """A dry run's output without the --settings JSON, whose parts the settings tests check."""
+    return SETTINGS_FLAG.sub("", out)
 
 
 def builder_prompt(name):
@@ -200,7 +209,7 @@ def test_no_command_shows_the_setup_plan_when_the_repo_has_no_config(host, capsy
 def test_no_command_opens_the_lead_when_the_repo_has_a_config(config, capsys):
     assert cli.main(["--dry-run", "--person", "ana"]) == 0
     out = capsys.readouterr().out
-    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in out
+    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in no_settings(out)
     assert "setup" not in out
 
 
@@ -234,7 +243,7 @@ def test_lead_dry_run_without_cmux_uses_this_terminal_and_hides_values(home, con
     claude_log = make_stub(home / "bin", "claude")
     code, out = run_lead(config, capsys)
     assert code == 0
-    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in out
+    assert f"command: claude --remote-control demo-lead --model m --effort high --permission-mode auto {LEAD_PROMPT}" in no_settings(out)
     assert f"env: {ENV_NAMES}\n" in out
     assert "dry run: demo-lead on account first, in this terminal" in out
     assert str(home / "first") not in out and "21600000" not in out
@@ -279,7 +288,7 @@ def test_join_dry_run_says_what_is_missing_and_shows_the_builder(home, config, c
     assert "missing: claude: install Claude Code" in out
     assert "missing: gh auth: run `gh auth login`" in out
     assert gh_log.read_text().split() == ["auth", "status"]
-    assert f"command: claude --remote-control demo-builder-2 --model m --effort medium --permission-mode auto {builder_prompt('builder-2')}" in out
+    assert f"command: claude --remote-control demo-builder-2 --model m --effort medium --permission-mode auto {builder_prompt('builder-2')}" in no_settings(out)
     assert f"env: {ENV_NAMES}\n" in out
 
 
@@ -313,7 +322,7 @@ def test_open_dry_run_opens_the_builder_in_cmux(home, config, capsys):
     cmux_log = make_stub(home / "bin", "cmux")
     assert cli.open_builder(config, builder_args("builder-1")) == 0
     out = capsys.readouterr().out
-    assert f"--model m --effort medium --permission-mode auto {builder_prompt('builder-1')}" in out
+    assert f"--model m --effort medium --permission-mode auto {builder_prompt('builder-1')}" in no_settings(out)
     assert "dry run: demo-builder-1 on account first, in a new cmux workspace" in out
     assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
@@ -332,6 +341,41 @@ def test_a_background_session_runs_claude_with_bg_and_its_name(home, host, confi
     args = claude_log.read_text().splitlines()
     assert args[:4] == ["--bg", "--name", "demo-builder-1", "--remote-control"]
     assert "--permission-mode" in args and args[args.index("--permission-mode") + 1] == "auto"
+
+
+def test_a_background_session_carries_its_own_session_in_its_settings_not_the_daemons(home, host, config,
+                                                                                         monkeypatch):
+    """The live bug: `claude --bg` hands the session to a spare process of a daemon the lead started, whose
+    environment says COLONY_SESSION=lead, so a spec session's permission pop-up posted nothing. The session's own
+    env rides in --settings, which overrides what the spare inherited."""
+    claude_log = make_stub(home / "bin", "claude")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")  # the daemon's, and so the spare's, environment
+    cli.open_builder(config, builder_args("builder-1", dry_run=False))
+    args = claude_log.read_text().splitlines()
+    settings = json.loads(args[args.index("--settings") + 1])
+    assert settings["env"][cli.SESSION_ENV] == "builder-1" and settings["env"][cli.PERSON_ENV] == "ana"
+    assert "CLAUDE_CONFIG_DIR" not in settings["env"]  # it picks the account, so it stays in the process env
+
+
+def test_routine_git_gh_and_colony_commands_never_stop_a_session_to_ask(home, host, config, monkeypatch):
+    claude_log = make_stub(home / "bin", "claude")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    cli.open_builder(config, builder_args("builder-1", dry_run=False))
+    args = claude_log.read_text().splitlines()
+    permissions = json.loads(args[args.index("--settings") + 1])["permissions"]
+    assert {"Bash(git:*)", "Bash(gh:*)", "Bash(colony:*)"} <= set(permissions["allow"])
+    assert {"Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push origin dev:*)"} <= set(
+        permissions["deny"])
+    assert str(home / "trees") in permissions["additionalDirectories"]  # worktrees = "~/trees"
+    assert str(host.parent) in permissions["additionalDirectories"]  # the playbook's ../<name>-<n>
+    assert args.index("--settings") < args.index("--permission-mode") < len(args) - 1  # the prompt stays last
+
+
+def test_a_dry_run_shows_the_settings_env_names_but_never_their_values(home, config, capsys):
+    _, out = run_lead(config, capsys)
+    shown = json.loads(re.search(r"--settings '([^']*)'", out)[1])
+    assert set(shown["env"]) >= {cli.SESSION_ENV, cli.PERSON_ENV} and set(shown["env"].values()) == {"…"}
 
 
 def test_cmux_that_refuses_this_process_counts_as_no_cmux(home, config, capsys):

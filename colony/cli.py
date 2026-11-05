@@ -265,11 +265,40 @@ def session_env(person: str, session: str, config_dir: str) -> dict[str, str]:
     return env
 
 
-def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: str) -> list[str]:
-    """A session's command line: Remote Control under its title, the role's model and effort, and the first prompt."""
-    settings = config["roles"][role]
-    argv = ["claude", "--remote-control", title, "--model", settings["model"], "--effort", settings["effort"],
-            "--permission-mode", settings.get("permission_mode", "auto"), prompt]
+# Routine commands a session runs all day, allowed so the permission mode never stops a session to ask about them,
+# and the pushes no session makes, denied. A deny rule wins over an allow rule.
+ROUTINE = ("Bash(git:*)", "Bash(gh:*)", "Bash(colony:*)", "Bash(tools/board:*)")
+NEVER = ("Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push --force-with-lease:*)")
+
+
+def session_settings(config: dict, env: dict[str, str], masked: bool = False) -> str:
+    """The --settings JSON every session opens with: its env, and the permissions for routine commands.
+
+    The env goes in the settings too, because `claude --bg` hands a new session to a spare process of a daemon an
+    earlier session started, which carries that session's environment: without this, a researcher, spec or builder
+    opened in the background ran as the lead (COLONY_SESSION=lead), and its hooks and lines spoke for the lead.
+    CLAUDE_CONFIG_DIR stays out: it picks the account, so it must be in the process's own environment. `masked`
+    shows the env's names alone, for a dry run."""
+    base = config["project"]["base"]
+    worktrees = Path(config["project"].get("worktrees", "")).expanduser() if config["project"].get("worktrees") else None
+    folders = [str(worktrees)] if worktrees else []
+    folders.append(str(repo_root().parent))  # the playbook's ../<name>-<n> worktrees sit beside the clone
+    settings = {
+        "env": {key: "…" if masked else value for key, value in env.items() if key != "CLAUDE_CONFIG_DIR"},
+        "permissions": {"allow": list(ROUTINE),
+                        "deny": [*NEVER, f"Bash(git push origin {base}:*)", f"Bash(git push origin HEAD:{base}:*)"],
+                        "additionalDirectories": folders},
+    }
+    return json.dumps(settings, ensure_ascii=False)
+
+
+def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: str, settings: str = "") -> list[str]:
+    """A session's command line: Remote Control under its title, the role's model and effort, its settings
+    (session_settings), and the first prompt."""
+    role_settings = config["roles"][role]
+    argv = ["claude", "--remote-control", title, "--model", role_settings["model"], "--effort", role_settings["effort"],
+            *(["--settings", settings] if settings else []),
+            "--permission-mode", role_settings.get("permission_mode", "auto"), prompt]
     # The default folder also drops a CLAUDE_CONFIG_DIR inherited from the caller's shell.
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
@@ -305,7 +334,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     account, config_dir = choose_account(config, args)
     title = f"{config['project']['name']}-{session}"
     env = session_env(person, session, config_dir)
-    argv = claude_argv(config, role, title, config_dir, prompt)
+    argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env, masked=args.dry_run))
     root = str(repo_root())
     mode = where_to_open(args)
     where = {"cmux": f"a new cmux workspace at {root}", "terminal": f"this terminal at {root}",
@@ -325,6 +354,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
             wait.beat(config["project"]["name"], wait.lead_name(config, args), account, env[wait.TOKEN_ENV])
         except wait.LeadTaken as e:
             raise ColonyError(f"a lead is running here, so {NAME} opens no second one: {e}") from None
+        argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env))
     print(f"Opening {title} on account {account}, in {where}.", flush=True)
     # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
     # subscription, so a session drops it unless colony.toml says to use it.
