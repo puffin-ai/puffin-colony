@@ -357,3 +357,60 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
     assert config["gate"]["merge_after_fast_check"] is True and config["people"]["names"] == {"ana": "Ana", "ben": "Ben"}
     assert (PACKAGE / "presets" / config["project"]["preset"] / "core.md") == CORE
     assert wait.display_name(config, "ana") == "Ana"
+
+
+# The playbook's Hack section, which a hack lead and its builders follow instead of Lead and Builder
+
+PLAYBOOK = (PACKAGE / "playbook.md").read_text()
+REPO = PACKAGE.parent
+
+
+def playbook_section(name: str) -> str:
+    """One `## <name>` section of the playbook, with its subsections, up to the next `## `."""
+    start = PLAYBOOK.index(f"\n## {name}\n")
+    end = PLAYBOOK.find("\n## ", start + 1)
+    return PLAYBOOK[start:end if end != -1 else None]
+
+
+def test_the_lead_and_builder_sections_send_a_hack_session_to_the_hack_section():
+    for name in ("Lead", "Builder"):
+        assert "In hack mode, follow the Hack section instead." in playbook_section(name)
+
+
+def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_cards():
+    hack = playbook_section("Hack")
+    for part in ("### The board", "### Hack lead", "### Hack builder"):
+        assert part in hack
+    for rule in ("`colony post <to> \"<sentence>\"`, with no card number", "`<login>-lead`", "`@all`",
+                 "ask its owner on the board", "Only the team lead reassigns work", "`colony open <name>`",
+                 "`colony merge <login>/<task>`", "never with `git add -A`", "never force-push", "`{fast_check}`",
+                 "origin/{base}", "keep `colony wait` running", "`@all freeze: only fixes from now`"):
+        assert rule in hack, rule
+    for startup_only in ("gh issue create", "colony board set", "colony tier", "colony spec", "colony retro"):
+        assert startup_only not in hack, startup_only
+
+
+def test_the_hack_section_holds_only_the_placeholders_setup_fills_in_the_playbook():
+    assert set(PLACEHOLDER.findall(playbook_section("Hack"))) <= {"base", "fast_check"}
+
+
+def test_a_hack_lead_and_builder_open_on_the_hack_section(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    hack = {"project": {"mode": "hack"}}
+    assert cli.section(hack, "Lead") == "Hack" and cli.section({"project": {}}, "Lead") == "Lead"
+    assert cli.builder_prompt("builder-1", hack) == \
+        "Read .colony/playbook.md, Hack section. You are builder-1. Start the wait."
+    assert cli.builder_prompt("builder-1", {"project": {"mode": "solo"}}).startswith(
+        "Read .colony/playbook.md, Builder section.")
+
+
+def test_the_docs_say_board_unread_prints_every_new_post_and_marks_yours():
+    script = (PACKAGE / "scripts" / "board").read_text()
+    assert "every post by others since your last look, marking the ones for you" in script
+    assert '[ "$flag" = you ] && mark=", for you"' in script
+    for doc in ("docs/commands.md", "docs/hackathon.md"):
+        text = (REPO / doc).read_text()
+        assert ("| `tools/board unread` | Prints every post by others since your last look, and marks the ones for "
+                "you `, for you`. |") in text, doc
+        assert "Prints the posts addressed to you that you haven't seen" not in text, doc
+        assert "Prints the posts for you that you haven't seen" not in text, doc

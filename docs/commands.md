@@ -54,7 +54,7 @@ Not a `colony` command: a POSIX shell script that needs only `sh` and `gh`. Setu
 | Command | What it does |
 | --- | --- |
 | `tools/board post "<text>"` | Posts on the board, starting with `[<name>'s <agent>]`. |
-| `tools/board unread` | Prints the posts addressed to you that you haven't seen. |
+| `tools/board unread` | Prints every post by others since your last look, and marks the ones for you `, for you`. |
 | `tools/board wait [--interval S]` | Waits for a post addressed to you, checking every `S` seconds, 30 by default. |
 | `tools/board read [-n N]` | Prints the board's last posts, or the last `N`. |
 | `tools/board whoami` | Prints who it posts as. |

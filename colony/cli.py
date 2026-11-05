@@ -34,8 +34,8 @@ DIR = f".{NAME}"  # the folder a host repo keeps Colony's files in: the config, 
 CONFIG_NAME = f"{NAME}.toml"
 SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
 LEAD = "lead"
-LEAD_PROMPT = "Read {dir}/playbook.md, Lead section, and start."
-BUILDER_PROMPT = "Read {dir}/playbook.md, Builder section. You are {builder}. Start the wait."
+LEAD_PROMPT = "Read {dir}/playbook.md, {section} section, and start."
+BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
@@ -482,7 +482,7 @@ def hi(args) -> int:
     print(f"{DISPLAY}: set up here, project {project}, {mode(config)} mode.")
     me = os.environ.get(SESSION_ENV, "").lower()
     if me:
-        role = "Lead" if me == LEAD else "Builder"
+        role = section(config, "Lead" if me == LEAD else "Builder")
         print(f"This session is {me}, which {NAME} opened: follow the {role} section of {DIR}/playbook.md.")
         return 0
     try:
@@ -664,19 +664,25 @@ def tools(args) -> int:
     return 0
 
 
+def section(config: dict, role: str) -> str:
+    """The playbook section a lead or builder follows: its role's, `Lead` or `Builder`, or `Hack` in hack mode."""
+    return "Hack" if mode(config) == "hack" else role
+
+
 def lead(config: dict, args) -> int:
     """Open the person's lead."""
-    return launch(config, args, LEAD, "lead", LEAD_PROMPT.replace("{dir}", DIR))
+    return launch(config, args, LEAD, "lead", LEAD_PROMPT.replace("{dir}", DIR).replace("{section}",
+                                                                                         section(config, "Lead")))
 
 
-def builder_prompt(name: str) -> str:
+def builder_prompt(name: str, config: dict) -> str:
     """A builder's first prompt."""
-    return BUILDER_PROMPT.replace("{dir}", DIR).replace("{builder}", name)
+    return BUILDER_PROMPT.replace("{dir}", DIR).replace("{section}", section(config, "Builder")).replace("{builder}", name)
 
 
 def open_builder(config: dict, args) -> int:
     """Open a builder on this computer in a new cmux workspace (the lead runs this)."""
-    return launch(config, args, args.name, "builder", builder_prompt(args.name))
+    return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
 
 
 def brief(name: str) -> tuple[str, str]:
@@ -744,7 +750,7 @@ def join(config: dict, args) -> int:
         print("missing:", item)
     if missing and not args.dry_run:
         return 1
-    return launch(config, args, args.name, "builder", builder_prompt(args.name))
+    return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
 
 
 def batch(config: dict, args) -> int:

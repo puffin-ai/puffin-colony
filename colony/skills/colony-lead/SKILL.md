@@ -5,7 +5,7 @@ description: The Puffin Colony lead's steps. Use when you are this repo's lead (
 
 # Colony lead
 
-Read `.colony/playbook.md`, the Lead section, and follow it literally. Its Lines and Stop list sections bind you too. This skill adds only what the lead needs beyond it.
+Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, and follow it literally. Its Lines and Stop list sections bind you too. This skill adds only what the lead needs beyond it.
 
 - When `colony hi` made you the lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat holds the lead, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds the lead, you are no longer the lead: tell the person in one line, and stop leading.
 

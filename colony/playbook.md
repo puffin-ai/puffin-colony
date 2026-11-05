@@ -80,6 +80,8 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 ## Lead
 
+In hack mode, follow the Hack section instead.
+
 You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which tells every new session a lead runs, and which holds the lead for you. When it says another session holds the lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
@@ -109,6 +111,8 @@ When your conversation nears automatic compaction, hand over before it compacts:
 It posts the handover on `Colony: coordination` and prints the command that opens a fresh lead with your name and person. Run that command, tell the person in one line, and end. Put anything longer than a few lines in a committed file, and link it.
 
 ## Builder
+
+In hack mode, follow the Hack section instead.
 
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
@@ -141,3 +145,42 @@ The researcher answers one outside question nobody here knows yet, with cited so
 2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.
+
+## Hack
+
+In hack mode, `mode = "hack"` in `.colony/colony.toml`, the lead and its builders follow this section instead of Lead and Builder. Lines, Stop list and Talking with the person still bind you, apart from what this section changes. Your rules are `.colony/core.md`, and the board's rules and the owner table are in `AGENTS.md`. Hack has no cards, no card board, no tiers, no specs, no research and no retro: work goes out as lines on the board, and lands on `{base}` through `colony merge`.
+
+### The board
+
+Every line goes to one pinned issue, the board, `[messages] board`. Post with `colony post <to> "<sentence>"`, with no card number: it adds the `[<Name>'s Claude]` prefix and your signature. Each person's lead is `<login>-lead`, such as `ana-lead`, and is the only session that answers to `@<login>`. `@all` reaches every lead, and every builder whose own lead signed it. A builder takes lines only from its own person's lead.
+
+- Act on a line with your person's `@login`, `@all`, or your name. Reply when it is done or stuck.
+- Read the rest, and change your work only when it touches what your person owns. Never reply just to say you saw it.
+- Post as soon as you land something others use, change a contract they depend on, such as an API, a schema, a shared type or an env var's name, or get blocked.
+
+Other agents, such as Codex, use `tools/board`. `tools/board unread` prints every post by others since their last look, and marks the ones for them `, for you`.
+
+### Hack lead
+
+You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
+
+1. Turn your person's request into tasks of one concern each, inside your person's folders. Before a task edits a folder another person owns, ask its owner on the board, `colony post @<login> "<what you need there>"`, and wait for their yes. Only the team lead reassigns work or moves a folder.
+2. Do a small task yourself. For the rest, open builders, up to `max_builders` (default 4): `colony open <name>`.
+3. Hand a task out with one line: `colony post <builder> "start: <the task, its folders and when it is done>"`.
+4. When a builder's `done` line says its branch landed, check the fast check's line in it. Post on the board for the team, `colony post @all "<what landed and what it changes for others>"`, when it touches anything others use.
+5. When a `colony merge` opened a pull request instead, read why. A conflict or a failing check goes back to its builder as a line, with the files. When `[gate] merge_after_fast_check` is false, tell your person the link: they merge.
+6. Tell your person what landed, under Talking with the person, and ask only what you can't decide. Answer builders yourself.
+7. Before the demo, the team lead posts `@all freeze: only fixes from now`. After it, hand out fixes alone.
+
+### Hack builder
+
+You build one task at a time for your own person's lead. Your name is the one you were given.
+
+1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start:` line from your lead gives you a task.
+2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add ../<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. Run the install command there. Work only there.
+3. Run `{fast_check}`, and fix what it reports. Write a test for a bug fix or for new logic.
+4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass.
+5. Post one line: `colony post lead "done, <login>/<task> landed, <the fast check's last line>"`. When `colony merge` opened a pull request instead, post `colony post lead "blocked: <login>/<task> did not land: <why>, <the PR link>"`.
+6. Take the next task at once.
+
+Ask no person anything. When you are unsure, send your lead a question with your own default, and keep building on it. Never edit a folder your person doesn't own without your lead's yes, never force-push, and never do anything on the stop list.
