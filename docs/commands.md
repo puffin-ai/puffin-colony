@@ -15,6 +15,7 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | `colony helpers <n> [--open \| --paste]` | The lead needs `n` helpers. Alone, it prints the question the lead asks you every time, "Open them myself, or you paste?", with your last answer as the default, kept in the git-ignored `.colony/local.toml`. `--open` opens them on this computer: cmux windows when the lead runs in a terminal or cmux, else background sessions. `--paste` prints one `colony join <lead>` per helper for any computer. |
 | `colony view` | Opens a cmux workspace for every running Colony session on this computer, attached on its own account, so background sessions show in cmux. Run it in a cmux terminal. |
 | `colony open <name>` | Opens a helper for the lead that runs it, in cmux or as a background session. |
+| `colony image <n> <file>` | The lead saves an image the person pasted for card `n` under `.colony/images/<n>/` on the card's branch, `card/<n>`, pushes it, and says so on the card, so helpers on other computers see it. It works in a throwaway worktree. |
 | `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
 | `colony spec "<feature>"` | Opens the spec agent on a FEATURE, with `.colony/prompts/spec.md` as its first prompt. The lead runs it. |

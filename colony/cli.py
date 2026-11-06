@@ -1144,6 +1144,56 @@ def card_folders(text: str) -> list[str]:
     return []
 
 
+IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".svg")
+IMAGE_LIMIT = 10_000_000  # bytes
+
+
+def card_branch(card: int) -> str:
+    """The card's own branch, which holds what the lead adds for it, such as a pasted image: card/<n>."""
+    return f"card/{card}"
+
+
+def image(config: dict, args) -> int:
+    """`colony image <n> <file>`: the lead saves an image the person pasted for card n under .colony/images/<n>/ on
+    the card's branch, card/<n>, and pushes it, so a helper on any computer sees it. It works in a throwaway worktree,
+    so the lead's own checkout is untouched, and comments on the card where the image is."""
+    from colony import wait
+
+    source = Path(args.file).expanduser()
+    if not source.is_file() or source.suffix.lower() not in IMAGE_TYPES:
+        raise ColonyError(f"{args.file} is not an image file ({', '.join(IMAGE_TYPES)})")
+    if source.stat().st_size > IMAGE_LIMIT:
+        raise ColonyError(f"{args.file} is over {IMAGE_LIMIT // 1_000_000} MB: save a smaller copy")
+    root, branch = repo_root(), card_branch(args.card)
+
+    def git(*parts: str, cwd: Path = root) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *parts], cwd=cwd, capture_output=True, text=True)
+
+    git("fetch", "origin")
+    start = f"origin/{branch}" if git("rev-parse", "--verify", "--quiet", f"origin/{branch}").returncode == 0 \
+        else f"origin/{config['project']['base']}"
+    folder = Path(config["project"].get("worktrees") or root.parent) / f"{config['project']['name']}-image-{args.card}"
+    made = git("worktree", "add", "--detach", str(folder), start)
+    if made.returncode:
+        raise ColonyError(f"git worktree add failed: {made.stderr.strip()[:300]}")
+    try:
+        name = re.sub(r"[^\w.-]", "-", source.name)
+        target = Path(DIR) / "images" / str(args.card) / name
+        (folder / target).parent.mkdir(parents=True, exist_ok=True)
+        (folder / target).write_bytes(source.read_bytes())
+        for step in (("add", str(target)), ("commit", "-m", f"card #{args.card}: add {name}"),
+                     ("push", "origin", f"HEAD:refs/heads/{branch}")):
+            done = git(*step, cwd=folder)
+            if done.returncode:
+                raise ColonyError(f"git {step[0]} failed: {(done.stderr or done.stdout).strip()[:300]}")
+    finally:
+        git("worktree", "remove", "--force", str(folder))
+    wait.gh("issue", "comment", str(args.card), "--repo", config["project"]["repo"], "--body",
+            f"Image for this card: `{target}` on the branch `{branch}`. Start the card's branch from origin/{branch}.")
+    print(f"Saved {target} on {branch}, and said so on #{args.card}.")
+    return 0
+
+
 def take(config: dict, args) -> int:
     """`colony take <n>`: a helper takes card n, which must sit in its lead's folders, and marks it In progress with
     itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'."""
@@ -1172,6 +1222,9 @@ def take(config: dict, args) -> int:
                               f"{lead}, and take no card in another lead's folders")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
+    if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"origin/{card_branch(args.card)}"],
+                      capture_output=True).returncode == 0:
+        print(f"Its images are on origin/{card_branch(args.card)}: start your branch from there, not from the base.")
     return 0
 
 
@@ -1271,6 +1324,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("folders", nargs="*", metavar="folder", help="the folders it holds; none for the rest of the repo")
     p.add_argument("--person", help="whose session this is")
     p.set_defaults(run=claim)
+    p = sub.add_parser("image", help="the lead: save a pasted image for a card on its branch card/<n>, for every "
+                                     "helper to see")
+    p.add_argument("card", type=int, help="the card's issue number")
+    p.add_argument("file", help="the image file")
+    p.set_defaults(run=image)
     p = sub.add_parser("take", help="a helper: take a card inside its lead's folders, and mark it In progress")
     p.add_argument("card", type=int, help="the card's issue number")
     p.set_defaults(run=take)

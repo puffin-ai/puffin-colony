@@ -614,3 +614,32 @@ def test_colony_view_builds_one_cmux_command_per_running_session(home, config, c
     assert admin[-1] == f"env CLAUDE_CONFIG_DIR={home / '.claude-admin'} claude attach aa11"
     default = next(c for c in commands if c[3] == "demo-builder-2")
     assert default[-1] == "claude attach dd44"  # the default folder stays unset, or the login is lost
+
+
+# A pasted image goes on the card's branch
+
+
+def test_a_pasted_image_lands_on_the_cards_branch_for_every_helper(home, host, config, monkeypatch, capsys):
+    remote = home / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "dev", str(remote)], check=True)
+    for step in (["remote", "add", "origin", str(remote)], ["commit", "-q", "--allow-empty", "-m", "start"],
+                 ["push", "-q", "origin", "HEAD:dev"]):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *step], cwd=host, check=True)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "t")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@t")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "t")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@t")
+    comments = []
+    monkeypatch.setattr(wait, "gh", lambda *args: comments.append(args) or "")
+    picture = home / "Screenshot 1.png"
+    picture.write_bytes(b"\x89PNG fake")
+    config["project"]["worktrees"] = str(home / "trees")
+    assert cli.image(config, argparse.Namespace(card=12, file=str(picture))) == 0
+    shown = subprocess.run(["git", "--git-dir", str(remote), "show", "card/12:.colony/images/12/Screenshot-1.png"],
+                           capture_output=True, check=True).stdout
+    assert shown == b"\x89PNG fake"
+    assert "on the branch `card/12`" in comments[0][-1]
+    assert not (host / ".colony" / "images").exists()  # the lead's own checkout is untouched
+    assert not (home / "trees" / "demo-image-12").exists()  # the throwaway worktree is gone
+    with pytest.raises(cli.ColonyError, match="is not an image file"):
+        cli.image(config, argparse.Namespace(card=12, file=str(home / "notes.txt")))
