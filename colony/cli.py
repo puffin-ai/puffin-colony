@@ -150,6 +150,8 @@ def load_config(path=None) -> dict:
                 if name not in config["accounts"]:
                     raise ColonyError(f"{path}: [people.{person}] names the account {name!r}, which no "
                                       "[accounts.<name>] table holds")
+            if not isinstance(table.get("quiet_lead", False), bool):
+                raise ColonyError(f"{path}: [people.{person}] quiet_lead is true or false")
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = os.path.expanduser(project[key])
@@ -299,6 +301,12 @@ def person_accounts(config: dict, person: str) -> tuple[list[str], list[str]]:
     if isinstance(table, dict) and table.get("accounts"):
         return list(table["accounts"]), list(table.get("last_resort", []))
     return [name for name, a in config["accounts"].items() if a["person"] in (person, "any")], []
+
+
+def quiet_lead(config: dict, person: str) -> bool:
+    """Whether the person wants a quiet lead, `[people.<person>] quiet_lead = true`; false by default."""
+    table = config.get("people", {}).get(person)
+    return isinstance(table, dict) and table.get("quiet_lead", False)
 
 
 def in_hours(when: datetime | None, now: datetime) -> str:
@@ -743,6 +751,10 @@ def here(args) -> int:
         return 0
     print('A session a person types into is a lead. (When their first message was "join" or "join <lead>", run '
           f"`{NAME} join [<lead>]` instead, and be that lead's helper.)")
+    if quiet_lead(config, person):
+        print(f"{person} wants a quiet lead ([people.{person}] quiet_lead = true): act on notifications silently, "
+              "write to them only to converse or when they must act, and put your own status lines on the board, "
+              "never in chat.")
     alive, _, note = presence.everyone(config)
     if note:
         print(note)

@@ -603,6 +603,12 @@ def test_a_people_table_must_name_real_accounts(host):
         cli.load_config(host / "colony.toml")
 
 
+def test_quiet_lead_must_be_true_or_false(host):
+    (host / "colony.toml").write_text(CONFIG + '\n[people.ana]\nquiet_lead = "yes"\n')
+    with pytest.raises(cli.ColonyError, match=r"\[people.ana\] quiet_lead is true or false"):
+        cli.load_config(host / "colony.toml")
+
+
 @pytest.mark.parametrize("argv", [["--account", "admin"], ["join", "builder-2", "--account", "admin"],
                                   ["open", "builder-2", "--account", "admin"], ["research", "q", "--account", "admin"],
                                   ["spec", "f", "--account", "admin"],
