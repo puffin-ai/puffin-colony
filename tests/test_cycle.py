@@ -20,8 +20,9 @@ def parse(*argv):
     return parser.parse_args(list(argv))
 
 
-def change(path, added=0, removed=0, status="M", old=None, lines=None):
-    """One file's part of a unified diff: `added` and `removed` filler lines, or the added `lines` given."""
+def change(path, added=0, removed=0, status="M", old=None, lines=None, gone=None):
+    """One file's part of a unified diff: `added` and `removed` filler lines, or the added `lines` and removed `gone`
+    lines given."""
     old = old or path
     head = f"diff --git a/{old} b/{path}\n"
     if status == "A":
@@ -33,7 +34,7 @@ def change(path, added=0, removed=0, status="M", old=None, lines=None):
     else:
         head += f"--- a/{path}\n+++ b/{path}\n"
     body = [f"+{line}" for line in (lines or [f"line {i}" for i in range(added)])]
-    body += [f"-old {i}" for i in range(removed)]
+    body += [f"-{line}" for line in (gone or [f"old {i}" for i in range(removed)])]
     return head + ("@@ -1 +1 @@\n" + "\n".join(body) + "\n" if body else "")
 
 
@@ -81,7 +82,7 @@ def test_tests_lockfiles_and_generated_files_do_not_count_toward_the_line_limits
     result = verdict(change("web/src/a.tsx", added=10), change("web/src/a.test.tsx", added=900),
                      change("web/src/gen/api.ts", added=900), config=config)
     assert result.tier == "TINY"
-    result = verdict(change("web/src/a.tsx", added=10), change("package-lock.json", added=900))
+    result = verdict(change("web/src/a.tsx", added=10), change("web/package-lock.json", added=900))
     assert result.tier == "SMALL" and result.reasons == ["1 place on the risk list"]
 
 
@@ -118,6 +119,120 @@ def test_weakened_checks_are_never_tiny():
     assert result.risks == ["checks: web/src/a.ts, adds the skip mark `eslint-disable`"]
     result = verdict(change("tests/test_a.py", status="D", removed=3))
     assert "checks: tests/test_a.py, moves or deletes a test file" in result.risks
+
+
+# A repo's own tier lines, in the shape of a web app, a site and a service with its own FEATURE lines
+
+SHAPED = {**CONFIG, "project": {**CONFIG["project"], "backend_paths": ["apps/service/"]}, "cycle": {
+    "docs": ["knowledge/"],
+    "feature_folders": ["apps/service/src/api/"],
+    "risk": {"config": ["apps/service/", "guide/", "REVIEW.md", "session"]},
+    "tiny_folders": ["apps/web/", "apps/site/"],
+    "structure_files": ["apps/*/src/screens/*.screen.tsx"],
+    "feature_triggers": [
+        {"why": "a ShareLevel change", "path": "apps/service/*", "added": ".*ShareLevel.*",
+         "removed": ".*ShareLevel.*"},
+        {"why": "a new registry key", "path": "apps/service/src/commands/registry.py",
+         "added": r'^\s*"([a-z_]+)"\s*:\s*Entry\(|REGISTRY\["([^"]+)"\]\s*='},
+        {"why": "a new tool", "path": "apps/service/src/tools/list.py", "added": r'name="([a-z_]+__[a-z_]+)"'},
+        {"why": "a name leaving HELD", "path": "apps/service/src/tools/list.py", "line": r"^\s*HELD\b",
+         "removed": r'"([^"]+)"|\*([A-Z][A-Z_]+)'},
+    ]}}
+
+
+@pytest.mark.parametrize("part, reason", [
+    (change("apps/service/src/sharing/rules.py", lines=["    level = ShareLevel.FRIENDS"],
+            gone=["    level = ShareLevel.ANYONE"]),
+     "a ShareLevel change, apps/service/src/sharing/rules.py: level = ShareLevel.ANYONE, level = ShareLevel.FRIENDS"),
+    (change("apps/service/tests/test_rules.py", lines=["assert ShareLevel.NOBODY"]),
+     "a ShareLevel change, apps/service/tests/test_rules.py: assert ShareLevel.NOBODY"),
+    (change("apps/service/src/commands/registry.py", lines=['    "move_exam": Entry(kind="write"),']),
+     "a new registry key, apps/service/src/commands/registry.py: move_exam"),
+    (change("apps/service/src/commands/registry.py", lines=['REGISTRY["sam_only"] = Entry()']),
+     "a new registry key, apps/service/src/commands/registry.py: sam_only"),
+    (change("apps/service/src/tools/list.py", lines=['    Tool(name="calendar__move", run=move),']),
+     "a new tool, apps/service/src/tools/list.py: calendar__move"),
+    (change("apps/service/src/tools/list.py", lines=['HELD = frozenset({"mail__send"})'],
+            gone=['HELD = frozenset({"mail__send", "mail__read", *WRITES})']),
+     "a name leaving HELD, apps/service/src/tools/list.py: WRITES, mail__read"),
+])
+def test_a_feature_trigger_from_the_config_makes_it_a_feature_with_its_why(part, reason):
+    result = verdict(part, config=SHAPED)
+    assert result.tier == "FEATURE" and reason in result.reasons
+
+
+@pytest.mark.parametrize("part", [
+    change("apps/service/src/sharing/rules.py", lines=["    level = ShareLevel.ANYONE"],
+           gone=["    level = ShareLevel.ANYONE"]),
+    change("apps/service/src/commands/registry.py", lines=['    "move_exam": Entry(kind="read"),'],
+           gone=['    "move_exam": Entry(kind="write"),']),
+    change("apps/service/src/tools/list.py", lines=['HELD = frozenset({"mail__send", "mail__read"})'],
+           gone=['HELD = frozenset({"mail__send"})']),
+    change("apps/service/src/other.py", lines=['    Tool(name="calendar__move", run=move),']),
+])
+def test_a_config_trigger_ignores_a_moved_line_an_edited_key_a_name_held_back_and_other_files(part):
+    assert verdict(part, config=SHAPED).tier == "SMALL"
+
+
+def test_a_bad_feature_trigger_is_a_one_line_error():
+    config = {**CONFIG, "cycle": {"feature_triggers": [{"path": "a/*", "why": "x", "added": "("}]}}
+    with pytest.raises(cli.ColonyError, match="feature_triggers entry 1 \\(x\\): bad pattern"):
+        verdict(change("a/b.py", added=1), config=config)
+    with pytest.raises(cli.ColonyError, match="needs path, why, and added or removed"):
+        verdict(change("a/b.py", added=1), config={**CONFIG, "cycle": {"feature_triggers": [{"path": "a/*"}]}})
+
+
+def test_a_top_level_page_on_the_risk_list_is_not_docs_but_a_wiki_page_named_for_a_fragment_is():
+    result = verdict(change("REVIEW.md", added=2), config=SHAPED)
+    assert result.tier == "SMALL" and result.risks == ["config: REVIEW.md"]
+    assert verdict(change("README.md", added=2), config=SHAPED).tier == "TINY"
+    assert verdict(change("knowledge/wiki/session-length.md", added=2), config=SHAPED).tier == "TINY"
+    assert verdict(change("guide/rules/coding.md", added=2), config=SHAPED).risks == ["config: guide/rules/coding.md"]
+
+
+@pytest.mark.parametrize("part, old", [
+    (change("apps/web/src/app/settings/page.tsx", status="D", removed=4), "apps/web/src/app/settings/page.tsx"),
+    (change("apps/site/src/app/(public)/layout.tsx", status="R", old="apps/site/src/app/layout.tsx"),
+     "apps/site/src/app/layout.tsx"),
+    (change("apps/web/src/screens/home.screen.tsx", status="D", removed=1), "apps/web/src/screens/home.screen.tsx"),
+    (change("apps/web/src/features/plan/old.ts", status="D", removed=2), "apps/web/src/features/plan/old.ts"),
+])
+def test_a_moved_or_deleted_page_layout_route_or_feature_folder_file_is_never_tiny(part, old):
+    config = {**SHAPED, "cycle": {**SHAPED["cycle"], "feature_folders": ["apps/web/src/features/"]}}
+    result = verdict(part, config=config)
+    assert result.tier == "SMALL"
+    assert f"a page, layout, route or feature-folder file moved or deleted, {old}" in result.reasons
+
+
+def test_a_new_structure_file_from_the_config_is_a_feature():
+    result = verdict(change("apps/web/src/screens/week.screen.tsx", status="A", added=3), config=SHAPED)
+    assert result.reasons == ["a new page, layout or route file, apps/web/src/screens/week.screen.tsx"]
+
+
+def test_code_outside_the_tiny_folders_is_never_tiny_even_a_test_or_a_root_file():
+    assert verdict(change("apps/web/src/a.tsx", added=3), config=SHAPED).tier == "TINY"
+    for path in ("tools/check.py", "skills-lock.json", "tests/e2e/helpers.py"):
+        result = verdict(change(path, added=3), config=SHAPED)
+        assert result.tier == "SMALL" and f"code outside the tiny_folders, {path}" in result.reasons
+    assert verdict(change("tools/check.py", added=3)).tier == "TINY"  # no tiny_folders, no such rule
+
+
+def test_a_test_in_a_second_area_makes_two_areas():
+    result = verdict(change("apps/web/src/a.tsx", added=3), change("apps/site/tests/a.test.ts", added=3))
+    assert result.tier == "SMALL" and "code in more than one area, apps/site, apps/web" in result.reasons
+
+
+def test_a_new_feature_folder_counts_even_when_its_first_file_is_a_test():
+    result = verdict(change("apps/web/src/features/exams/exams.test.ts", status="A", added=3),
+                     existed=lambda entry: False)
+    assert result.reasons == ["a new entry under features/, apps/web/src/features/exams"]
+
+
+def test_a_rename_off_the_risk_list_is_on_it_and_e2e_helpers_are_tests():
+    result = verdict(change("apps/web/src/user/form.tsx", status="R", old="apps/web/src/auth/form.tsx"))
+    assert result.risks == ["auth: apps/web/src/user/form.tsx"]
+    result = verdict(change("apps/web/e2e/support/walk.ts", removed=2))
+    assert result.risks == ["checks: apps/web/e2e/support/walk.ts, deletes test lines"]
 
 
 # The risk list

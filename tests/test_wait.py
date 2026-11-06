@@ -315,6 +315,61 @@ def test_the_lead_takes_lead_to_lead_lines_by_the_same_rules(gh, capsys, monkeyp
     assert out.splitlines() == [f"#5 {ask}", f"#5 {warn}"]
 
 
+def waited(name):
+    """A session that ran a wait on this computer, by the state file its wait leaves."""
+    wait.write_json(wait.state_path("demo", name), {"since": "2026-11-05T09:00:00Z", "pending": []})
+
+
+def test_the_lead_takes_a_line_for_its_helper_it_didnt_sign_as_redirected(gh, capsys, monkeypatch):
+    waited("builder-1")
+    waited("researcher")
+    gh.answer(ok(comment(1, "for builder-1: start this card (from lead)\n"
+                            "for builder-1: use my fixture (from builder-2)"),
+                 comment(2, "for researcher: also check the EU rules", issue=9),
+                 comment(3, "for builder-9: hi (from sam-lead)\nfor the record: nothing here", issue=9)))
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and clock.naps == []  # Ana's own line to a helper can't wait
+    assert out.splitlines() == ["#7 redirected: for builder-1: use my fixture (from builder-2)",
+                                "#9 redirected: for researcher: also check the EU rules"]
+
+
+def test_a_redirected_line_from_another_session_waits_for_the_digest(gh, capsys, monkeypatch):
+    waited("builder-1")
+    gh.answer(ok(comment(1, "for builder-1: rebase on mine first (from builder-2)")))
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and clock.naps == [15] * 4
+    assert out == "#7 redirected: for builder-1: rebase on mine first (from builder-2)\n"
+
+
+def test_a_named_lead_redirects_only_its_own_helpers_lines_by_their_status(gh, capsys, monkeypatch):
+    from colony import presence
+
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-engine-lead")
+    waited("builder-2")  # a helper on this computer, of another lead by its status
+    statuses = [comment(i, presence.body(presence.Status(name, "helper", "ana", lead, at=1.0)), issue=5)
+                for i, (name, lead) in enumerate((("builder-1", "ana-engine-lead"), ("builder-2", "sam-web-lead")), 1)]
+    gh.answer(ok(*statuses, comment(3, "for builder-1: start this card (from ana-engine-lead)\n"
+                                       "for builder-1: start that card (from lead)\n"
+                                       "for builder-2: use the new client (from builder-1)"),
+                 comment(4, "for builder-1: urgent: stop, the API moved (from sam-web-lead)", issue=5)))
+    me = wait.lead_session(CONFIG, "ana-engine-lead")
+    assert me.helpers == frozenset()
+    assert wait.wait("acme/demo", "demo", me, clock=Clock()) == 0
+    assert capsys.readouterr().out == "#5 redirected: for builder-1: urgent: stop, the API moved (from sam-web-lead)\n"
+
+
+def test_a_builders_wait_posts_the_outbox_at_each_poll(gh, capsys, monkeypatch):
+    from colony import guards
+
+    guards.write_outbox(CONFIG, [{"to": "lead", "line": "for lead: builder-1 stopped (from builder-1)", "at": 1.0}])
+    gh.answer(ok(comment(1, "for builder-1: start this card (from lead)")))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0
+    assert ["issue", "comment", "5", "--repo", "acme/demo", "--body",
+            "for lead: builder-1 stopped (from builder-1)"] in gh.calls()
+    assert guards.read_outbox(CONFIG) == [] and not guards.outbox_path(CONFIG).exists()
+
+
 def test_say_posts_a_line_for_another_lead_on_the_coordination_issue(gh, tmp_path):
     host = tmp_path / "host"
     (host / ".colony").mkdir(parents=True)

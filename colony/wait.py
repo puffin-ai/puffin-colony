@@ -4,7 +4,9 @@ A line is one line of an issue comment, `for <name>: <one sentence> (from <name>
 when it starts with `for <name>:`, or contains `@<login>` for the session's person, or `@all` (see `taken`): a
 person's line reaches their lead, and a builder takes only lines its lead signed. A builder's wait ends on the
 first line for it. The lead's wait gathers its lines and ends every `lead_digest_minutes`, or at once on a line that
-can't wait. Leads talk to each other as `<person>-lead` on one issue per repo, `Colony: coordination`. Every 15
+can't wait. The lead also takes, marked `redirected:`, each line for one of its own helpers that it didn't sign,
+so a person or another agent writing to a helper directly is never lost (see `taken`). Leads talk to each other as
+`<person>-lead` on one issue per repo, `Colony: coordination`. Every 15
 seconds the wait asks `gh api` for the repo's issue comments changed since its last read, sending the last ETag, so
 a quiet poll costs nothing against the rate limit. Its state lives in ~/.colony/<project>/<session>.json, and a
 session's first wait reads the last hour. Lines are posted through transport.send. Every line goes out by `colony post` on a
@@ -41,7 +43,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,6 +67,7 @@ PREFIX = re.compile(r"^\[[^\[\]\n]{1,80}'s [^\[\]\n]{1,40}\]\s*")  # a board pos
 MENTION = re.compile(r"(?<![\w@./+-])@([A-Za-z0-9][A-Za-z0-9-]*)")  # @<login>, never the middle of an email
 LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9-]*[\s,:]*)+")
 ALL = "all"  # @all reaches every lead, and every builder whose lead signed it
+REDIRECTED = "redirected: "  # before a line for one of the lead's helpers that the lead didn't sign
 AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
 
@@ -83,7 +86,7 @@ class Session:
     """Who waits: its name, the names it takes lines for and signs with, and for the lead, the people's logins, the
     cards the batch waits on, and its own person's logins, which an @<login> line names. The lead answers to `lead`
     on cards, and to `<person>-lead` on the coordination issue; in hack mode to `<person>-lead` alone. A builder takes
-    lines signed by one of `leads`."""
+    lines signed by one of `leads`. The lead's `helpers` are the helpers it takes redirected lines for."""
 
     name: str
     names: frozenset[str]
@@ -91,6 +94,7 @@ class Session:
     waiting: frozenset[str] = frozenset()
     logins: frozenset[str] = frozenset()
     leads: frozenset[str] = frozenset({cli.LEAD})
+    helpers: frozenset[str] = frozenset()
 
 
 def state_path(project: str, name: str) -> Path:
@@ -195,16 +199,23 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done` for a card the batch
     waits on. A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
     person's own gh login, so the signature, not the comment's author, tells them apart.
+
+    The lead also takes a line for one of its `helpers` that it didn't sign, as `redirected: <line>`, by the same
+    rules for when it can't wait: a person or another session writing to a helper directly reaches the lead too. A
+    line signed `lead`, as a lead's card lines are, counts as the lead's own.
     """
     lines = []
     for raw in body.splitlines():
         line = MARKUP.sub("", raw)
         text = MARKUP.sub("", PREFIX.sub("", line))
         found = LINE.match(text)
+        redirected = False
         if found and found[1].lower() in me.names:
             sentence = found[2]
         elif mentions(text) & (me.logins | {ALL} if me.name == cli.LEAD else {ALL}):
             sentence = LEADING_MENTIONS.sub("", text)
+        elif me.name == cli.LEAD and found and found[1].lower() in me.helpers:
+            sentence, redirected = found[2], True
         else:
             continue
         signed = SIGNED.search(text)
@@ -212,10 +223,47 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
         if me.name != cli.LEAD:
             if sender in me.leads:
                 lines.append((line, True))
-        elif sender not in me.names:
-            done = DONE.match(sentence) is not None and card in me.waiting
-            lines.append((line, bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done))
+        elif sender not in me.names and not (redirected and sender == cli.LEAD):
+            done = DONE.match(sentence) is not None and card in me.waiting and not redirected
+            cant_wait = bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done
+            lines.append((REDIRECTED + line if redirected else line, cant_wait))
     return lines
+
+
+def learn_helpers(state: dict, comments: list) -> None:
+    """Remember, in state["helpers"], each helper's lead from the status comments among these comments: a helper
+    belongs to the lead its $COLONY_LEAD names, which its status carries (presence.py)."""
+    from colony import presence
+
+    known = state.setdefault("helpers", {})
+    for comment in comments:
+        status = presence.parse(comment.get("body") or "")
+        if status and status.kind == "helper" and status.lead:
+            known[status.name.lower()] = status.lead.lower()
+
+
+def with_helpers(me: Session, state: dict) -> Session:
+    """The lead with its helpers: those on this computer it started with, and each helper whose status names it,
+    less each helper whose status names another lead."""
+    known = state.get("helpers") or {}
+    mine = {name for name, lead in known.items() if lead in me.names}
+    theirs = {name for name, lead in known.items() if lead not in me.names}
+    return replace(me, helpers=frozenset((me.helpers - theirs) | mine))
+
+
+def local_helpers(project: str) -> frozenset[str]:
+    """The sessions other than a lead that ran a wait on this computer, by their state files: the helpers of a lead
+    from before lead names, whose helpers post no status."""
+    folder = state_path(project, cli.LEAD).parent
+    found = set()
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        name = path.stem
+        if name == cli.LEAD or name.endswith(f"-{cli.LEAD}") or not cli.SESSION_NAME.fullmatch(name):
+            continue
+        state = read_json(path, None)
+        if isinstance(state, dict) and "pending" in state and "since" in state:
+            found.add(name)
+    return frozenset(found)
 
 
 def gh_get(path: str, etag: str | None) -> tuple[int, str | None, list]:
@@ -301,6 +349,9 @@ def poll(repo: str, state: dict, me: Session) -> bool:
     read time moves to the newest comment, so the next poll asks only after it."""
     path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
     _, state["etag"], comments = gh_get(path, state.get("etag"))
+    if me.name == cli.LEAD:
+        learn_helpers(state, comments)
+        me = with_helpers(me, state)
     seen = state.setdefault("seen", [])
     for comment in comments:
         card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
@@ -369,12 +420,13 @@ def add_stale(state: dict, stale) -> None:
 
 
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         stale=None, heartbeat=None, status=None) -> int:
+         stale=None, heartbeat=None, status=None, outbox=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
-    lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr."""
+    lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr.
+    `outbox` posts the hooks' lines that failed to post (guards.flush_outbox) at each poll, and never raises."""
     clock = clock or CLOCK
     path = state_path(project, state_name(me.name))
     state = read_json(path, {})
@@ -399,6 +451,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             keep_beat(heartbeat)
         if status is not None:
             status()  # edits the session's status comment, at most every 5 minutes, and never raises
+        if outbox is not None:
+            outbox()
         drop_shown(path, state, listed)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
@@ -481,7 +535,11 @@ def lead_session(config: dict, name: str) -> Session:
         person = name.split("-", 1)[0]
     names = {name} if hack(config) or named() else {cli.LEAD, name}
     logins = person_logins(config, person) if person else frozenset()
-    return Session(cli.LEAD, frozenset(names), people, frozenset(str(card) for card in cards), logins)
+    # A lead from before lead names has the helpers on this computer; a named lead learns its own from their statuses.
+    project = config["project"].get("name", "")
+    helpers = local_helpers(project) if project and not (hack(config) or named()) else frozenset()
+    return Session(cli.LEAD, frozenset(names), people, frozenset(str(card) for card in cards), logins,
+                   helpers=helpers)
 
 
 def builder_session(config: dict, name: str, person: str = "") -> Session:
@@ -515,13 +573,14 @@ def run(config: dict, args, clock=None) -> int:
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
-    from colony import presence
+    from colony import guards, presence
 
+    outbox = functools.partial(guards.flush_outbox, config)
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
         status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
-        return wait(repo, project, session(config, args, me), clock=clock, status=status)
+        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox)
     waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -535,7 +594,8 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
-    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status)
+    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status,
+                outbox=outbox)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:

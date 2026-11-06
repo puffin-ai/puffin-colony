@@ -75,6 +75,16 @@ rule_budgets = { performance = 16000 }   # the puffin preset's performance.md ru
                                    # makes "Colony: <name>" and every command finds the board by that title
 # title = "Colony: myapp"          # optional: the board's title, which `colony board init` uses and commands find it by
 
+# [cycle]                          # optional: `colony tier`'s limits and the repo's own lines (docs/configuration.md)
+# tiny_folders = ["apps/web/"]     # a TINY change's code stays in these; any other non-docs file makes it SMALL
+# structure_files = ["src/screens/*.screen.tsx"]   # page files beside app/**/page, layout and route: a new one is
+                                   # a FEATURE, a moved or deleted one never TINY, as any file under feature_folders
+# risk = { config = ["REVIEW.md"] }   # extra risk paths per kind; a path one starts is never docs
+# [[cycle.feature_triggers]]       # a FEATURE line: a file glob, and what an added (or removed) line must find
+# why = "a new registry key"
+# path = "src/commands/registry.py"
+# added = '^\s*"([a-z_]+)"\s*:\s*Entry\('
+
 [limits]                           # the anti-bloat limits `colony card new` and `colony tidy` keep
 open_cards_per_lead = 10           # `colony card new` refuses a lead past this many open cards
 stale_days = 7                     # `colony tidy` closes, or moves to future-work, a card with no update this long

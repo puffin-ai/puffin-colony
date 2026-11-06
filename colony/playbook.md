@@ -133,8 +133,9 @@ At the start of a session, run `colony handover --read`. When it prints a handov
    - `colony stats --card <n>=<branch> ...`, with the batch's cards, prints each card's predicted and actual minutes and tokens. The batch's pull request body carries the same table. Use it to predict the next cards better.
    - `colony retro --name <batch>` runs the retro agent on the batch's reports. It writes each lesson as a rule line plus a check, or as a decision, and opens one pull request with them. Post each decision it prints with `colony needs`.
 7. Tell the person the pull request links, under Talking with the person. Ask only what you can't decide, on the Needs issue (see Needs you), and keep the other cards moving. Answer everything else yourself, including builders' questions, on their cards, with `colony post <n> <builder> "answer: <your answer>"`. When the person merges a pull request, set its cards to `Status=Done`.
-8. A `stale:` line names a card whose builder shows no update in 2.5 hours. Look at that builder's session, in its cmux workspace or with `claude attach <project>-<builder>`. When it waits on a usage limit, let it wait. When it has stopped, tell the person in one line.
-9. When the board feels crowded, run `colony tidy --dry-run`, read its plan, then `colony tidy` (see The board).
+8. A `redirected:` line is one someone wrote to your builder directly, not through you, which the builder ignores. Read it as written to you: pass on what the builder needs with `colony post`, or answer the writer.
+9. A `stale:` line names a card whose builder shows no update in 2.5 hours. Look at that builder's session, in its cmux workspace or with `claude attach <project>-<builder>`. When it waits on a usage limit, let it wait. When it has stopped, tell the person in one line.
+10. When the board feels crowded, run `colony tidy --dry-run`, read its plan, then `colony tidy` (see The board).
 
 ### Handover
 
