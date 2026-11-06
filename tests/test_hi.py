@@ -94,6 +94,8 @@ class GitHub:
             number = int(args[3].rsplit("/", 1)[-1])
             next(c for c in self.comments if c["id"] == number)["body"] = args[5].removeprefix("body=")
             return "{}"
+        if args[:2] == ("issue", "list"):
+            return json.dumps([{"number": 5, "title": wait.COORDINATION}])
         if args[0] == "api":
             self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body=")})
             return json.dumps({"id": self.comments[-1]["id"]})
@@ -248,6 +250,14 @@ def test_join_with_one_lead_joins_it_under_the_next_free_name(home, config, gith
     assert presence.parse(github.comments[-1]["body"]).name == "builder-2"  # it claimed the name at once
     assert "COLONY_SESSION=builder-2 COLONY_LEAD=ana-engine-lead COLONY_PERSON=ana" in out
     assert "Never ask the person anything" in out
+
+
+def test_join_tells_its_lead_with_a_joined_line_the_leads_wait_wakes_on(home, config, github):
+    github.add(lead(folders=["apps/api/"]))
+    join(config, in_session=True)
+    line = "for ana-engine-lead: joined: builder-1 (from builder-1)"
+    assert ("issue", "comment", "5", "--repo", config["project"]["repo"], "--body", line) in github.calls
+    assert wait.taken(line, wait.lead_session(config, "ana-engine-lead"), "5") == [(line, True)]
 
 
 def test_join_asks_once_which_lead_when_there_are_two(home, config, github, capsys, monkeypatch):

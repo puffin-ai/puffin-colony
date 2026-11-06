@@ -1242,6 +1242,17 @@ def free_helper(config: dict, alive: list) -> str:
         n += 1
 
 
+def tell_lead_joined(config: dict, lead: str, name: str) -> None:
+    """Post `for <lead>: joined: <name> (from <name>)` on the coordination issue, so the lead's wait wakes on it. The
+    helper has joined either way, so a post that fails says so on stderr alone."""
+    from colony import transport, wait
+
+    try:
+        transport.send(config, lead, wait.compose(lead, f"joined: {name}", name))
+    except (ColonyError, OSError, ValueError, KeyError) as e:
+        print(f"{NAME} join: {lead} hears of {name} from its status comment instead: {e}", file=sys.stderr)
+
+
 def join(config: dict, args) -> int:
     """`colony join [<lead>]`: lend this computer to one of the person's leads, as a helper under the next free
     builder name, after saying what this computer still lacks. Inside a Claude Code session ($CLAUDECODE), or with
@@ -1263,6 +1274,7 @@ def join(config: dict, args) -> int:
         except (ColonyError, OSError, ValueError, KeyError) as e:
             print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
         env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
+        tell_lead_joined(config, args.lead_name, name)
         print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
         print(f"Next: start every {NAME} command with `{env}`, start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
@@ -1276,6 +1288,7 @@ def join(config: dict, args) -> int:
     print(f"Joining {args.lead_name} as {name}.")
     if not args.dry_run:
         wait.expect_status(config["project"]["name"], args.lead_name, name)
+        tell_lead_joined(config, args.lead_name, name)
     return launch(config, args, name, "builder", builder_prompt(name, config))
 
 

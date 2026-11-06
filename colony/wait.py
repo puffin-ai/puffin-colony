@@ -62,6 +62,7 @@ LINE = re.compile(r"for\s+([\w.-]+)\s*:\s*(\S.*)", re.I)
 SIGNED = re.compile(r"\(from\s+([\w.-]+)\)\W*$", re.I)
 CANT_WAIT = re.compile(r"(urgent|blocked|question)\s*:", re.I)
 DONE = re.compile(r"done\b", re.I)
+JOINED = re.compile(r"joined\s*:", re.I)  # a helper's first line, from `colony join`, which the lead's wait wakes on
 PREFIX = re.compile(r"^\[[^\[\]\n]{1,80}'s [^\[\]\n]{1,40}\]\s*")  # a board post's `[<Name>'s <agent>]`
 MENTION = re.compile(r"(?<![\w@./+-])@([A-Za-z0-9][A-Za-z0-9-]*)")  # @<login>, never the middle of an email
 LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9-]*[\s,:]*)+")
@@ -193,9 +194,10 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     A line is addressed to `me` when it starts with `for <name>:` for one of its names, or, for the lead, contains
     `@<login>` for its person or `@all`, and for a builder `@all`. A builder takes a line addressed to it that one
     of its leads signed. The lead takes every line addressed to it that it didn't sign, and can't wait on one whose
-    sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done` for a card the batch
-    waits on, or for any card while no batch runs (`me.waiting` is empty). A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
-    person's own gh login, so the signature, not the comment's author, tells them apart.
+    sentence starts `urgent:`, `blocked:`, `question:` or `joined:`, on a person's line, or on a `done` for a card
+    the batch waits on, or for any card while no batch runs (`me.waiting` is empty). A person's line is unsigned, or
+    signed with a login [people] logins lists: agents post through their person's own gh login, so the signature,
+    not the comment's author, tells them apart.
 
     The lead also takes a line for one of its `helpers` that it didn't sign, as `redirected: <line>`, by the same
     rules for when it can't wait: a person or another session writing to a helper directly reaches the lead too. A
@@ -222,7 +224,8 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
                 lines.append((line, True))
         elif sender not in me.names and not (redirected and sender == cli.LEAD):
             done = DONE.match(sentence) is not None and (card in me.waiting or not me.waiting) and not redirected
-            cant_wait = bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done
+            cant_wait = bool(CANT_WAIT.match(sentence) or JOINED.match(sentence)) or not sender or \
+                sender in me.people or done
             lines.append((REDIRECTED + line if redirected else line, cant_wait))
     return lines
 
