@@ -155,7 +155,7 @@ def test_a_config_with_no_mode_runs_startup_with_its_own_keys_unchanged(tmp_path
     own = tomllib.loads(EXAMPLE.read_text())
     config = cli.load_config(EXAMPLE)
     assert "mode" not in own["project"] and config["project"]["mode"] == "startup"
-    assert config["gate"] == {**own["gate"], "check": "full", "review": True}
+    assert config["gate"] == {**own["gate"], "check": "full", "review": True, "paid_checks": ""}
     assert config["messages"] == own["messages"]  # its lead_digest_minutes is startup's 10
     assert config["features"] == dict.fromkeys(("knowledge", "specs", "research", "board", "retro"), True)
     for table in ("budget", "people", "knowledge", "board"):

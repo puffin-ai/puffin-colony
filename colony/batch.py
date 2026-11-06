@@ -8,8 +8,10 @@ batch's reports go to `.colony/reports/<batch>/` in its worktree, and land on th
 The mode's [gate] keys shape the gate: `check` is "full" ([project] checks, or web_checks for a round that may) or
 "fast" ([project] fast_check alone, hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when
 false), and `walk` walks the changed screens. Startup and solo run the full checks and the reviewer, and solo walks
-only when `walk` is true; hack runs the fast check alone. `colony batch --fast` runs the full checks once, with no
-reviewer, walk or fixers, and opens the pull request when they pass, with `gate: fast` in its body.
+only when `walk` is true; hack runs the fast check alone. `[gate] paid_checks`, a command whose model calls cost money,
+runs once in the round that otherwise passes, only while `[budget] provider_dollars` is above 0 (paid_checks).
+`colony batch --fast` runs the full checks once, with no reviewer, walk or fixers, and opens the pull request when they
+pass, with `gate: fast` in its body.
 
 In hack mode, `colony batch --review --name <n>` with no `--card` reviews the demo build: one fresh reviewer reads
 origin/<base> as it stands, beside the fast check, with no fixers, and one line on the board gives the open count and
@@ -43,6 +45,7 @@ FIXED = re.compile(r"^\W*fixed\b|\bfixed\W*$", re.I)
 IMAGE = re.compile(r"\.(png|jpe?g|webp|gif)\b", re.I)
 PYTEST_FAILED = re.compile(r"\bFAILED\s+(\S+?\.py)::(\S+)")
 JS_FAILED = re.compile(r"(?:\bFAIL\b|×|✗)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*(.+))?")
+SPENT = re.compile(r"^\s*spent:\s*\$?(\d+(?:\.\d+)?)\s*$", re.I | re.M)  # a paid check's report of its dollars
 MINUTE = re.compile(r"^(\d{1,2}:\d{2})\s+(\S+)\s+(\d+(?:\.\d+)?)(?:\s+\$(\d+(?:\.\d+)?))?")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a diff from it holds every file
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|e2e)/|(^|/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$")
@@ -177,6 +180,11 @@ def fast_check(project: dict) -> str:
     return project.get("fast_check") or project["checks"]
 
 
+def provider_dollars(config: dict) -> float:
+    """The dollars the app's own checks may spend on model calls, [budget] provider_dollars, 0 when unset."""
+    return float(config.get("budget", {}).get("provider_dollars") or 0)
+
+
 def trailer(config: dict) -> str:
     """The line every commit and pull request the runners make ends with: [project] trailer, else the fixer's
     Assisted-by line."""
@@ -294,7 +302,8 @@ class Batch:
     checks_only: bool = False  # `colony batch --fast`: the full checks once, with no reviewer, walk or fixers
     sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-lead`
     lock: threading.RLock = field(default_factory=threading.RLock)
-    state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False})
+    state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False,
+                                                       "paid_spent": 0.0})
 
     @classmethod
     def from_args(cls, config: dict, args) -> Batch:
@@ -620,7 +629,7 @@ def gate(b: Batch, r: int) -> list[Finding]:
     if not passed and prev and prev["checks"] == "fail" and prev["checks_signature"] == signature:
         raise Stop(f"the checks failed the same way in rounds {r - 1} and {r}")
     if passed and open_count == 0 and walk_result in ("pass", "skipped"):
-        return []
+        return paid_checks(b, r)
     findings = []
     if open_count:
         missing = Finding("", 0, f"the review counts {open_count} open problems; read {review_report}")
@@ -628,6 +637,51 @@ def gate(b: Batch, r: int) -> list[Finding]:
     if walk_result not in ("pass", "skipped"):
         findings += parse_walk_failures(walk_text) or [Finding("", 0, f"the walk failed; read {walk_report}")]
     return findings + check_findings
+
+
+def paid_checks(b: Batch, r: int) -> list[Finding]:
+    """Run `[gate] paid_checks` in round r, the round that otherwise passes, and return its failures as findings.
+
+    It runs only when the command is set and `[budget] provider_dollars` is above 0. It gets the dollars the batch has
+    left as COLONY_SPEND_CEILING, must stop at that ceiling, and must print `spent: $<dollars>` as its own total. The
+    batch stops when it prints none, or when the batch's spend passes the budget.
+    """
+    cmd, budget = b.config["gate"].get("paid_checks"), provider_dollars(b.config)
+    if not cmd or budget <= 0:
+        return []
+    left = budget - b.state["paid_spent"]
+    if left <= 0:
+        raise Stop(f"the paid checks have spent the whole ${budget:.2f} budget")
+    env = {**b.check_env(), "COLONY_SPEND_CEILING": f"{left:.2f}"}
+    log, step = b.reports / f"paid-checks-{r}.log", f"paid-checks-r{r}"
+    started, clock = time.time(), time.strftime("%H:%M")
+    b.running(step, True)
+    with log.open("wb") as out:
+        code = subprocess.run(cmd, shell=True, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT).returncode
+    b.running(step, False)
+    b.minute(step, (time.time() - started) / 60, clock=clock)
+    output = log.read_text(errors="replace")
+    reported = SPENT.findall(output)
+    if not reported:
+        raise Stop(f"the paid checks printed no `spent: $<dollars>` line; their log is {log}")
+    spent = float(reported[-1])
+    b.state["paid_spent"] += spent
+    b.state["rounds"][-1]["paid"] = {"cmd": cmd, "result": "pass" if code == 0 else "fail", "spent": spent,
+                                     "ceiling": left}
+    b.save()
+    if b.state["paid_spent"] > budget:
+        raise Stop(f"the paid checks spent ${b.state['paid_spent']:.2f}, past the ${budget:.2f} budget")
+    return [] if code == 0 else parse_check_failures(output)
+
+
+def paid_lines(b: Batch) -> list[str]:
+    """The PR body's paid checks section: each round's run, with the dollars spent against its ceiling."""
+    runs = [x for x in b.state["rounds"] if x.get("paid")]
+    if not runs:
+        return ["None: [gate] paid_checks is unset or [budget] provider_dollars is 0, so $0.00 spent."]
+    lines = [f"- Round {x['round']}: `{x['paid']['cmd']}` {x['paid']['result']}, ${x['paid']['spent']:.2f} spent "
+             f"of a ${x['paid']['ceiling']:.2f} ceiling" for x in runs]
+    return lines + [f"- Total: ${b.state['paid_spent']:.2f} of the ${provider_dollars(b.config):.2f} budget"]
 
 
 def _resolve(b: Batch, path: str) -> str:
@@ -705,6 +759,7 @@ def pr_body(b: Batch) -> str:
         "| Round | Open | Walk | Checks |", "| --- | --- | --- | --- |",
         *[f"| {x['round']} | {x['open']} | {x['walk']} | {x['checks']} |" for x in rounds], "",
         "## Checks", *[f"- Round {x['round']}: `{x['checks_cmd']}` {x['checks']}: {x['checks_line']}" for x in rounds], "",
+        "## Paid checks", *paid_lines(b), "",
         "## Removed tests", *([f"- `{p}`" for p in removed_tests(b)] or ["None."]), "",
         "## Minutes", minutes_table(minutes), "",
         "## Card stats", card_stats(b), "",
@@ -757,6 +812,9 @@ def plan(b: Batch) -> str:
     else:
         lines += [f"  checks, in the background: $ {project['checks']}",
                   f"    or $ {project.get('web_checks')} when a round changes no {backend} file after a passing full run"]
+    if settings.get("paid_checks") and provider_dollars(b.config) > 0:
+        lines.append(f"  paid checks, once in the round that otherwise passes, with COLONY_SPEND_CEILING at most "
+                     f"${provider_dollars(b.config):.2f}: $ {settings['paid_checks']}")
     if b.review:
         lines.append("  reviewer: $ " + shlex.join(claude_cmd(b.config, "reviewer", "<reviewer prompt>")))
     if settings.get("walk"):
