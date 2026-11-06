@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
-from colony import cli
+from colony import cli, portable
 
 REPORTS = f"{cli.DIR}/reports"  # each batch's reports folder, inside its worktree
 RISKS_PLACE = "- the batch's risk list, from `colony tier` at each round's head"  # a dry run's stand-in
@@ -390,7 +390,8 @@ class Batch:
         """Run one of the config's shell commands (regen, install) as a timed step; stop the run when it fails."""
         started, clock = time.time(), time.strftime("%H:%M")
         self.running(step, True)
-        proc = subprocess.run(cmd, shell=True, cwd=cwd, env=self.check_env(), capture_output=True, text=True)
+        command, shell, env = portable.shell(cmd, self.check_env())
+        proc = subprocess.run(command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
         self.running(step, False)
         self.minute(step, (time.time() - started) / 60, clock=clock)
         if proc.returncode:
@@ -588,7 +589,8 @@ def gate(b: Batch, r: int) -> list[Finding]:
     started, clock = time.time(), time.strftime("%H:%M")
     b.running(f"checks-r{r}", True)
     with log.open("wb") as out:
-        proc = subprocess.Popen(cmd, shell=True, cwd=b.wt, env=b.check_env(), stdout=out, stderr=subprocess.STDOUT)
+        command, shell, env = portable.shell(cmd, b.check_env())
+        proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT)
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,

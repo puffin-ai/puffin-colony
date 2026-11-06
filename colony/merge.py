@@ -11,14 +11,13 @@ opened a pull request because the merge or the check failed.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import re
 import shlex
 import subprocess
 from pathlib import Path
 
-from colony import batch, cli, transport, wait
+from colony import batch, cli, portable, transport, wait
 
 TRIES = 2  # merges in a row before a base that keeps moving under the check sends the branch to a pull request
 REJECTED = re.compile(r"\[rejected\]|non-fast-forward|fetch first", re.I)
@@ -76,7 +75,8 @@ def ready(root: Path, wt: Path, base: str) -> None:
 def _shell(cmd: str, cwd: Path, env: dict) -> tuple[bool, str]:
     """Run one of the config's command strings, and say whether it passed, with its last line of output. A last
     line that looks like a secret stays out."""
-    run = subprocess.run(cmd, shell=True, cwd=cwd, env=env, capture_output=True, text=True)
+    command, shell, env = portable.shell(cmd, env)
+    run = subprocess.run(command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
     output = f"{run.stdout}\n{run.stderr}"
     last = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "no output")[:200]
     if transport.holds_secret(last):
@@ -176,8 +176,7 @@ def run(config: dict, args) -> int:
         return 0
     lock = wait.state_path(project["name"], "merge").with_suffix(".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock, "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)  # one merge at a time on this computer; closing the file releases it
+    with open(lock, "w") as handle, portable.lock(handle):  # one merge at a time on this computer
         landed, what = land(config, root, wt, branch)
     if landed:
         print(what)

@@ -14,7 +14,6 @@ sessions so a usage limit or a dropped connection never ends a turn for good.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import platform
@@ -28,7 +27,7 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from colony import cli
+from colony import cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
@@ -296,16 +295,8 @@ def outbox_lock(config: dict, block: bool = True):
     """Hold the outbox's file lock, and yield whether it is held: a flush that finds another one running skips."""
     path = outbox_path(config).with_suffix(".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX if block else fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    with open(path, "a") as handle, portable.lock(handle, block) as got:
+        yield got
 
 
 def read_outbox(config: dict) -> list[dict]:
