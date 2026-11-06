@@ -495,7 +495,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "tier",
+COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "who", "whoami",
             "tidy", "idea", "card", "setup", "skill-install", "tools")
 
@@ -519,6 +519,17 @@ def test_research_opens_a_researcher_whose_brief_holds_the_question(config, caps
     assert "`knowledge/.types/research-report.md`" in out
     assert "{question}" not in out and "{knowledge}" not in out and "{project}" not in out
     assert "dry run: demo-researcher on account first" in out
+
+
+def test_tester_opens_a_tester_whose_brief_holds_the_release(config, capsys):
+    url = "https://github.com/acme/demo/pull/20"
+    assert cli.main(["tester", url, "--dry-run", "--person", "ana"]) == 0
+    out = capsys.readouterr().out
+    assert "command: claude --remote-control demo-tester --model m --effort medium " in out
+    assert "You are the tester for demo." in out and f"The release: {url}" in out
+    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings issue" in out
+    assert "{release}" not in out and "{project}" not in out
+    assert "dry run: demo-tester on account first" in out
 
 
 def test_spec_names_the_vault_colony_toml_sets(host, capsys):
@@ -552,9 +563,9 @@ def test_a_brief_with_an_unknown_placeholder_or_an_empty_request_is_refused(conf
     assert error in capsys.readouterr().err
 
 
-def test_a_config_without_the_researcher_or_spec_role_takes_the_builders_settings(config):
-    assert "researcher" not in CONFIG and "spec =" not in CONFIG  # an 0.1 colony.toml keeps loading
-    for role in (cli.RESEARCHER, cli.SPEC):
+def test_a_config_without_the_researcher_spec_or_tester_role_takes_the_builders_settings(config):
+    assert "researcher" not in CONFIG and "spec =" not in CONFIG and "tester" not in CONFIG  # an 0.1 colony.toml loads
+    for role in (cli.RESEARCHER, cli.SPEC, cli.TESTER):
         assert config["roles"][role] == config["roles"]["builder"] == {"model": "m", "effort": "medium"}
     config["roles"]["builder"]["effort"] = "low"
     assert config["roles"][cli.SPEC]["effort"] == "medium"  # a copy, not the builder's own table
@@ -573,6 +584,7 @@ def test_the_example_config_holds_the_new_tables(home):
 
     config = cli.load_config(PACKAGE / "colony.toml.example")
     assert config["roles"]["researcher"]["model"] and config["roles"]["spec"]["effort"]
+    assert config["roles"]["tester"]["model"] and config["roles"]["tester"]["effort"]
     assert "transport" not in config["messages"]  # every line goes by GitHub
     assert "board" in config and "prefer_account" not in config["project"]
     knowledge = config["knowledge"]
