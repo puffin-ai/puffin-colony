@@ -110,10 +110,10 @@ Two lines from `docs-life-cycle.md` bind every batch. A builder updates the livi
 | `replaced_records` | fail | A replaced decision record says so and links its replacement, and one replaced in full sits in the archive |
 | `decision_log` | fail | `decisions.md` is what the decision records generate |
 
-Each check's mode is `off`, `warn` or `fail`, set in `[knowledge]`. See [configuration.md](configuration.md#knowledge). The run prints each problem as `path:line: what is wrong`, then one count per check, and exits 1 when a check set to `fail` found a problem.
+Each check's mode is `off`, `note`, `warn` or `fail`, set in `[knowledge]`. A `note` warns even under `--strict`. See [configuration.md](configuration.md#knowledge). The run prints each problem as `path:line: what is wrong`, then one count per check, and exits 1 when a check set to `fail` found a problem.
 
 - `--staged` checks only the staged pages, with the six checks that read one page at a time: page types, links, code paths, both caps, and the rule budget. It suits a pre-commit hook.
-- `--strict` turns every `warn` into `fail`.
+- `--strict` turns every `warn` into `fail`, and leaves each `note` a warning.
 - `--index` only rewrites the decision log.
 
 ### Your own checks
@@ -130,4 +130,4 @@ def run(check, repo, vault, files):
     return []
 ```
 
-Its checks take their modes from `[knowledge]` like the built-in ones, print the same way, and count in the same tally. A plug-in check whose name clashes with another check, or which crashes, stops the run with an error, so a broken check never passes.
+Its checks take their modes from `[knowledge]` like the built-in ones, print the same way, and count in the same tally. Under `--staged`, a plug-in runs whenever any file is staged, so it can check staged files outside the vault. A plug-in check whose name clashes with another check, or which crashes, stops the run with an error, so a broken check never passes.

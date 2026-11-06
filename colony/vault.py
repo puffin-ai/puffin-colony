@@ -1,16 +1,16 @@
-"""`colony check-docs`: the knowledge vault's checks, each one off, warn or fail.
+"""`colony check-docs`: the knowledge vault's checks, each one off, note, warn or fail.
 
 Generalized from Puffin Calendar's tools/check_vault.py. The vault is `knowledge/` at the repo root, or the folder
 `[knowledge] vault` names in .colony/colony.toml. Its page types are the file names in its `.types/` folder, where
 setup copies them. Without that folder, any `type:` a page declares counts. Each check takes its mode from
 `[knowledge]`, such as `orphans = "warn"`. Every check fails by default except `size_caps`, which warns.
-`--strict` fails on the warnings too. `--staged` checks only the staged pages, with the checks that read one page at
+`--strict` fails on the warnings too, apart from a check set to `note`, which warns even then. `--staged` checks only the staged pages, with the checks that read one page at
 a time, for a pre-commit hook. Every run ends with a count per check.
 
 A repo adds its own checks as plug-ins: `[knowledge] plugins` lists Python files in the repo, each with a `CHECKS`
 table of its checks and their default modes, an optional `ONE_PAGE` tuple of the ones `--staged` runs, and
 `run(check, repo, vault, files)`, which returns the check's problems as (path, line, message). `files` is the set of
-staged files under `--staged`, else None. A plug-in check takes its mode from `[knowledge]` like a built-in one, and
+staged files under `--staged`, else None: a plug-in runs under `--staged` whenever any file is staged, so it can check files outside the vault. A plug-in check takes its mode from `[knowledge]` like a built-in one, and
 counts in the same tally.
 
 Every full run, and `--index` alone, also rewrites the decision log, `<vault>/decisions.md`, from the decision
@@ -33,8 +33,8 @@ from pathlib import Path
 
 from colony import cli
 
-OFF, WARN, FAIL = "off", "warn", "fail"
-MODES = (OFF, WARN, FAIL)
+OFF, NOTE, WARN, FAIL = "off", "note", "warn", "fail"
+MODES = (OFF, NOTE, WARN, FAIL)  # a note warns even under --strict, which turns each warn into fail
 # Every check with its default mode, in the order the closing count prints them.
 CHECKS = {
     "page_types": FAIL,        # every page declares a known type
@@ -145,7 +145,7 @@ def load_plugin(repo: Path, name: str, index: int) -> Plugin:
         raise cli.ColonyError(f"[knowledge] plugins: {name} failed to load: {type(e).__name__}: {e}") from None
     checks, one_page, run = getattr(module, "CHECKS", None), getattr(module, "ONE_PAGE", ()), getattr(module, "run", None)
     if not isinstance(checks, dict) or not checks or any(mode not in MODES for mode in checks.values()):
-        raise cli.ColonyError(f"{name}: CHECKS must map each check to off, warn or fail")
+        raise cli.ColonyError(f"{name}: CHECKS must map each check to off, note, warn or fail")
     if not callable(run):
         raise cli.ColonyError(f"{name}: needs run(check, repo, vault, files)")
     if not set(one_page) <= set(checks):
@@ -213,7 +213,7 @@ def read_settings(config: dict, strict: bool = False) -> Settings:
             if key not in settings.modes:
                 raise cli.ColonyError(f"[knowledge] has no check {key!r}: the checks are {', '.join(settings.modes)}")
             if value not in MODES:
-                raise cli.ColonyError(f"[knowledge] {key} must be off, warn or fail, not {value!r}")
+                raise cli.ColonyError(f"[knowledge] {key} must be off, note, warn or fail, not {value!r}")
             settings.modes[key] = value
     if strict:
         settings.modes = {name: FAIL if mode == WARN else mode for name, mode in settings.modes.items()}
@@ -781,7 +781,7 @@ def check_docs(config: dict, args) -> int:
     if staged:
         files = staged_files(vault.repo)
         pages, rules = [page for page in pages if page in files], [path for path in rules if path in files]
-        if not pages and not rules:
+        if not files or (not pages and not rules and not settings.plugins):
             print("check-docs: no staged pages")
             return 0
     runs = {
@@ -813,7 +813,7 @@ def check_docs(config: dict, args) -> int:
             continue
         found = runs[name]()
         (problems if mode == FAIL else warnings).extend(found)
-        tally.append(f"{name} {len(found)}" + (" (warn)" if mode == WARN else ""))
+        tally.append(f"{name} {len(found)}" + (f" ({mode})" if mode in (WARN, NOTE) else ""))
     for mark, found in (("warning: ", warnings), ("", problems)):
         for path, number, message in sorted(found, key=lambda problem: (problem[0], problem[1])):
             print(f"{vault.rel(path)}{f':{number}' if number else ''}: {mark}{message}")

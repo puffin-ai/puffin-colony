@@ -399,7 +399,7 @@ def test_a_check_set_off_or_warn_does_not_fail_the_run(repo, capsys):
 
 @pytest.mark.parametrize("knowledge, message", [
     ({"orphan": "off"}, "has no check 'orphan'"),
-    ({"links": "loud"}, "links must be off, warn or fail"),
+    ({"links": "loud"}, "links must be off, note, warn or fail"),
     ({"caps": {"living-spec": "big"}}, "caps.living-spec must be a whole number"),
     ({"rules": ".colony/rules"}, "rules must be a list of strings"),
 ])
@@ -514,7 +514,7 @@ def test_staged_runs_only_a_plugins_one_page_checks_on_the_staged_files(repo, ca
 
 @pytest.mark.parametrize("plugin, message", [
     ("CHECKS = {'links': 'fail'}\ndef run(*a): return []", "its check 'links' has the name of another check"),
-    ("CHECKS = {'x': 'loud'}\ndef run(*a): return []", "CHECKS must map each check to off, warn or fail"),
+    ("CHECKS = {'x': 'loud'}\ndef run(*a): return []", "CHECKS must map each check to off, note, warn or fail"),
     ("CHECKS = {'x': 'fail'}", "needs run(check, repo, vault, files)"),
     ("CHECKS = {'x': 'fail'}\nONE_PAGE = ('y',)\ndef run(*a): return []", "ONE_PAGE names a check not in its CHECKS"),
     ("import nothing_by_this_name", "failed to load: ModuleNotFoundError"),
@@ -534,3 +534,27 @@ def test_a_plugin_check_that_crashes_fails_the_run_instead_of_passing(repo, caps
 def test_a_plugin_outside_the_repo_is_refused(repo, capsys):
     with pytest.raises(cli.ColonyError, match="is not a Python file in this repo"):
         checked(repo, capsys, knowledge={"plugins": ["../elsewhere.py"]})
+
+
+def test_a_note_warns_even_under_strict_while_a_warn_fails(repo, capsys):
+    code, out = plugged(repo, capsys, {"knowledge/notes/a.md": page("note", "# A\\n\\nA glass wall.")},
+                        {"no_glass": "warn", "nav_citations": "note"}, strict=True)
+    assert code == 1 and "no_glass 1," in out and "nav_citations 1 (note)" in out
+    assert "knowledge/README.md: warning: no NAV citation" in out
+    (repo / "knowledge" / "notes" / "a.md").unlink()
+    code, out = plugged(repo, capsys, knowledge={"nav_citations": "note"}, strict=True)
+    assert code == 0 and "with 1 warning(s)" in out, out
+
+
+def test_staged_runs_a_plugin_on_a_staged_file_outside_the_vault(repo, capsys):
+    write(repo, {})
+    (repo / "tools").mkdir()
+    (repo / "tools" / "docs_checks.py").write_text(PLUGIN)
+    (repo / "guide").mkdir()
+    (repo / "guide" / "README.md").write_text("# Guide\n\nA glass door.\n")
+    subprocess.run(["git", "add", "guide/README.md"], cwd=repo, check=True)
+    code, out = run(capsys, {"plugins": ["tools/docs_checks.py"]}, staged=True)
+    assert code == 1 and "guide/README.md:3: says glass" in out
+    subprocess.run(["git", "reset", "-q"], cwd=repo, check=True)
+    code, out = run(capsys, {"plugins": ["tools/docs_checks.py"]}, staged=True)
+    assert code == 0 and "no staged pages" in out
