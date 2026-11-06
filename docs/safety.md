@@ -32,7 +32,7 @@ The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, 
 
 ## The suppressions ledger
 
-`colony suppressions` counts each kind of lint and type suppression in each tracked file: `# noqa`, `# type: ignore`, `eslint-disable`, `@ts-expect-error`, `@ts-ignore`, skipped tests, `nolint`, `#[allow(...)]`, `@SuppressWarnings` and more. It compares the counts with `.colony/suppressions.json`.
+`colony suppressions` counts each kind of lint and type suppression in each tracked file: `# noqa`, `# type: ignore`, `eslint-disable`, `@ts-expect-error`, `@ts-ignore`, skipped tests, `nolint`, `#[allow(...)]`, `@SuppressWarnings` and more. `# NOQA` counts as `# noqa`, since ruff and flake8 read it in any case, and a stylesheet counts the type and test-skip kinds a script does. It compares the counts with `.colony/suppressions.json`.
 
 - A count above the record fails, with the reminder that no agent weakens a check to make it pass.
 - A count below the record fails too, until `colony suppressions --update` lowers the record. The record only shrinks: `--update` never raises a count or adds a file.

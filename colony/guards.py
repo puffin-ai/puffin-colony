@@ -40,7 +40,7 @@ CSS = (".css", ".scss", ".sass", ".less")
 JVM = (".java", ".kt", ".kts", ".scala")
 # Each kind of suppression: its name in the record, its pattern, and the file endings it is read in.
 KINDS = [(kind, re.compile(pattern), endings) for kind, pattern, endings in (
-    ("noqa", r"#\s*(?:(?:ruff|flake8):\s*)?noqa\b", PY),
+    ("noqa", r"(?i)#\s*(?:(?:ruff|flake8):\s*)?noqa\b", PY),  # ruff and flake8 take it in any case
     ("type-ignore", r"#\s*type:\s*ignore\b", PY),
     ("pyright-ignore", r"#\s*pyright:\s*ignore\b", PY),
     ("pylint-disable", r"#\s*pylint:\s*disable", PY),
@@ -48,11 +48,11 @@ KINDS = [(kind, re.compile(pattern), endings) for kind, pattern, endings in (
     ("test-skip", r"\bpytest\.(?:mark\.skip(?:if)?\b|skip\(|importorskip\()|\bunittest\.skip|@mark\.skip", PY),
     ("eslint-disable", r"\b(?:eslint|oxlint)-disable", JS),
     ("biome-ignore", r"biome-ignore", JS + CSS),
-    ("ts-expect-error", r"@ts-expect-error", JS),
-    ("ts-ignore", r"@ts-ignore", JS),
+    ("ts-expect-error", r"@ts-expect-error", JS + CSS),
+    ("ts-ignore", r"@ts-ignore", JS + CSS),
     ("ts-nocheck", r"@ts-nocheck", JS),
     ("test-skip", r"\b(?:test|it|describe|suite|setup|teardown|\w+Test)\.(?:skip|todo|fixme|skipIf)\b(?:\.each)?\s*\("
-                  r"|\b(?:test|it|describe|suite)\(\s*[\"'`][^\"'`]*[\"'`]\s*,\s*\{[^}]*\b(?:skip|todo)\s*:", JS),
+                  r"|\b(?:test|it|describe|suite)\(\s*[\"'`][^\"'`]*[\"'`]\s*,\s*\{[^}]*\b(?:skip|todo)\s*:", JS + CSS),
     ("stylelint-disable", r"stylelint-disable", JS + CSS),
     ("nolint", r"//\s*nolint\b", (".go",)),
     ("test-skip", r"\bt\.Skip(?:f|Now)?\(", (".go",)),

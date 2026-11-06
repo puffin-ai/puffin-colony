@@ -83,7 +83,7 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 
 | Command | What it does |
 | --- | --- |
-| `colony suppressions [--update]` | Counts lint and type suppressions in each file against `.colony/suppressions.json`, and fails when a count grows. `--update` lowers the record, and the first run writes it. |
+| `colony suppressions [--update]` | Counts lint and type suppressions in each file against `.colony/suppressions.json`, and fails when a count grows. `# noqa` counts in any case, and stylesheets count `@ts-ignore`, `@ts-expect-error` and skipped tests too. `--update` lowers the record, and the first run writes it. |
 | `colony hooks install` | Merges the wait guard and the two posting hooks into `.claude/settings.json`, keeping the hooks already there. |
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
 | `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. |

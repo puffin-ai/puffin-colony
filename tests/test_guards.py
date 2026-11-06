@@ -310,6 +310,15 @@ def test_each_language_counts_its_own_suppressions(tmp_path):
         "e.sh": {"shellcheck-disable": 1}, "f.css": {"stylelint-disable": 1}, "g.ts": {"ts-ignore": 1}}
 
 
+def test_noqa_counts_in_any_case_and_a_stylesheet_counts_type_and_test_suppressions(tmp_path):
+    files = {"a.py": "x = 1  # NOQA\ny = 2  # NoQa: E501\nz = 3  # Type: ignore\n",
+             "b.css": "/* @ts-expect-error */\n/* @ts-ignore */\n/* biome-ignore lint: x */\n/* it.skip( */\n"}
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    assert guards.count(tmp_path, list(files)) == {
+        "a.py": {"noqa": 2}, "b.css": {"biome-ignore": 1, "test-skip": 1, "ts-expect-error": 1, "ts-ignore": 1}}
+
+
 def test_add_commands_routes_suppressions_and_the_hooks_actions():
     parser = argparse.ArgumentParser()
     guards.add_commands(parser.add_subparsers(dest="command"))
