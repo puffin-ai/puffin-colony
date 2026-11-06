@@ -37,6 +37,7 @@ NOT_MODIFIED = 'HTTP/2.0 304 Not Modified\r\nEtag: W/"e1"\r\n\r\n'
 CONFIG = {"project": {"repo": "acme/demo", "name": "demo"}, "messages": {"lead_digest_minutes": 1},
           "people": {"logins": ["Ana-GH"]}}
 DIGEST_LINE = "for lead: done, builder-1/7 pushed, 12 passed (from builder-1)"
+BATCH = [99]  # a batch running on another card, so DIGEST_LINE's done waits for the digest
 
 
 def comment(id, body, updated="2026-11-05T10:00:00Z", issue=7, login="ana-gh"):
@@ -204,7 +205,7 @@ def test_the_command_needs_a_session_name(gh, tmp_path):
 def test_the_lead_gathers_lines_and_returns_them_at_the_digest(gh, capsys, monkeypatch):
     gh.answer(ok(comment(1, DIGEST_LINE),
                  comment(2, "for lead: which blue for the button? I'm going with the brand one (from builder-2)")))
-    code, out, clock = run_as("lead", capsys, monkeypatch)
+    code, out, clock = run_as("lead", capsys, monkeypatch, waiting_on=BATCH)
     assert code == 0 and clock.t == 60 and clock.naps == [15] * 4
     assert out.splitlines() == [f"#7 {DIGEST_LINE}",
                                 "#7 for lead: which blue for the button? I'm going with the brand one (from builder-2)"]
@@ -212,7 +213,7 @@ def test_the_lead_gathers_lines_and_returns_them_at_the_digest(gh, capsys, monke
 
 def test_a_digest_with_no_lines_waits_for_the_next_one(gh, capsys, monkeypatch):
     gh.answer(*[NOT_MODIFIED] * 5, ok(comment(1, DIGEST_LINE)))
-    code, out, clock = run_as("lead", capsys, monkeypatch)
+    code, out, clock = run_as("lead", capsys, monkeypatch, waiting_on=BATCH)
     assert code == 0 and out == f"#7 {DIGEST_LINE}\n"
     assert clock.t == 120  # the line came at 75 seconds, after the first digest passed empty
 
@@ -220,7 +221,7 @@ def test_a_digest_with_no_lines_waits_for_the_next_one(gh, capsys, monkeypatch):
 def test_the_digest_is_ten_minutes_by_default(gh, capsys, monkeypatch):
     monkeypatch.setattr(wait, "INTERVAL", 60)
     gh.answer(ok(comment(1, DIGEST_LINE)))
-    code, out, clock = run_as("lead", capsys, monkeypatch, config={"project": CONFIG["project"]})
+    code, out, clock = run_as("lead", capsys, monkeypatch, config={"project": CONFIG["project"]}, waiting_on=BATCH)
     assert code == 0 and out == f"#7 {DIGEST_LINE}\n" and clock.t == 600
 
 
@@ -237,13 +238,19 @@ def test_an_urgent_blocked_or_question_line_returns_at_once(gh, capsys, monkeypa
     ("for lead: ship the batch as it is", "sam-gh", True),
     ("for lead: ship the batch as it is (from ana-gh)", "ana-gh", True),
     ("for lead: ship the batch as it is (from builder-1)", "ana-gh", False),
-    ("for lead: done, and no question: left (from builder-1)", "ana-gh", False),
+    ("for lead: the form is in, and no question: left (from builder-1)", "ana-gh", False),
 ])
 def test_a_persons_line_returns_at_once(gh, capsys, monkeypatch, line, login, at_once):
     gh.answer(ok(comment(1, line, login=login)))
     code, out, clock = run_as("lead", capsys, monkeypatch)
     assert code == 0 and out == f"#7 {line}\n"
     assert clock.naps == ([] if at_once else [15] * 4)
+
+
+def test_a_done_line_returns_at_once_while_no_batch_runs(gh, capsys, monkeypatch):
+    gh.answer(ok(comment(1, "for lead: done, builder-1/1300 pushed (from builder-1)", issue=1300)))
+    code, out, clock = run_as("lead", capsys, monkeypatch, waiting_on=[])
+    assert code == 0 and clock.naps == [] and out == "#1300 for lead: done, builder-1/1300 pushed (from builder-1)\n"
 
 
 def test_a_done_line_returns_at_once_for_a_card_the_batch_waits_on(gh, capsys, monkeypatch, tmp_path):
@@ -274,7 +281,7 @@ def test_waiting_on_takes_card_numbers_and_is_for_the_lead(gh, capsys, monkeypat
 def test_gathered_lines_outlive_a_wait_that_ended(gh, capsys, monkeypatch):
     gh.answer(ok(comment(1, DIGEST_LINE)))
     with pytest.raises(AssertionError, match="never ended"):
-        run_as("lead", capsys, monkeypatch, clock=Clock(most=2))
+        run_as("lead", capsys, monkeypatch, waiting_on=BATCH, clock=Clock(most=2))
     gh.answer(ok(comment(2, "for lead: urgent: main is red (from builder-2)", updated="2026-11-05T10:01:00Z")))
     code, out, _ = run_as("lead", capsys, monkeypatch)
     assert code == 0 and out.splitlines() == [f"#7 {DIGEST_LINE}", "#7 for lead: urgent: main is red (from builder-2)"]
@@ -426,7 +433,7 @@ def test_the_leads_wait_adds_each_stale_line_once(gh, capsys, monkeypatch):
     assert len(calls) == 1 and calls[0][0] is CONFIG
     assert abs(datetime.now(timezone.utc) - calls[0][1]) < timedelta(minutes=1)
     gh.answer(*[NOT_MODIFIED] * 5, ok(comment(1, DIGEST_LINE)))
-    code, out, clock = run_as("lead", capsys, monkeypatch)
+    code, out, clock = run_as("lead", capsys, monkeypatch, waiting_on=BATCH)
     assert code == 0 and out == f"#7 {DIGEST_LINE}\n"  # the same stale line never prints twice
     assert len(calls) == 3  # at the start of each wait, and at the digest that passed empty
 
