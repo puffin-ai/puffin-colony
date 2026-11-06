@@ -133,10 +133,7 @@ Each change names the file and what it should do. The first six come from the co
 | 11 | Burak's rule: act on notifications silently, and write to the person only to converse or when they must act | `colony/playbook.md`, Lead section | Add that rule. The lead's own status lines go on the board, never in chat |
 | 12 | Burak's rule: builders are fast and never overtest | `colony/playbook.md`, Builder section | One test per done-when result, the fast check once, and the done line at once, as `predicted:` assumes |
 
-Colony also gets two things wrong for this repo:
-
-- `cmux` is not on the orchestrator shell's PATH on Burak's Mac (`command not found: cmux`); it lives at `/Applications/cmux.app/Contents/Resources/bin/cmux`. `colony/cli.py` should look there before it falls back to background sessions.
-- The doc list in the request names `docs/design-v0.2.md`, which is not in the repo at `8d0551a`.
+Colony also gets one thing wrong for this repo: `cmux` is not on the orchestrator shell's PATH on Burak's Mac (`command not found: cmux`); it lives at `/Applications/cmux.app/Contents/Resources/bin/cmux`. `colony/cli.py` should look there before it falls back to background sessions.
 
 ## 5. What Puffin should take from each
 
