@@ -305,7 +305,7 @@ def test_who_lists_every_live_lead_and_helper_across_computers(home, config, git
     assert "- burak-engine-lead: burak on Burak-PC, account admin" in out and "Folders: apps/api/." in out
     assert "- builder-2 (helper of burak-engine-lead): burak on Burak-PC, account work" in out
     assert "Room: work: 5h 10%." in out
-    assert "- serdar-lead:" in out
+    assert "- serdar-lead: serdar on " in out
 
 
 def test_status_names_each_lead_on_this_computer_with_account_and_heartbeat_age(home, config, capsys):

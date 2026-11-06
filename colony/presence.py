@@ -126,8 +126,9 @@ def local(config: dict, now: float | None = None) -> list[Status]:
     for path in sorted(folder.glob("*.heartbeat")) if folder.is_dir() else []:
         beat = wait.read_json(path, None)
         if isinstance(beat, dict) and wait.fresh(beat if isinstance(beat.get("at"), (int, float)) else None, now):
-            found.append(Status(beat.get("session") or path.stem, "lead", account=beat.get("account", ""),
-                                computer=computer(), at=beat["at"], folders=claimed(beat.get("session", ""))))
+            name = beat.get("session") or path.stem
+            found.append(Status(name, "lead", person=name.split("-", 1)[0], account=beat.get("account", ""),
+                                computer=computer(), at=beat["at"], folders=claimed(name)))
     return found
 
 
