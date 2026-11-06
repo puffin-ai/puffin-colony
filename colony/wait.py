@@ -197,7 +197,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     `@<login>` for its person or `@all`, and for a builder `@all`. A builder takes a line addressed to it that one
     of its leads signed. The lead takes every line addressed to it that it didn't sign, and can't wait on one whose
     sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done` for a card the batch
-    waits on. A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
+    waits on, or for any card while no batch runs (`me.waiting` is empty). A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
     person's own gh login, so the signature, not the comment's author, tells them apart.
 
     The lead also takes a line for one of its `helpers` that it didn't sign, as `redirected: <line>`, by the same
@@ -224,7 +224,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
             if sender in me.leads:
                 lines.append((line, True))
         elif sender not in me.names and not (redirected and sender == cli.LEAD):
-            done = DONE.match(sentence) is not None and card in me.waiting and not redirected
+            done = DONE.match(sentence) is not None and (card in me.waiting or not me.waiting) and not redirected
             cant_wait = bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done
             lines.append((REDIRECTED + line if redirected else line, cant_wait))
     return lines
@@ -720,7 +720,7 @@ def card_numbers(value: str) -> list[int]:
 def add_commands(sub, wait_parser) -> None:
     """cli.py's route to this module: wait's --waiting-on, and the `say` and `post` commands."""
     wait_parser.add_argument("--waiting-on", type=card_numbers, metavar="N,N",
-                             help="the lead: the cards the batch waits on, whose done lines come at once")
+                             help="the lead: the cards the batch waits on, whose done lines come at once; with none, every done comes at once")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
                                    "hack mode)")
     p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
