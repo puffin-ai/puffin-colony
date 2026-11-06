@@ -8,6 +8,10 @@ the check twice in a row. It never force-pushes, and one merge runs at a time on
 
 It exits 0 when the branch is on the base, or when the mode or the config sends it to a pull request, and 1 when it
 opened a pull request because the merge or the check failed.
+
+colony sync <branch>: merge origin/<base> into the branch, in the worktree that has it checked out, else in the
+merge worktree. A conflict only in `[project] generated` paths takes the base's side and runs `[project] regen`;
+any other conflict stops the merge and leaves the branch as it was. It pushes nothing.
 """
 from __future__ import annotations
 
@@ -182,6 +186,64 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
                               f"  when it passes: $ git push origin HEAD:refs/heads/{base}",
                               f"  on a conflict or a failing check: $ git push origin {branch}, then",
                               "  $ " + shlex.join(pr)])
+
+
+def checked_out_in(root: Path, branch: str) -> Path | None:
+    """The worktree that has the branch checked out, or None."""
+    current = None
+    for line in _git(root, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            current = Path(line[len("worktree "):])
+        elif line == f"branch refs/heads/{branch}":
+            return current
+    return None
+
+
+def sync(config: dict, args) -> int:
+    """`colony sync <branch>`: merge origin/<base> into the branch (see the module's docstring). Return 0 when the
+    branch holds the base, and 1 when a conflict outside the generated paths stopped the merge."""
+    project = config["project"]
+    base, branch = project["base"], args.branch.strip()
+    if not branch or branch.startswith("-") or branch in (base, f"origin/{base}"):
+        raise cli.ColonyError(f"sync needs a branch to bring up to {base}, other than {base} itself")
+    root = cli.repo_root()
+    _git(root, "fetch", "origin")
+    wt = checked_out_in(root, branch)
+    if wt is None:
+        if not _exists(root, f"refs/heads/{branch}"):
+            branch_ref(root, branch)  # names a branch on neither side
+            _git(root, "branch", branch, f"origin/{branch}")
+        wt = worktree(config)
+        ready(root, wt, base)
+        _git(wt, "checkout", "--quiet", branch)
+    elif _git(wt, "status", "--porcelain"):
+        raise cli.ColonyError(f"{branch} has uncommitted changes in {wt}: commit them first")
+    before = _git(wt, "rev-parse", "HEAD")
+    took = ""
+    if batch._run(["git", "merge", "--no-edit", f"origin/{base}"], wt, check=False).returncode:
+        paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
+        if batch.classify_conflict(paths, project.get("generated", [])) != "generated":
+            _git(wt, "merge", "--abort", check=False)
+            print(f"not synced: merging origin/{base} into {branch} conflicts outside the generated paths, in "
+                  f"{', '.join(paths) or 'the merge'}; {branch} is as it was")
+            return 1
+        _git(wt, "checkout", "--theirs", "--", *paths)
+        if project.get("regen"):
+            built, last = _shell(project["regen"], wt, batch.checks_env(config, root))
+            if not built:
+                _git(wt, "merge", "--abort", check=False)
+                print(f"not synced: regen failed after a conflict in {', '.join(paths)}: {last}; {branch} is as it was")
+                return 1
+        _git(wt, "add", "-A")
+        _git(wt, "commit", "--no-edit")
+        took = f", taking origin/{base}'s side of {', '.join(paths)}" + (" and running regen" if project.get("regen")
+                                                                        else "")
+    head = _git(wt, "rev-parse", "HEAD")
+    if head == before:
+        print(f"{branch} already holds origin/{base}: nothing to merge")
+    else:
+        print(f"merged origin/{base} into {branch} at {head[:9]} in {wt}{took}; push it with `git push origin {branch}`")
+    return 0
 
 
 def run(config: dict, args) -> int:

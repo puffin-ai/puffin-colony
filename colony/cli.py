@@ -1404,6 +1404,13 @@ def merge(config: dict, args) -> int:
     return lander.run(config, args)
 
 
+def sync(config: dict, args) -> int:
+    """Merge origin/<base> into a branch, rebuilding a conflict only in generated files (merge.sync)."""
+    from colony import merge as lander
+
+    return lander.sync(config, args)
+
+
 def card(value: str) -> str:
     """Check that a --card value has the shape N=BRANCH, and return it unchanged."""
     number, _, branch = value.partition("=")
@@ -1523,6 +1530,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("branch", help="the branch to land, such as ana/login-form")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+
+    p = sub.add_parser("sync", help="merge origin/<base> into a branch; a conflict only in generated files is rebuilt "
+                                    "with regen, any other stops it")
+    p.add_argument("branch", help="the branch to bring up to the base, such as lead/integration")
+    p.set_defaults(run=sync)
 
     for module in (cycle, board, vault, guards, presence, tidy, release):
         module.add_commands(sub)

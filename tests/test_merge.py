@@ -297,3 +297,44 @@ def test_merge_needs_a_branch_that_exists_and_is_not_the_base(world, branch, err
 def test_merge_is_a_command_on_the_command_line():
     args = cli.build_parser().parse_args(["merge", "ana/login", "--dry-run"])
     assert (args.branch, args.dry_run, args.run) == ("ana/login", True, cli.merge)
+
+
+SYNC = HACK.replace('fast_check = "{fast_check}"\n',
+                    'fast_check = "{fast_check}"\ngenerated = ["gen/*"]\nregen = "echo rebuilt > gen/out.txt"\n')
+
+
+def sync(config, branch):
+    """Run `colony sync <branch>`."""
+    return merge.sync(config, Namespace(branch=branch))
+
+
+def test_sync_rebuilds_a_conflict_only_in_generated_files(world, capsys):
+    (world.clone / "gen").mkdir()
+    commit(world.clone, {"gen/out.txt": "start\n"}, "generated")
+    git(world.clone, "push", "-q", "origin", "main")
+    world.branch("lead/integration", {"gen/out.txt": "the branch's build\n", "b.txt": "the branch\n"})
+    git(world.teammate, "pull", "-q")
+    commit(world.teammate, {"gen/out.txt": "the base's build\n", "a.txt": "the base\n"}, "teammate")
+    git(world.teammate, "push", "-q", "origin", "main")
+    assert sync(world.config(template=SYNC), "lead/integration") == 0
+    assert "taking origin/main's side of gen/out.txt and running regen" in capsys.readouterr().out
+    assert git(world.clone, "show", "lead/integration:gen/out.txt") == "rebuilt"
+    assert git(world.clone, "show", "lead/integration:a.txt") == "the base"
+    assert git(world.clone, "show", "lead/integration:b.txt") == "the branch"
+    git(world.clone, "merge-base", "--is-ancestor", "origin/main", "lead/integration")
+
+
+def test_sync_stops_on_a_conflict_outside_the_generated_files(world, capsys):
+    world.branch("lead/integration", {"a.txt": "from the branch\n"})
+    before = git(world.clone, "rev-parse", "lead/integration")
+    commit(world.teammate, {"a.txt": "from the teammate\n"}, "teammate")
+    git(world.teammate, "push", "-q", "origin", "main")
+    assert sync(world.config(template=SYNC), "lead/integration") == 1
+    assert "conflicts outside the generated paths, in a.txt" in capsys.readouterr().out
+    assert git(world.clone, "rev-parse", "lead/integration") == before
+    assert git(world.tmp / "wt" / "demo-merge", "status", "--porcelain") == ""  # the merge was aborted
+
+
+def test_sync_is_a_command_on_the_command_line():
+    args = cli.build_parser().parse_args(["sync", "lead/integration"])
+    assert (args.branch, args.run) == ("lead/integration", cli.sync)

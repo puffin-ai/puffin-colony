@@ -5,6 +5,8 @@
 [gate]
 check = "full"                     # a batch runs [project] checks (or web_checks for a round that may)
 review = true                      # a fresh reviewer reads every round, until 0 problems are open
+paid_checks = ""                   # a command whose model calls cost money, run only while [budget] provider_dollars
+                                   # is above 0, with COLONY_SPEND_CEILING; it prints `spent: $<dollars>`
 
 [messages]
 lead_digest_minutes = 10           # the lead reads gathered lines this often

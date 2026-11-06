@@ -96,6 +96,7 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | `max_rounds` | yes | `5` | The most rounds a batch runs. A last round that still has findings stops the batch. |
 | `walk` | yes | `true` | Whether to walk the changed screens in a browser. Set `false` for a repo with no web UI. |
 | `walk_paths` | no | `["web/", "app/"]` | Path prefixes. A round that changes none of them skips the walk, unless the last walk failed. Empty walks every round. |
+| `paid_checks` | no | `"npm run eval"` | A command whose model calls cost money, such as your app's evals. A batch runs it once, in the round whose checks, review and walk pass, only while `[budget] provider_dollars` is above 0. It gets the dollars the batch has left as `COLONY_SPEND_CEILING`, must stop there, and must print `spent: $<dollars>`. The batch stops when it prints none or spends past the budget, and the PR lists what it spent. Empty by default. |
 | `merge_after_fast_check` | no | `true` | Hack only. `true` lets `colony merge <branch>` push the base after the fast check passes on the merged result. Otherwise `colony merge` opens a PR. Setup asks, with yes as the default. |
 
 ## `[budget]`
@@ -105,7 +106,7 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | `provider_dollars` | yes | `0` | Model spend allowed inside your app's own checks and evals. Raise it only with the person's yes. |
 | `use_api_key` | no | `false` | `true` lets the lead and builders bill `ANTHROPIC_API_KEY`. Otherwise Colony drops it, so sessions use the account's subscription. |
 
-At `0`, the checks run without `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in their environment. Above `0`, those keys stay for the checks. Colony reads only whether the value is 0. Agents treat any spend above it as a stop-list item that needs your yes.
+At `0`, the checks run without `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in their environment. Above `0`, those keys stay for the checks. Colony reads the value itself only for `[gate] paid_checks`, whose ceiling it sets. Agents treat any spend above it as a stop-list item that needs your yes.
 
 Whatever the budget, Colony removes `ANTHROPIC_API_KEY` from the reviewer's, walker's, fixers' and retro's environment, so they always run on your Claude Code login and never bill an API key.
 
