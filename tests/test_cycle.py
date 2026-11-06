@@ -581,3 +581,45 @@ def test_retro_without_reports_says_to_run_the_batch(repo):
 def test_the_retro_reads_the_decisions_it_prints():
     found = cycle.DECISION.match("decision: keep the walk on phones? — default: yes")
     assert found.groups() == ("keep the walk on phones?", "yes")
+
+
+def calibrated_cards():
+    """Closed cards as `gh issue list --json number,title,body,comments` answers them: two S cards done in 30 and 50
+    minutes, an M card done in 90, one with no prediction and one with no done line, which don't count."""
+    def done(number, title, prediction, minutes):
+        builder = title.split(":")[0]
+        return {"number": number, **card(title, prediction, (0, f"for {builder}: start this card (from lead)"),
+                                         (minutes, f"for lead: done, x pushed, 3 passed (from {builder})"))}
+    return [done(5, "builder-1: a", "predicted: S, 20 min", 30), done(4, "builder-2: b", "predicted: S, 20 min", 50),
+            done(3, "builder-1: c", "predicted: M, 40 min", 90), done(2, "builder-1: d", "no prediction", 10),
+            {"number": 1, **card("builder-2: e", "predicted: L, 60 min", (0, "for builder-2: start this card"))}]
+
+
+def test_stats_calibrate_prints_the_median_actual_minutes_per_size(gh, capsys):  # noqa: F811
+    gh.answer("issue list", calibrated_cards())
+    args = parse("stats", "--calibrate")
+    assert args.run(CONFIG, args) == 0
+    out = capsys.readouterr().out
+    assert "| S | 2 | 40 |\n| M | 1 | 90 |\n" in out
+    assert "| L |" not in out
+    assert gh.called("issue", "list")[0][-1] == str(cycle.CALIBRATE_LISTED)
+
+
+def test_stats_calibrate_reads_only_the_last_thirty_measured_cards(gh, monkeypatch):  # noqa: F811
+    gh.answer("issue list", calibrated_cards())
+    monkeypatch.setattr(cycle, "CALIBRATE_CARDS", 2)
+    assert cycle.calibration(CONFIG) == {"S": (40, 2)}
+
+
+def test_stats_needs_a_card_or_calibrate(gh):  # noqa: F811
+    args = parse("stats")
+    with pytest.raises(cli.ColonyError, match="--calibrate"):
+        args.run(CONFIG, args)
+
+
+def test_calibration_line_puts_the_median_beside_the_prediction(gh):  # noqa: F811
+    gh.answer("issue list", calibrated_cards())
+    assert cycle.calibration_line(CONFIG, "s", cycle.prediction_of("predicted: S, 25 min")) == \
+        "predicted 25 min; the last 2 S cards took a median of 40 min"
+    assert cycle.calibration_line(CONFIG, "M", None) == "the last 1 M cards took a median of 90 min"
+    assert cycle.calibration_line(CONFIG, "L", None) is None

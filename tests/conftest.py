@@ -42,6 +42,12 @@ def no_first_run(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_cmux_app(monkeypatch, tmp_path):
+    """The machine running the suite may have the cmux app, so cmux is found only where a test puts it."""
+    monkeypatch.setattr(cli, "CMUX_APP", tmp_path / "no-cmux-app" / "cmux")
+
+
+@pytest.fixture(autouse=True)
 def outside_claude_code(monkeypatch):
     """The suite may run inside a Claude Code session, whose $CLAUDECODE would make plain `colony` take the
     in-session path. A test that wants that path sets it."""

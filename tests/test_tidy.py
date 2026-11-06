@@ -119,6 +119,21 @@ def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lea
     assert capsys.readouterr().out.strip() == "#41 builder-2: the login form (Status=To do, Lead=ana-lead, Size=M)"
 
 
+def test_card_new_prints_the_median_of_the_last_cards_of_its_size_beside_the_prediction(gh, capsys):  # noqa: F811
+    done = [{"number": n, "title": f"builder-1: c{n}", "body": "predicted: M, 30 min", "comments": [
+        {"createdAt": "2026-01-05T10:00:00Z", "body": "for builder-1: start this card (from lead)"},
+        {"createdAt": f"2026-01-05T1{h}:00:00Z", "body": "for lead: done, x pushed, 3 passed (from builder-1)"}]}
+        for n, h in ((9, 1), (8, 2), (7, 3))]
+    gh.answer("--state closed", done)
+    quiet(gh, items=[card(1, "In progress")])
+    gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
+    gh.answer("fields(first", fields_answer(*FULL))
+    gh.answer("project item-add", {"id": "PVTI_41"})
+    args = parse("card", "new", "builder-2: the export", "--body", "predicted: M, 45 min", "--size", "M")
+    assert args.run(CONFIG, args) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "predicted 45 min; the last 3 M cards took a median of 120 min"
+
+
 @pytest.mark.parametrize("title", ["builder-1: Add dark-mode to settings!", "ADD DARK MODE TO SETTINGS",
                                    "builder-3: add dark mode to the settings page"])
 def test_card_new_refuses_a_duplicate_of_an_open_card_by_its_number(gh, title):  # noqa: F811

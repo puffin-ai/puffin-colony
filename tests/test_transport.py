@@ -78,6 +78,9 @@ def test_a_line_never_carries_a_secret(gh, monkeypatch, line, why):
      "for lead: done, builder-2/41 pushed, 12 passed (from builder-2)"),
 ])
 def test_post_sends_a_card_line_as_a_comment(gh, monkeypatch, capsys, session, to, sentence, urgent, line):
+    from colony import board
+
+    monkeypatch.setattr(board, "set_fields", lambda config, card, pairs: pairs)  # a done's board move, tested below
     monkeypatch.setenv("COLONY_SESSION", session)
     assert wait.post(GITHUB, Namespace(card=41, to=to, sentence=sentence, urgent=urgent)) == 0
     assert capsys.readouterr().out == f"#41 {line}\n"
@@ -94,8 +97,10 @@ def test_post_is_a_command_on_the_command_line(gh, tmp_path):
                          capture_output=True, text=True, cwd=host, env=env)
     assert run.returncode == 0, run.stderr
     assert run.stdout == "#41 for lead: done, builder-2/41 pushed (from builder-2)\n"
-    assert gh() == [["issue", "comment", "41", "--repo", "owner/myapp",
-                     "--body", "for lead: done, builder-2/41 pushed (from builder-2)"]]
+    # The comment goes first; then the done line looks for the board to move the card to In review.
+    assert gh()[0] == ["issue", "comment", "41", "--repo", "owner/myapp",
+                       "--body", "for lead: done, builder-2/41 pushed (from builder-2)"]
+    assert gh()[1][:2] == ["project", "list"]
     bad = subprocess.run([sys.executable, "-m", "colony", "post", "the next one", "lead", "hi"],
                          capture_output=True, text=True, cwd=host, env=env)
     assert bad.returncode == 2 and "is not a card number" in bad.stderr
@@ -115,3 +120,33 @@ def test_post_needs_a_session_another_name_and_one_short_sentence(gh, monkeypatc
     with pytest.raises(cli.ColonyError, match=why):
         wait.post(GITHUB, Namespace(card=41, to=to, sentence=sentence, urgent=False))
     assert gh() == []
+
+
+@pytest.mark.parametrize("session, sentence, features, moved", [
+    ("builder-2", "done, builder-2/41 pushed", {}, [(41, [("Status", "In review")])]),
+    ("builder-2", "question: keep 30 s? I'm going with yes", {}, []),
+    ("lead", "urgent: stop this card", {}, []),
+    ("builder-2", "done, builder-2/41 pushed", {"features": {"board": False}}, []),
+])
+def test_a_helpers_done_moves_its_card_to_in_review(gh, monkeypatch, session, sentence, features, moved):
+    from colony import board
+
+    calls = []
+    monkeypatch.setattr(board, "set_fields", lambda config, card, pairs: calls.append((card, pairs)) or pairs)
+    monkeypatch.setenv("COLONY_SESSION", session)
+    to = "builder-2" if session == "lead" else "lead"
+    assert wait.post({**GITHUB, **features}, Namespace(card=41, to=to, sentence=sentence, urgent=False)) == 0
+    assert calls == moved and len(gh()) == 1
+
+
+def test_a_board_that_fails_leaves_the_done_line_sent(gh, monkeypatch, capsys):
+    from colony import board
+
+    def refuse(config, card, pairs):
+        raise cli.ColonyError("this repo has no board yet")
+
+    monkeypatch.setattr(board, "set_fields", refuse)
+    monkeypatch.setenv("COLONY_SESSION", "builder-2")
+    assert wait.post(GITHUB, Namespace(card=41, to="lead", sentence="done, pushed", urgent=False)) == 0
+    assert gh()[0][:3] == ["issue", "comment", "41"]
+    assert "#41 stays as it was on the board: this repo has no board yet" in capsys.readouterr().err

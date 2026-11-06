@@ -423,3 +423,11 @@ def test_the_playbook_says_subagents_are_for_speed_searches_and_browser_checks()
         assert use in section, use
     builder = (PACKAGE / "skills" / "colony-builder" / "SKILL.md").read_text()
     assert "start no subagents" not in builder and "Subagents section" in builder
+
+
+def test_the_builder_section_keeps_builders_fast_without_dropping_a_required_test():
+    builder = playbook_section("Builder")
+    for rule in ("one test per done-when result", "Run `{fast_check}` once", "post the done line at once",
+                 "`predicted:`", "A bug fix still carries its regression test",
+                 "a test the repo's own rules demand still goes in"):
+        assert rule in builder, rule

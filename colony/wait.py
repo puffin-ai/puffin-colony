@@ -74,6 +74,8 @@ CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait
 LEAD_ENV = f"{cli.NAME.upper()}_LEAD"  # the lead's name a lead and its helpers carry, such as ana-engine-lead
 HEARTBEAT_FRESH = 120  # a lead's heartbeat under 2 minutes old is alive; older, any session may take the lead
 TOKEN_ENV = f"{cli.NAME.upper()}_LEAD_TOKEN"  # which claim a lead's session holds, so its wait refreshes its own beat
+SILENT_AFTER = 5 * 60  # a helper opened with open or join posts its status comment within this long
+STAMP = "%Y-%m-%dT%H:%M:%SZ"  # GitHub's updated_at, which a helper's opening time is compared with
 
 
 class GhError(cli.ColonyError):
@@ -192,7 +194,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     `@<login>` for its person or `@all`, and for a builder `@all`. A builder takes a line addressed to it that one
     of its leads signed. The lead takes every line addressed to it that it didn't sign, and can't wait on one whose
     sentence starts `urgent:`, `blocked:` or `question:`, on a person's line, or on a `done` for a card the batch
-    waits on. A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
+    waits on, or for any card while no batch runs (`me.waiting` is empty). A person's line is unsigned, or signed with a login [people] logins lists: agents post through their
     person's own gh login, so the signature, not the comment's author, tells them apart.
 
     The lead also takes a line for one of its `helpers` that it didn't sign, as `redirected: <line>`, by the same
@@ -219,7 +221,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
             if sender in me.leads:
                 lines.append((line, True))
         elif sender not in me.names and not (redirected and sender == cli.LEAD):
-            done = DONE.match(sentence) is not None and card in me.waiting and not redirected
+            done = DONE.match(sentence) is not None and (card in me.waiting or not me.waiting) and not redirected
             cant_wait = bool(CANT_WAIT.match(sentence)) or not sender or sender in me.people or done
             lines.append((REDIRECTED + line if redirected else line, cant_wait))
     return lines
@@ -227,14 +229,16 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
 
 def learn_helpers(state: dict, comments: list) -> None:
     """Remember, in state["helpers"], each helper's lead from the status comments among these comments: a helper
-    belongs to the lead its $COLONY_LEAD names, which its status carries (presence.py)."""
+    belongs to the lead its $COLONY_LEAD names, which its status carries (presence.py). state["heard"] keeps when each
+    helper's status last changed, which silent_check reads."""
     from colony import presence
 
-    known = state.setdefault("helpers", {})
+    known, heard = state.setdefault("helpers", {}), state.setdefault("heard", {})
     for comment in comments:
         status = presence.parse(comment.get("body") or "")
         if status and status.kind == "helper" and status.lead:
             known[status.name.lower()] = status.lead.lower()
+            heard[status.name.lower()] = max(heard.get(status.name.lower(), ""), comment.get("updated_at") or "")
 
 
 def with_helpers(me: Session, state: dict) -> Session:
@@ -414,14 +418,54 @@ def add_stale(state: dict, stale) -> None:
             state["pending"].append([line, False])
 
 
+def opened_path(project: str, lead: str) -> Path:
+    """Where a lead's helpers opened with `colony open` or `colony join` wait for their first status comment."""
+    return state_path(project, f"{lead}-opened")
+
+
+def expect_status(project: str, lead: str, helper: str, now: float | None = None) -> None:
+    """Note that `helper` of `lead` was just opened, so the lead's wait raises it when no status comment follows
+    within SILENT_AFTER (silent_check)."""
+    path = opened_path(project, lead)
+    opened = read_json(path, {})
+    opened = opened if isinstance(opened, dict) else {}
+    write_json(path, {**opened, helper.lower(): time.time() if now is None else now})
+
+
+def silent_check(project: str, lead: str):
+    """The lead's check for silent helpers: given the wait's state, it returns an `urgent:` line for each helper
+    opened over SILENT_AFTER ago whose status comment hasn't changed since (state["heard"]), and forgets that helper,
+    so each is raised once. A helper whose status came is forgotten too."""
+    path = opened_path(project, lead)
+
+    def check(state: dict, now: float | None = None) -> list[str]:
+        now = time.time() if now is None else now
+        opened = read_json(path, {})
+        opened = opened if isinstance(opened, dict) else {}
+        heard, lines, left = state.get("heard") or {}, [], {}
+        for name, at in opened.items():
+            if not isinstance(at, (int, float)) or heard.get(name, "") >= time.strftime(STAMP, time.gmtime(at)):
+                continue
+            if now - at >= SILENT_AFTER:
+                lines.append(f"urgent: {name} was opened {int((now - at) // 60)} minutes ago and has posted no status "
+                             f"comment; look at its window, or open it again")
+            else:
+                left[name] = at
+        if left != opened:
+            write_json(path, left)
+        return lines
+    return check
+
+
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         stale=None, heartbeat=None, status=None, outbox=None) -> int:
+         stale=None, heartbeat=None, status=None, outbox=None, silent=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
     lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr.
-    `outbox` posts the hooks' lines that failed to post (guards.flush_outbox) at each poll, and never raises."""
+    `outbox` posts the hooks' lines that failed to post (guards.flush_outbox) at each poll, and never raises. `silent`,
+    the lead's silent_check, gathers its `urgent:` lines at each poll."""
     clock = clock or CLOCK
     path = state_path(project, state_name(me.name))
     state = read_json(path, {})
@@ -448,6 +492,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             status()  # edits the session's status comment, at most every 5 minutes, and never raises
         if outbox is not None:
             outbox()
+        if silent is not None:
+            state["pending"] += [[line, True] for line in silent(state)]
         drop_shown(path, state, listed)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
@@ -589,8 +635,9 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
+    silent = silent_check(project, name) if named() else None  # only a named lead's helpers post a status
     return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status,
-                outbox=outbox)
+                outbox=outbox, silent=silent)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:
@@ -649,7 +696,8 @@ def post(config: dict, args) -> int:
     lead signs as `<person>-lead`, and a builder's `lead` means its own person's lead.
 
     A line has a kind (tidy.check_kind): a helper sends done, question:, blocked: or urgent:, and the lead sends its
-    helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text."""
+    helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text. A helper's `done`
+    also moves its card to In review on the board (in_review)."""
     from colony import tidy, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
@@ -678,7 +726,22 @@ def post(config: dict, args) -> int:
     tidy.check_kind(me == cli.LEAD, to, sentence)
     number = transport.send(config, to, line, card=None if on_board else card)
     print(f"#{number} {line}")
+    if me != cli.LEAD and card is not None and DONE.match(sentence):
+        in_review(config, card)
     return 0
+
+
+def in_review(config: dict, card: int) -> None:
+    """Move a card a helper just posted `done` on to In review, which stamps its Last update, so the lead's stale
+    check never raises a finished card. The line is already out, so a board that fails says so on stderr alone."""
+    if not config.get("features", {}).get("board", True):
+        return
+    from colony import board
+
+    try:
+        board.set_fields(config, card, [("Status", "In review")])
+    except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        print(f"{cli.NAME} post: the line went out, and #{card} stays as it was on the board: {e}", file=sys.stderr)
 
 
 def card_number(value: str) -> int:
@@ -699,7 +762,7 @@ def card_numbers(value: str) -> list[int]:
 def add_commands(sub, wait_parser) -> None:
     """cli.py's route to this module: wait's --waiting-on, and the `say` and `post` commands."""
     wait_parser.add_argument("--waiting-on", type=card_numbers, metavar="N,N",
-                             help="the lead: the cards the batch waits on, whose done lines come at once")
+                             help="the lead: the cards the batch waits on, whose done lines come at once; with none, every done comes at once")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
                                    "hack mode)")
     p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "

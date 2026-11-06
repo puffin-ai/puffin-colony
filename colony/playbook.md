@@ -1,6 +1,6 @@
 # The colony playbook
 
-The lead, the builders, the spec agent and the researcher follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
+The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
 
 ## Leads and helpers
 
@@ -117,6 +117,8 @@ In hack mode, follow the Hack section instead.
 
 You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
+How much you tell the person is their setting. When `colony` prints that they want a quiet lead, `[people.<person>] quiet_lead = true`, act on notifications silently, and write to the person only to converse or when they must act; your own status lines go on the board, never in chat. By default, `quiet_lead = false`, keep the person posted on progress as cards start, finish and merge.
+
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
 
 1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. A card is titled `<builder>: <what>`, with up to 3 done-when results, the folders it touches, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S`. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at 10 open cards of yours, so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
@@ -153,9 +155,9 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
 2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
-3. Run `{fast_check}`, and fix what it reports.
-4. Write a test for a bug fix or for new logic. A style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
-5. Commit, run `git push origin <name>/<n>`, and post one line on the card: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.
+3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
+4. Run `{fast_check}` once, when the change and its tests are done, and fix what it reports; run it again only after a fix.
+5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
@@ -180,6 +182,15 @@ The researcher answers one outside question nobody here knows yet, with cited so
 2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.
+
+## Tester
+
+The tester checks a release on the deployed app, the way a person would use it, after the tests and the walk have passed. Its steps are in `.colony/prompts/tester.md`.
+
+1. Once `colony release --after` reports the deploy succeeded, open the tester as its own session with `colony tester "<the release pull request's link>"`. Its first prompt is `.colony/prompts/tester.md`, with the release on its `The release:` line, and it runs as the session `tester`, on the account `colony` picks.
+2. It reads the release's batches and their cards, and tests each card's done-when results on the deployed app. It changes no code.
+3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
+4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
 
 ## Hack
 
