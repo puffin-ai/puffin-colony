@@ -26,7 +26,7 @@ Then it asks a few more questions, each with a default, and opens one PR with ev
 
 Every time after that, `colony` or "hi" opens your lead. To switch setups later, change `mode` in `.colony/colony.toml`. See [docs/modes.md](docs/modes.md#switching-later).
 
-For "hi" to work in a repo before setup, run `colony skill-install` once on your computer. Add `--dry-run` to any `colony` command to see a plan without running anything.
+Saying "hi" works even in a repo that has never used Colony, because the first `colony` run on a computer installs what it needs. Add `--dry-run` to any `colony` command to see a plan without running anything.
 
 ## Why Puffin Colony
 
