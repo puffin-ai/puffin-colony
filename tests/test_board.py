@@ -218,3 +218,9 @@ def test_set_takes_field_value_pairs_and_refuses_a_bare_word():
 def test_last_update_reads_back_what_set_writes():
     assert board.read_stamp(board.stamp(NOW)) == NOW
     assert board.read_stamp("") is None and board.read_stamp("soon") is None
+
+
+def test_the_board_title_comes_from_the_config_else_the_project_name():
+    from colony import board
+    assert board.title({"project": {"name": "demo"}}) == "Colony: demo"
+    assert board.title({"project": {"name": "demo"}, "board": {"title": "Demo Colony"}}) == "Demo Colony"

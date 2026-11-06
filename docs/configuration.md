@@ -150,6 +150,7 @@ caps = { living-spec = 25000 }
 | Key | Example | What it does |
 | --- | --- | --- |
 | `number` | `7` | The number of a GitHub Project the repo's owner already has, to use as the card board. (Hack's board issue is `[messages] board`.) Without it, Colony finds the owner's open project titled `Colony: <name>`, which `colony board init` makes. |
+| `title` | `"Demo Colony"` | The board's title, which `colony board init` gives it and every command finds it by. Default: `Colony: <name>`. |
 
 Every computer's `gh` login needs the project scope for the board: `gh auth refresh -s project`.
 

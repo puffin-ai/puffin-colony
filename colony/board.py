@@ -71,8 +71,9 @@ def read_stamp(text: str) -> datetime | None:
 
 
 def title(config: dict) -> str:
-    """The board's title, `Colony: <project name>`."""
-    return f"{cli.NAME.capitalize()}: {config['project']['name']}"
+    """The board's title: `[board] title`, else `Colony: <project name>`."""
+    own = config.get("board", {}).get("title")
+    return own if isinstance(own, str) and own.strip() else f"{cli.NAME.capitalize()}: {config['project']['name']}"
 
 
 def owner(config: dict) -> str:
