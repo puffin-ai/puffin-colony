@@ -18,7 +18,7 @@ Today there are `lean`, `puffin` and `own`, each in three levels. Next:
 Today you install from GitHub:
 
 ```sh
-uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
+uv tool install git+https://github.com/puffin-ai/puffin-colony
 ```
 
 Once the repo is public, Colony will ship on PyPI as `puffin-colony`, so this works:
@@ -26,3 +26,5 @@ Once the repo is public, Colony will ship on PyPI as `puffin-colony`, so this wo
 ```sh
 uv tool install puffin-colony      # or: pipx install puffin-colony
 ```
+
+`uvx puffin-colony` and `npx puffin-colony` come with that release.

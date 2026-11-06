@@ -25,7 +25,7 @@ Everything Colony writes into your repo lives in `.colony/` at its root, apart f
 ## 1. Install
 
 ```sh
-uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
+uv tool install git+https://github.com/puffin-ai/puffin-colony
 ```
 
 Colony needs Python 3.11 or later, `git`, `gh` and `claude`. It uses `cmux` when it is on your PATH, and Agent Relay when a core runs on your computer. It has no Python dependencies of its own.

@@ -7,7 +7,7 @@ Hack mode is for a team that builds something in hours or a weekend. Each teamma
 Every teammate needs:
 - write access to the repo on GitHub, and `gh` signed in (`gh auth login`);
 - Claude Code, signed in, or another agent that can run shell commands;
-- Colony: `uv tool install git+https://github.com/Puffin-Calendar/puffin-colony`.
+- Colony: `uv tool install git+https://github.com/puffin-ai/puffin-colony`.
 
 ## Kickoff
 

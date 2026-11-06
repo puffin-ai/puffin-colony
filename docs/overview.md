@@ -2,7 +2,7 @@
 
 Puffin Colony on one page. One command turns Claude Code into your repo's whole software life cycle. You talk to a lead. It plans, builds with helpers, checks everything until nothing is left open, and hands you one pull request to merge.
 
-This page covers each part in short, with diagrams. Each section links to the page with the full detail. For the same system as a story, read [explained-simply.md](explained-simply.md).
+This page covers each part in short, with diagrams. Each section links to the page with the full detail. For the same system in plain words, read [explained-simply.md](explained-simply.md).
 
 ## Who is who
 
@@ -10,13 +10,13 @@ There are three kinds of session:
 
 - **The lead.** The Claude Code session you type into. One per person.
 - **Helpers.** Builders, such as `builder-2`, plus the spec agent and the researcher. The lead opens them and gives them work.
-- **Subagents.** Short-lived workers a helper starts inside its own session, to search code or check a page in a browser.
+- **Subagents.** Short-lived mini-workers a helper starts inside its own session. Many run at the same time, each on one piece of a card, so the card finishes sooner. They also search code and check pages in a browser.
 
 ### The four rules
 
 1. **You talk only to leads.** The session you open and type into is your lead. When no lead runs, `colony hi` makes your session the lead. You never chat with a helper.
 2. **Each helper belongs to one lead.** It works on that lead's cards, each on its own branch, so its context stays on its job.
-3. **Helpers use subagents.** For searching and browser checks. Subagents return short summaries, so the helper stays lean.
+3. **Helpers use subagents for speed.** Each subagent does one piece of a card at the same time as the others, and they also search and run browser checks. Subagents return short results, so the helper stays lean. More helpers means more cards at once; more subagents means each card finishes sooner.
 4. **Leads talk to leads.** On a team, each person's lead meets the others on one coordination issue. A lead never gives orders to another lead's helpers.
 
 ```mermaid
@@ -26,7 +26,7 @@ flowchart TB
   L1 --> H1["builder-1"] & H2["builder-2"]
   L1 --> H3["builder-3<br/>a second computer, joined"]
   L2 --> H4["Sam's helpers"]
-  H1 -.-> SA["subagents<br/>search, browser check"]
+  H1 -.-> SA["subagents<br/>pieces in parallel,<br/>search, browser check"]
   L1 & L2 <-.-> C[("Coordination issue")]
 ```
 
