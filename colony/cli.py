@@ -20,6 +20,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from datetime import datetime, timezone
@@ -180,6 +181,59 @@ def signed_in(config_dir: str) -> bool:
 
 
 WINDOWS = {"five_hour": "5h", "seven_day": "week"}  # the usage windows Claude Code saves, and their short names
+USAGE_STALE = 600  # seconds: a saved reading older than this is fetched again (refresh_usage)
+USAGE_TIMEOUT = 60  # seconds every fetch of one refresh_usage gets, together
+NO_REFRESH_ENV = "COLONY_NO_USAGE_REFRESH"  # set, refresh_usage fetches nothing
+_fetched: dict[str, float] = {}  # each folder's last fetch in this process, so a plan that saves no windows is not
+# fetched on every call
+
+
+def reading_age(config_dir: str, now: float | None = None) -> float | None:
+    """Seconds since Claude Code saved the account's usage reading, or None when it saved none."""
+    try:
+        fetched = float(_state(config_dir)["cachedUsageUtilization"]["fetchedAtMs"]) / 1000
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (time.time() if now is None else now) - fetched
+
+
+def refresh_usage(folders: list[str]) -> None:
+    """Fetch a live usage reading for each signed-in account folder whose saved one is missing or older than
+    USAGE_STALE, so usage reads today's numbers and not the copy from the account's last session.
+
+    Runs `claude -p /usage` with each folder as its settings folder, side by side, in the temp folder so no project
+    hooks run. /usage makes no model call: Claude Code fetches the windows and saves them in the folder's state
+    file. A fetch that fails or passes USAGE_TIMEOUT leaves the saved reading as it was. NO_REFRESH_ENV turns it off.
+    """
+    if os.environ.get(NO_REFRESH_ENV) or not shutil.which("claude"):
+        return
+    now = time.time()
+    running = []
+    for folder in dict.fromkeys(str(Path(f).expanduser()) for f in folders):
+        if not Path(folder).is_dir() or not signed_in(folder) or now - _fetched.get(folder, 0.0) < USAGE_STALE:
+            continue
+        age = reading_age(folder, now)
+        if age is not None and age < USAGE_STALE:
+            continue
+        env = dict(os.environ)
+        env.pop("CLAUDECODE", None)
+        if is_default_dir(folder):
+            env.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            env["CLAUDE_CONFIG_DIR"] = folder
+        _fetched[folder] = now
+        try:
+            running.append(subprocess.Popen(["claude", "-p", "/usage"], env=env, cwd=tempfile.gettempdir(),
+                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL))
+        except OSError:
+            continue
+    deadline = time.monotonic() + USAGE_TIMEOUT
+    for process in running:
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            process.kill()
 
 
 def usage(config_dir: str, now: datetime | None = None) -> dict[str, tuple[float, datetime | None]]:
@@ -286,12 +340,14 @@ def pick(config: dict, person: str, now: datetime | None = None) -> tuple[str, s
     The person's accounts, in their order (person_accounts), are judged on this computer (judge). An account with
     room wins, the soonest weekly reset first, then the most 5-hour room, then the person's order. Next comes an
     account with no reading, in order. A last-resort account counts only when none of those has room. When every
-    account is out of room, the first in order is named, and why says so.
+    account is out of room, the first in order is named, and why says so. Stale readings are fetched first
+    (refresh_usage).
     """
     now = now or datetime.now(timezone.utc)
     order, last = person_accounts(config, person)
     if not order and not last:
         raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
+    refresh_usage([config["accounts"][name]["config_dir"] for name in order + last])
     for names in (order, last):
         judged = [(judge(name, config["accounts"][name]["config_dir"], now), i, name) for i, name in enumerate(names)]
         for tier in (0, 1):

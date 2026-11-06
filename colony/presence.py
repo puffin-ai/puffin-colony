@@ -218,10 +218,12 @@ def held_by_others(alive: list[Status], me: str) -> dict[str, list[str]]:
 
 def mine(config: dict, args, name: str, kind: str, lead: str = "") -> Status:
     """This session's status now: its person, this computer, its account, its accounts' room, and its folders, a
-    helper's being its lead's."""
+    helper's being its lead's. Stale readings are fetched first (cli.refresh_usage)."""
     person = cli.person_of(config, args)
-    rooms = [cli.room_text(account, a["config_dir"]) for account, a in config.get("accounts", {}).items()
-             if a.get("person") in (person, "any") and Path(a["config_dir"]).expanduser().is_dir()]
+    accounts = [(account, a["config_dir"]) for account, a in config.get("accounts", {}).items()
+                if a.get("person") in (person, "any") and Path(a["config_dir"]).expanduser().is_dir()]
+    cli.refresh_usage([folder for _, folder in accounts])
+    rooms = [cli.room_text(account, folder) for account, folder in accounts]
     return Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
                   room=rooms, folders=claimed(lead or name), at=time.time())
 

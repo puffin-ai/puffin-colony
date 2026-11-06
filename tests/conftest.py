@@ -24,3 +24,9 @@ def with_the_retry_watchdog(monkeypatch):
     """Every Colony session runs with CLAUDE_CODE_RETRY_WATCHDOG=1, so the prompt hook's once-a-day note stays out of
     a test that doesn't ask for it, wherever the suite runs."""
     monkeypatch.setenv("CLAUDE_CODE_RETRY_WATCHDOG", "1")
+
+
+@pytest.fixture(autouse=True)
+def no_usage_refresh(monkeypatch):
+    """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
+    monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")
