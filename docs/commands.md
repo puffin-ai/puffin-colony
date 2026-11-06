@@ -46,6 +46,7 @@ Both take `@<login>` as the recipient, which reaches that person's lead, and `@a
 | `colony handover --decisions … --open … --next …` | The lead posts its handover on the coordination issue, and prints the command for a fresh lead. |
 | `colony handover --read` | Prints this lead's last handover. |
 | `colony batch --name <n> --card N=BRANCH …` | Takes the cards through the gate loop to one PR, whose body says `Closes #N` for each card, then runs `colony tidy`. `--from <branch>` builds on another branch than `origin/<base>`. |
+| `colony batch --fast --name <n> --card N=BRANCH …` | Opt-in, for a batch the person wants shipped quickly. Runs the full checks once, with no reviewer, walk or fixers, opens the PR when they pass, and writes `gate: fast` in its body. When the checks fail it stops, and opens no PR. The default gate is unchanged. |
 | `colony status [--name <n>]` | Shows this computer's lead, with its name, account and heartbeat age, then a batch's round, open problems, walk, running steps and minutes. Without `--name`, the newest batch. |
 | `colony stats --card N[=BRANCH] … [--base B]` | Prints each card's predicted and actual minutes and tokens, as a table with a total row. |
 | `colony retro --name <batch>` | Runs the retro agent on a batch's reports, and opens a PR when it finds a lesson. |

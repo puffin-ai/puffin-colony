@@ -8,7 +8,8 @@ batch's reports go to `.colony/reports/<batch>/` in its worktree, and land on th
 The mode's [gate] keys shape the gate: `check` is "full" ([project] checks, or web_checks for a round that may) or
 "fast" ([project] fast_check alone, hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when
 false), and `walk` walks the changed screens. Startup and solo run the full checks and the reviewer, and solo walks
-only when `walk` is true; hack runs the fast check alone.
+only when `walk` is true; hack runs the fast check alone. `colony batch --fast` runs the full checks once, with no
+reviewer, walk or fixers, and opens the pull request when they pass, with `gate: fast` in its body.
 
 In hack mode, `colony batch --review --name <n>` with no `--card` reviews the demo build: one fresh reviewer reads
 origin/<base> as it stands, beside the fast check, with no fixers, and one line on the board gives the open count and
@@ -290,6 +291,7 @@ class Batch:
     account: tuple[str, str]
     dry: bool = False
     review: bool = True
+    checks_only: bool = False  # `colony batch --fast`: the full checks once, with no reviewer, walk or fixers
     sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-lead`
     lock: threading.RLock = field(default_factory=threading.RLock)
     state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False})
@@ -314,8 +316,14 @@ class Batch:
             raise SystemExit("colony batch --review with no --card reviews origin/<base> as it stands: drop --from")
         start = getattr(args, "from_branch", None) or f"origin/{config['project']['base']}"
         review = bool(config["gate"]["review"] or getattr(args, "review", False))
+        checks_only = bool(getattr(args, "fast", False))
+        if checks_only and demo:
+            raise SystemExit("colony batch --fast takes cards: --review alone reviews the demo build")
+        if checks_only:
+            config = {**config, "gate": {**config["gate"], "check": "full", "walk": False, "max_rounds": 1}}
+            review = False
         b = cls(config, name, cards, start, _root(config, args), _account(config, args),
-                bool(getattr(args, "dry_run", False)), review)
+                bool(getattr(args, "dry_run", False)), review, checks_only)
         if demo:
             from colony import wait
 
@@ -691,6 +699,7 @@ def pr_body(b: Batch) -> str:
     rounds = b.state["rounds"]
     minutes = (b.reports / "minutes.md").read_text().splitlines() if (b.reports / "minutes.md").exists() else []
     return "\n".join([
+        *(["gate: fast", ""] if b.checks_only else []),
         "## Cards", *[f"- Closes #{n}, from `{ref}`" for n, ref in b.cards.items()], "",
         "## Open problems by round", " → ".join(str(x["open"]) for x in rounds), "",
         "| Round | Open | Walk | Checks |", "| --- | --- | --- | --- |",
@@ -755,14 +764,19 @@ def plan(b: Batch) -> str:
                      + shlex.join(claude_cmd(b.config, "walker", "<walker prompt>", [b.reports])))
     done = ["the fast check passes" if fast else "checks pass", *(["open: 0"] if b.review else []),
             "walk pass or skipped"]
-    lines += ["  fixers, in parallel: $ " + shlex.join(claude_cmd(b.config, "fixer", "<fixer prompt>", [b.reports])),
-              f"  rounds: at most {settings.get('max_rounds', 5)}; done at {', '.join(done)}",
+    if b.checks_only:
+        lines.append("  no reviewer, walk or fixers: --fast stops when the checks fail")
+    else:
+        lines.append("  fixers, in parallel: $ " + shlex.join(claude_cmd(b.config, "fixer", "<fixer prompt>", [b.reports])))
+    lines += [f"  rounds: at most {settings.get('max_rounds', 5)}; done at {', '.join(done)}",
               "  done: $ " + shlex.join(push_cmd(b)),
               "        $ " + shlex.join(pr_cmd(b, b.reports / "pr.md")), "", "Prompts for round 1:", ""]
     if b.review:
         lines += ["--- reviewer", reviewer_prompt(b, 1, head, None, RISKS_PLACE).rstrip(), ""]
     if settings.get("walk"):
         lines += ["--- walker", walker_prompt(b, 1, head).rstrip(), ""]
+    if b.checks_only:
+        return "\n".join(lines).rstrip()
     example = [Finding("<path>", 1, "<each finding routed to this card>")]
     lines += [f"--- fixer, for card #{next(iter(b.cards))}", fixer_prompt(b, 1, example, fix_path, fix_branch).rstrip()]
     return "\n".join(lines)
@@ -838,6 +852,8 @@ def run_rounds(b: Batch) -> int:
             if not findings:
                 print(f"colony batch {b.name}: done in round {r}. {open_pr(b)}")
                 return 0
+            if b.checks_only:
+                raise Stop(f"the full checks failed, and --fast runs no fixers: {findings[0].text}")
             if r == rounds:
                 raise Stop(f"round {r} of {rounds} still has {len(findings)} findings")
             fix_round(b, r, findings)
