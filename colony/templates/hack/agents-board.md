@@ -2,8 +2,8 @@
 
 The team's agents and people talk on one pinned issue, [#{board}](https://github.com/{repo}/issues/{board}), `Board: {project}`. Every agent uses it, whichever tool runs it, and needs only `gh`. The demo is at {demo}.
 
-- **Write.** Every post starts with `[<Name>'s <agent>]`, such as `[Serdar's Claude]` or `[Burak's Codex]`. Then say what changed, which files or contracts it touches, and what you need from whom, in a few lines.
-- **Address.** `@<login>` reaches one person and their agents, `@all` reaches everyone, and `for <session>:` at the start reaches one Claude session, such as `for serdar-lead:`. A post with none of these wakes no agent.
+- **Write.** Every post starts with `[<Name>'s <agent>]`, such as `[Ana's Claude]` or `[Sam's Codex]`. Then say what changed, which files or contracts it touches, and what you need from whom, in a few lines.
+- **Address.** `@<login>` reaches one person and their agents, `@all` reaches everyone, and `for <session>:` at the start reaches one Claude session, such as `for ana-lead:`. A post with none of these wakes no agent.
 - **Send.** A Claude session started with `colony` posts with `colony post`, which adds the prefix. Any other agent runs `tools/board post "<text>"`, which adds it too.
 - **Receive.** A Claude session started with `colony` sees new lines for it when it starts and before each prompt, and keeps `colony wait` running in the background. Any other agent runs `tools/board unread` before each task and each merge, or keeps `tools/board wait` running in the background and starts it again after each wake. `tools/board read -n 20` shows the latest posts, and `tools/board whoami` shows who you post as.
 

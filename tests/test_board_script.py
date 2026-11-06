@@ -109,14 +109,14 @@ class Board:
         self.config = self.root / ".colony" / "colony.toml"
         self.config.write_text(f'[project]\nmode = "hack"\nname = "app"\nrepo = "{REPO}"   # the repo\n\n'
                                f'[messages]\nboard = {ISSUE}\n\n'
-                               '[people]\nlogins = ["serdar", "burak"]\n'
-                               'names = { serdar = "Serdar", burak = "Burak" }\n')
+                               '[people]\nlogins = ["ana", "sam"]\n'
+                               'names = { ana = "Ana", sam = "Sam" }\n')
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         (bin_dir / "gh").write_text(STUB.replace("{python}", sys.executable))
         (bin_dir / "gh").chmod(0o755)
         self.db, self.log = tmp_path / "db.json", tmp_path / "gh.log"
-        self.save({"repo": REPO, "issue": ISSUE, "login": "serdar", "comments": []})
+        self.save({"repo": REPO, "issue": ISSUE, "login": "ana", "comments": []})
         self.env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(self.home), "STUB_DB": str(self.db),
                     "STUB_LOG": str(self.log), "BOARD_AGENT": "Codex"}
 
@@ -166,23 +166,23 @@ def test_the_script_is_posix_sh_that_needs_only_gh():
 def test_whoami_names_the_login_the_name_from_colony_toml_and_the_agent(board):
     run = board.run("whoami")
     assert run.returncode == 0, run.stderr
-    assert run.stdout == ("login: serdar\nname: Serdar\nagent: Codex\nposts as: [Serdar's Codex]\n"
+    assert run.stdout == ("login: ana\nname: Ana\nagent: Codex\nposts as: [Ana's Codex]\n"
                           f"board: {REPO}#{ISSUE}\n")
     claude = board.run("whoami", BOARD_AGENT="", CLAUDECODE="1")
-    assert "posts as: [Serdar's Claude]" in claude.stdout
-    override = board.run("whoami", BOARD_NAME="Serdar K", BOARD_ISSUE="40", BOARD_REPO="acme/other")
-    assert "posts as: [Serdar K's Codex]" in override.stdout and "board: acme/other#40" in override.stdout
+    assert "posts as: [Ana's Claude]" in claude.stdout
+    override = board.run("whoami", BOARD_NAME="Ana K", BOARD_ISSUE="40", BOARD_REPO="acme/other")
+    assert "posts as: [Ana K's Codex]" in override.stdout and "board: acme/other#40" in override.stdout
 
 
 def test_post_adds_the_prefix_once_and_takes_the_text_from_stdin(board):
-    run = board.run("post", "@burak", "the login API is up")
+    run = board.run("post", "@sam", "the login API is up")
     assert run.returncode == 0, run.stderr
     assert run.stdout == f"posted https://github.com/{REPO}/issues/{ISSUE}#issuecomment-101\n"
-    assert board.run("post", "[Serdar's Claude] @all main is green").returncode == 0
+    assert board.run("post", "[Ana's Claude] @all main is green").returncode == 0
     assert board.run("post", stdin="two lines\nof news\n").returncode == 0
     bodies = [c["body"] for c in board.load()["comments"]]
-    assert bodies == ["[Serdar's Codex] @burak the login API is up", "[Serdar's Claude] @all main is green",
-                      "[Serdar's Codex] two lines\nof news"]
+    assert bodies == ["[Ana's Codex] @sam the login API is up", "[Ana's Claude] @all main is green",
+                      "[Ana's Codex] two lines\nof news"]
 
 
 def test_post_refuses_an_empty_text_and_a_token_without_calling_github(board):
@@ -195,59 +195,59 @@ def test_post_refuses_an_empty_text_and_a_token_without_calling_github(board):
 
 
 def test_unread_first_shows_the_last_posts_then_only_the_new_ones_by_others(board):
-    board.add(*[comment(n, "burak", f"post {n}") for n in range(1, 11)],
-              comment(11, "ana", "@serdar can you review?"), comment(12, "burak", "@ALL demo at 5"),
-              comment(13, "ana", "mail @serdar-k, not me"), comment(14, "ana", "line one\nline two"))
+    board.add(*[comment(n, "sam", f"post {n}") for n in range(1, 11)],
+              comment(11, "lee", "@ana can you review?"), comment(12, "sam", "@ALL demo at 5"),
+              comment(13, "lee", "mail @ana-k, not me"), comment(14, "lee", "line one\nline two"))
     first = board.run("unread")
     assert first.returncode == 0, first.stderr
-    assert posts(first.stdout) == [f"burak {n} -" for n in (5, 6, 7, 8, 9, 10)] + [
-        "ana 11 you", "burak 12 you", "ana 13 -", "ana 14 -"]
-    assert "--- @ana at 2026-11-05T10:00:14Z, comment 14\nline one\nline two\n" in first.stdout
+    assert posts(first.stdout) == [f"sam {n} -" for n in (5, 6, 7, 8, 9, 10)] + [
+        "lee 11 you", "sam 12 you", "lee 13 -", "lee 14 -"]
+    assert "--- @lee at 2026-11-05T10:00:14Z, comment 14\nline one\nline two\n" in first.stdout
     again = board.run("unread")
     assert (again.returncode, again.stdout, again.stderr) == (0, "", "board: no new posts\n")
     assert board.run("post", "@all I take the login form").returncode == 0
-    board.add(comment(200, "burak", "@serdar the API returns the name now"))
+    board.add(comment(200, "sam", "@ana the API returns the name now"))
     third = board.run("unread")
-    assert posts(third.stdout) == ["burak 200 you"]  # the post this agent made is not unread
+    assert posts(third.stdout) == ["sam 200 you"]  # the post this agent made is not unread
     assert board.cursor().read_text().split()[0] == "200"
 
 
 def test_a_check_github_fails_marks_nothing_read(board):
-    board.add(comment(1, "burak", "@serdar hi"))
+    board.add(comment(1, "sam", "@ana hi"))
     assert board.run("unread").returncode == 0
     before = board.cursor().read_text()
-    board.add(comment(2, "burak", "@serdar again"))
+    board.add(comment(2, "sam", "@ana again"))
     db = board.load()
     board.save({**db, "fail": True})
     run = board.run("unread")
     assert run.returncode == 1 and "could not reach GitHub, so nothing was marked read" in run.stderr
     assert board.cursor().read_text() == before
     board.save(db)
-    assert posts(board.run("unread").stdout) == ["burak 2 you"]
+    assert posts(board.run("unread").stdout) == ["sam 2 you"]
 
 
 def test_read_shows_the_last_n_posts_across_pages_and_leaves_unread_alone(board):
-    board.add(*[comment(n, "burak", f"post {n}") for n in range(1, 151)])
+    board.add(*[comment(n, "sam", f"post {n}") for n in range(1, 151)])
     run = board.run("read", "-n", "60")
     assert run.returncode == 0, run.stderr
-    assert posts(run.stdout) == [f"burak {n} -" for n in range(91, 151)]
+    assert posts(run.stdout) == [f"sam {n} -" for n in range(91, 151)]
     pages = [call[1] for call in board.calls() if call[0] == "api" and "/comments?" in call[1]]
     assert [re.search(r"&page=(\d+)", page)[1] for page in pages] == ["2", "1"]  # the last page, then the one before
-    assert posts(board.run("read", "-n2").stdout) == ["burak 149 -", "burak 150 -"]
+    assert posts(board.run("read", "-n2").stdout) == ["sam 149 -", "sam 150 -"]
     assert not board.cursor().exists()
     assert len(posts(board.run("unread").stdout)) == 10
 
 
 def test_wait_sleeps_through_posts_for_others_and_wakes_on_one_for_you(board):
-    board.add(comment(1, "burak", "kickoff"))
+    board.add(comment(1, "sam", "kickoff"))
     board.run("unread")
-    board.add(comment(2, "burak", "pushed the schema"))
-    board.add(comment(3, "ana", "@all freeze at 4"), key="arrivals")
+    board.add(comment(2, "sam", "pushed the schema"))
+    board.add(comment(3, "lee", "@all freeze at 4"), key="arrivals")
     run = board.run("wait", "--interval", "1")
     assert run.returncode == 0, run.stderr
-    assert posts(run.stdout) == ["burak 2 -", "ana 3 you"]
+    assert posts(run.stdout) == ["sam 2 -", "lee 3 you"]
     reads = [call for call in board.calls() if any("since=" in word for word in call)]
-    assert len(reads) == 2  # one check saw only burak's post, the next one ana's too
+    assert len(reads) == 2  # one check saw only sam's post, the next one lee's too
     assert "--paginate" in reads[0]
     assert board.cursor().read_text().split()[0] == "3"
 

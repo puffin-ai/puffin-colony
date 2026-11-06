@@ -18,7 +18,7 @@ A sentence starts with its kind, when it has one:
 
 A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`. The lead's wait also adds a `stale:` line for each card In progress whose Last update on the board is over 2.5 hours old, unless its State is usage limit.
 
-Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `serdar-lead`: `colony say burak-lead "<sentence>"`. Use it to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules.
+Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `ana-lead`: `colony say sam-lead "<sentence>"`. Use it to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules.
 
 ## Stop list
 

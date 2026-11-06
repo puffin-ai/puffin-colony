@@ -25,7 +25,7 @@ checks = "make check"
 config_dir = "~/.claude"
 person = "ana"
 [accounts.admin]
-config_dir = "~/.claude-admin"
+config_dir = "~/.claude-work"
 person = "ana"
 [roles]
 lead = { model = "m", effort = "high" }
@@ -111,7 +111,7 @@ def test_the_pointer_line_setup_writes_sends_a_plain_hi_to_colony_hi():
 
 
 def test_hi_with_no_heartbeat_claims_the_lead_with_this_sessions_account(home, config, capsys, monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-admin"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-work"))
     out = hi(capsys)
     beat = heartbeat(home)
     assert beat["session"] == "ana-lead" and beat["account"] == "admin" and len(beat["token"]) == 12
@@ -269,7 +269,7 @@ def test_status_names_the_lead_its_account_and_heartbeat_age(home, config, capsy
 
 
 def test_skill_install_copies_the_setup_skill_into_a_settings_folder(home, capsys):
-    folder = home / ".claude-admin"
+    folder = home / ".claude-work"
     folder.mkdir()
     assert cli.main(["skill-install", "--config-dir", str(folder)]) == 0
     copied = folder / "skills" / "colony-setup" / "SKILL.md"

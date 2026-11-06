@@ -2,6 +2,31 @@
 
 **One command, and Claude Code runs your repo's whole software life cycle: knowledge, plan, research, spec, build, check and learn.**
 
+New here? [Explained like you're five](#explained-like-youre-five) tells the story in a minute. [The full overview](docs/overview.md) covers every part, with diagrams.
+
+## Why Puffin Colony
+
+- **A team, not one helper.** Claude Code plans, builds in parallel, checks its own work, and hands you one PR.
+- **You make the decisions, not the chores.** The lead asks you only what it can't decide, each time with a default.
+- **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop until 0 problems are open.
+- **Faster and cheaper over time.** Rules load only when needed, helpers work in parallel, and every minute and dollar is measured.
+- **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
+- **Nothing new to run.** One command, no servers, standard-library Python, on your own machine and your own Claude accounts.
+
+What one team saw in its first runs, on 2026-11-05. These are early runs, not a benchmark, and your numbers will differ:
+
+- Open problems went from 7 to 0 over 4 fix rounds, across 10 cards.
+- The browser walk caught 4 phone bugs that the tests missed.
+- Loading rules only when needed cut the cost per session by 14%.
+- A tiny change took about 2 minutes.
+- In the second batch, two cards went from the request to an open PR in about 66 minutes, for $9.58 of agent cost at API prices.
+
+## Explained like you're five
+
+You are the boss of a puffin colony. You tell the lead puffin what you want. The lead puffin gives jobs to helper puffins, and each helper has its own corner of the nest. When they finish, a checker puffin and a tester puffin look for mistakes, and send each one back to the puffin who made it. They keep going until there are no mistakes left. Then the lead puffin brings you one finished thing to say yes to.
+
+That is all Colony does. [docs/explained-simply.md](docs/explained-simply.md) maps each puffin to the real thing.
+
 You talk to a lead agent. It sizes each request, sends a new feature to a spec agent and an open question to a researcher, and runs builders. It checks their work until nothing is left to fix, turns each lesson into a rule, and hands you one pull request to merge. For a hackathon or a small project, a lighter mode keeps only what fits.
 
 ```console
@@ -33,7 +58,7 @@ uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
 cd your-repo && colony
 ```
 
-> The repo may be private for now. If the install can't clone it, ask for access, then run `gh auth setup-git` so git uses your GitHub login. `pipx install git+https://github.com/Puffin-Calendar/puffin-colony` works too.
+`pipx install git+https://github.com/Puffin-Calendar/puffin-colony` works too.
 
 The first `colony` reads your repo, asks a few questions, each with a default, and opens one setup PR. Merge it, run `colony` again, and tell your lead what you want. Add `--dry-run` to see a plan without running anything.
 
@@ -90,6 +115,8 @@ Colony's first batch with nobody relaying messages, and what it cost, are in [do
 
 ## Docs
 
+- [Explained simply](docs/explained-simply.md): the whole system as one short story
+- [Overview](docs/overview.md): every part on one page, with diagrams
 - [Modes](docs/modes.md): Hack, Solo and Startup, the defaults files, and switching
 - [Hackathon guide](docs/hackathon.md): one page, from kickoff to the demo
 - [How it works](docs/how-it-works.md): setup, the lead, builders and the gate, step by step
@@ -97,7 +124,7 @@ Colony's first batch with nobody relaying messages, and what it cost, are in [do
 - [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
 - [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
-- [FAQ](docs/faq.md), [Roadmap](docs/roadmap.md), [Design](docs/design.md) and [Design 0.2](docs/design-v0.2.md)
+- [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## Develop
 

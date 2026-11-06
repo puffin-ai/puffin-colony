@@ -42,7 +42,7 @@ These come from one team's first batch: Puffin Calendar, on 2026-11-05. It is on
 | A tiny change | about 2 minutes |
 | The whole batch | about 2.5 hours, mostly checks |
 
-The same day, Colony ran a batch on its own for the first time, with nobody relaying messages ([Puffin PR #1310](https://github.com/Puffin-Calendar/puffin-calendar/pull/1310)):
+The same day, in one team's second batch, Colony ran on its own for the first time, with nobody relaying messages:
 
 | What | Result |
 | --- | --- |

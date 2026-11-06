@@ -394,7 +394,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
 
 
 def lead_name(config: dict, args) -> str:
-    """The lead's name on the coordination issue, `<person>-lead`, such as serdar-lead. In hack mode a person is
+    """The lead's name on the coordination issue, `<person>-lead`, such as ana-lead. In hack mode a person is
     their GitHub login, so the lead is `<login>-lead`."""
     return f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
 
@@ -533,7 +533,7 @@ def say(config: dict, args) -> int:
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
     elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
-        raise cli.ColonyError(f"say needs another lead's name, such as burak-lead, or @login (you are {me})")
+        raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
     line = checked(compose(to, sentence, me), sentence)
     number = transport.send(config, to, line)
     print(f"#{number} {line}")
@@ -597,7 +597,7 @@ def add_commands(sub, wait_parser) -> None:
                              help="the lead: the cards the batch waits on, whose done lines come at once")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
                                    "hack mode)")
-    p.add_argument("to", metavar="lead-name", help="the other lead, such as burak-lead, or @login for that person's "
+    p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
                                                    "lead, or @all")
     p.add_argument("sentence", help="one sentence")
     p.set_defaults(run=say)

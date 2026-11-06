@@ -88,7 +88,7 @@ def world(tmp_path, monkeypatch, core):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
-    monkeypatch.setenv("COLONY_PERSON", "serdar")
+    monkeypatch.setenv("COLONY_PERSON", "ana")
     pointer = tmp_path / transport.POINTER
     pointer.parent.mkdir(parents=True)
     pointer.write_text(f"{core}\n")
@@ -161,10 +161,10 @@ def test_say_sends_an_urgent_line_for_another_lead_through_the_relay(world, monk
     (world.home / ".colony" / "demo").mkdir(parents=True)
     (world.home / ".colony" / "demo" / "lead-coordination.json").write_text("5")
     monkeypatch.setenv("COLONY_SESSION", "lead")
-    assert wait.say(RELAY, Namespace(person=None, to="burak-lead", sentence="urgent: I merge dev in 10 minutes")) == 0
-    line = "for burak-lead: urgent: I merge dev in 10 minutes (from serdar-lead)"
+    assert wait.say(RELAY, Namespace(person=None, to="sam-lead", sentence="urgent: I merge dev in 10 minutes")) == 0
+    line = "for sam-lead: urgent: I merge dev in 10 minutes (from ana-lead)"
     assert capsys.readouterr().out == f"#5 {line}\n"
-    assert world.calls(PROBE) == [["relay", "send", "--socket", world.core, "--to", "burak-lead", "--body", f"#5 {line}"]]
+    assert world.calls(PROBE) == [["relay", "send", "--socket", world.core, "--to", "sam-lead", "--body", f"#5 {line}"]]
     assert world.calls("gh") == [["issue", "comment", "5", "--repo", "acme/demo", "--body", f"{line}\n{transport.MARK}"]]
 
 
@@ -174,7 +174,7 @@ def test_say_sends_an_urgent_line_for_another_lead_through_the_relay(world, monk
     ("lead", "for lead: done, builder-1/41 pushed (from builder-1)", 41, [41], True),
     ("lead", "for lead: done, builder-1/42 pushed (from builder-1)", 42, [41], False),  # waits for the digest
     ("lead", "for lead: blocked: the test database won't start (from builder-1)", 41, [], True),
-    ("burak-lead", "for burak-lead: can your builders take #12? (from serdar-lead)", 5, [], False),
+    ("sam-lead", "for sam-lead: can your builders take #12? (from ana-lead)", 5, [], False),
 ])
 def test_the_relay_carries_only_a_line_the_receiving_wait_prints_at_once(world, to, line, card, waiting, at_once):
     (world.home / ".colony" / "demo").mkdir(parents=True)

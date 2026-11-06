@@ -22,7 +22,7 @@ You type `colony`, and `colony join <name>` when the lead asks. The agents and t
 | --- | --- |
 | `colony wait [--waiting-on N,N]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. |
 | `colony post <card> <name> "<sentence>" [--urgent]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. `--urgent` starts the sentence with `urgent:`. In Hack, the line goes to the board issue, starting with `[<name>'s <agent>]`. |
-| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `burak-lead`, on the `Colony: coordination` issue, or on the board in Hack. |
+| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `sam-lead`, on the `Colony: coordination` issue, or on the board in Hack. |
 
 Both take `@<login>` as the recipient, which reaches that person's lead, and `@all` in the sentence reaches every session. A line is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`.
 

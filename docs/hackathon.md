@@ -91,7 +91,7 @@ The session runs on your laptop, and the phone only talks to it. Keep the laptop
 GitHub allows each signed-in `gh` user 5,000 API requests an hour. `colony wait` sends the last ETag, so a quiet check comes back as `304 Not Modified` and doesn't count against the limit. The prompt hook makes no network call while `colony wait` runs, and otherwise at most one cached call every 30 seconds. `tools/board wait` checks every 30 seconds by default, about 120 requests an hour; pass `--interval 60` to halve that. Claude's own limits are per account: each person's lead and builders share their plan, so open builders only for work that splits cleanly.
 
 **Our repo is private.**
-That works. Every teammate needs write access and `gh auth login`. The board issue is as private as the repo. If installing Colony itself fails because its repo is private, see the note in the [README](../README.md#quick-start).
+That works. Every teammate needs write access and `gh auth login`. The board issue is as private as the repo.
 
 **Two agents need the same file.**
 The owner table decides. The agent that doesn't own the file posts `@<owner>` on the board with the change it needs, and the owner's agent makes it and posts back. When the owner is busy, they can hand the file over on the board and update the table. If two branches change the file anyway, the second `colony merge` can't merge cleanly, and doesn't push the base. Merge the base into that branch, keep both changes, run the fast check, and run `colony merge` again.

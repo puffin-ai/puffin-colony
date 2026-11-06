@@ -355,12 +355,12 @@ def _lead_only(command: str) -> None:
 
 
 def person_title(person: str) -> str:
-    """A person's name as a title shows it, such as Serdar."""
+    """A person's name as a title shows it, such as Ana."""
     return person[:1].upper() + person[1:]
 
 
 def needs_title(person: str) -> str:
-    """The person's Needs issue title, such as `Needs Serdar`."""
+    """The person's Needs issue title, such as `Needs Ana`."""
     return f"Needs {person_title(person)}"
 
 
@@ -377,7 +377,7 @@ def find_issue(repo: str, title: str, body: str) -> int:
 
 def needs_line(lead: str, person: str, question: str, default: str, sender: str | None = None) -> str:
     """The line posted on a Needs issue for the person's lead, signed by `sender` (the lead by default), such as
-    `for serdar-lead: Serdar decides: keep 30 s? Default: yes (from serdar-lead)`."""
+    `for ana-lead: Ana decides: keep 30 s? Default: yes (from ana-lead)`."""
     question, default = " ".join(question.split()), " ".join(default.split()).rstrip(".")
     if not question or not default:
         raise cli.ColonyError("needs takes a question and its --default")
