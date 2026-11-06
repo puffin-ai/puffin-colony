@@ -30,7 +30,7 @@ def gh(tmp_path, monkeypatch):
     (bin_dir / "gh").chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
-    monkeypatch.setenv("COLONY_PERSON", "serdar")
+    monkeypatch.setenv("COLONY_PERSON", "ana")
     log = bin_dir / "calls.jsonl"
     return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 

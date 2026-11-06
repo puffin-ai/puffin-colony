@@ -27,7 +27,7 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | --- | --- |
 | `colony wait [--waiting-on N,N]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. |
 | `colony post <card> <name> "<sentence>" [--urgent]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. `--urgent` starts the sentence with `urgent:`. In Hack, the line goes to the board issue, starting with `[<name>'s <agent>]`. It refuses a builder's line that isn't `done`, `question:`, `blocked:` or `urgent:`, and a lead's line to a builder that isn't `start:`, `answer:` or `urgent:`. |
-| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `burak-lead`, on the `Colony: coordination` issue, or on the board in Hack. It is free text, under 300 characters. |
+| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `sam-lead`, on the `Colony: coordination` issue, or on the board in Hack. It is free text, under 300 characters. |
 
 Both take `@<login>` as the recipient, which reaches that person's lead, and `@all` in the sentence reaches every session. A lead's line for `@<login>` or `@all` is free text. A line is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`.
 

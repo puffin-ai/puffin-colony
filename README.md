@@ -2,17 +2,70 @@
 
 **One command, and Claude Code runs your repo's whole software life cycle: knowledge, plan, research, spec, build, check and learn.**
 
-You talk to a lead agent. It sizes each request, sends a new feature to a spec agent and an open question to a researcher, and runs builders. It checks their work until nothing is left to fix, turns each lesson into a rule, and hands you one pull request to merge. For a hackathon or a small project, a lighter mode keeps only what fits.
+New here? [Explained simply](#explained-simply) says what it does in a minute. [The full overview](docs/overview.md) covers every part, with diagrams.
+
+## Install once, then pick one of 3 setups
+
+You need Python 3.11 or later, `git`, the GitHub CLI `gh` (signed in), and [Claude Code](https://code.claude.com) (signed in). Your repo must be on GitHub.
+
+Install once:
+
+```sh
+uv tool install git+https://github.com/puffin-ai/puffin-colony
+```
+
+`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works too: the first run installs Colony for good, so `colony` is on your PATH after.
+
+There is no separate setup command. The first `colony` in a repo, or saying "hi" in the Claude app in that repo, asks which of the 3 setups you want:
+
+- **Hack:** a lead for each teammate, one pinned board issue for messages, and a fast check before `colony merge`.
+- **Solo:** one lead for one person, with tests and a reviewer on every change.
+- **Startup:** a lead for each person, plus the vault, specs, research, a browser walk and a retro.
+
+Then it asks a few more questions, each with a default, and opens one PR with everything it wrote. Merge it.
+
+Every time after that, `colony` or "hi" opens your lead. Every session you type into is a lead, over its own folders when another lead is already working; type `join` instead, and that session becomes a helper of your lead. To switch setups later, change `mode` in `.colony/colony.toml`. See [docs/modes.md](docs/modes.md#switching-later).
+
+Saying "hi" works even in a repo that has never used Colony, because the first `colony` run on a computer installs what it needs. Add `--dry-run` to any `colony` command to see a plan without running anything.
+
+## Why Puffin Colony
+
+- **A team, not one helper.** Claude Code plans, builds in parallel, checks its own work, and hands you one PR.
+- **You make the decisions, not the chores.** The lead asks you only what it can't decide, each time with a default.
+- **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop until 0 problems are open.
+- **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, subagents split each card into pieces that run at the same time, and every minute and dollar is measured.
+- **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
+- **Nothing new to run.** One command, no servers, standard-library Python, on your own machine and your own Claude accounts.
+
+What one team saw in its first runs, on 2026-11-05. These are early runs, not a benchmark, and your numbers will differ:
+
+- Open problems went from 7 to 0 over 4 fix rounds, across 10 cards.
+- The browser walk caught 4 phone bugs that the tests missed.
+- Loading rules only when needed cut the cost per session by 14%.
+- A tiny change took about 2 minutes.
+- In the second batch, two cards went from the request to an open PR in about 66 minutes, for $9.58 of agent cost at API prices.
+
+## Explained simply
+
+- You tell a **lead** what you want.
+- The lead splits it into **cards** and gives each card to a **helper**.
+- You can run lots of helpers at once, on this computer or others. Each belongs to one lead and works only in its part of the code.
+- A helper uses **subagents** to finish faster. Subagents are mini-workers: each does one piece at the same time as the others and hands back a short result. More helpers means more cards at once. More subagents means each card finishes sooner.
+- Colony checks everything: the tests, a fresh **reviewer**, and a **walker** that clicks through the app. Each problem goes back to the helper that made it, until 0 are left.
+- The lead brings you one **PR**, and you merge.
+- What they learn goes in the **vault**, and your lead can talk to **other people's leads**.
+
+[docs/explained-simply.md](docs/explained-simply.md) says a bit more about each part.
 
 ```console
-$ cd your-repo && colony     # first time: a few questions, then a setup PR
+$ cd your-repo && colony     # first time: pick a setup, a few questions, then one PR
 $ colony                     # every day after: your lead opens
 > Add a dark mode switch to settings, and fix the date picker on phones.
 ```
 
 ## Modes
 
-Setup's first question is the mode. It is `mode` in `[project]`, and a config without one is `startup`.
+The 3 setups are the 3 modes. Setup's first question picks one. It is `mode` in `[project]`, and a config without one is `startup`.
 
 | | Hack | Solo | Startup |
 | --- | --- | --- | --- |
@@ -24,24 +77,9 @@ Setup's first question is the mode. It is `mode` in `[project]`, and a config wi
 
 More in [docs/modes.md](docs/modes.md).
 
-## Quick start
-
-You need Python 3.11 or later, `git`, the GitHub CLI `gh` (signed in), and [Claude Code](https://code.claude.com) (signed in). Your repo must be on GitHub.
-
-```sh
-uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
-cd your-repo && colony
-```
-
-> The repo may be private for now. If the install can't clone it, ask for access, then run `gh auth setup-git` so git uses your GitHub login. `pipx install git+https://github.com/Puffin-Calendar/puffin-colony` works too.
-
-The first `colony` reads your repo, asks a few questions, each with a default, and opens one setup PR. Merge it, run `colony` again, and tell your lead what you want. Add `--dry-run` to see a plan without running anything.
-
-Or just open Claude Code in the repo and say hi. After setup, the line it adds to `CLAUDE.md` runs `colony` inside your session, which makes that session a lead: over the whole repo when no lead is alive, or over the folders you name when one is. Type `join` instead to make the session a helper of your lead. Before setup, run `colony skill-install` once, and a session in any repo can set Colony up when you ask.
-
 ## A hackathon in 60 seconds
 
-1. **Install** Colony on every teammate's machine, with the command above.
+1. **Install** Colony on every teammate's machine, with the install command above.
 2. **One person runs `colony`**, picks `hack`, and answers the team, who owns which folders, and the demo time. Merge the setup PR.
 3. **Each teammate pulls and runs `colony`** on their own machine, and gets a lead for their folders.
 4. **Agents post on the pinned board issue**, and `@login` reaches that person's lead. `@all` reaches everyone.
@@ -90,6 +128,8 @@ Colony's first batch with nobody relaying messages, and what it cost, are in [do
 
 ## Docs
 
+- [Explained simply](docs/explained-simply.md): the whole system in plain words
+- [Overview](docs/overview.md): every part on one page, with diagrams
 - [Modes](docs/modes.md): Hack, Solo and Startup, the defaults files, and switching
 - [Hackathon guide](docs/hackathon.md): one page, from kickoff to the demo
 - [How it works](docs/how-it-works.md): setup, the lead, builders and the gate, step by step
@@ -97,7 +137,7 @@ Colony's first batch with nobody relaying messages, and what it cost, are in [do
 - [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
 - [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
-- [FAQ](docs/faq.md), [Roadmap](docs/roadmap.md), [Design](docs/design.md) and [Design 0.2](docs/design-v0.2.md)
+- [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## Develop
 

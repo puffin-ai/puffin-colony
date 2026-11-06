@@ -26,7 +26,7 @@ checks = "make check"
 config_dir = "~/.claude"
 person = "ana"
 [accounts.admin]
-config_dir = "~/.claude-admin"
+config_dir = "~/.claude-work"
 person = "ana"
 [roles]
 lead = { model = "m", effort = "high" }
@@ -157,7 +157,7 @@ def test_the_pointer_line_setup_writes_sends_a_plain_hi_to_colony_hi():
 
 def test_a_new_chat_with_no_lead_alive_becomes_the_main_lead_without_a_question(home, config, github, capsys,
                                                                                 monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-admin"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / ".claude-work"))
     out = hi(capsys)
     assert "this session leads ana-main-lead, over the whole repo" in out
     beat = json.loads((home / ".colony" / "demo" / "ana-main-lead.heartbeat").read_text())
@@ -333,27 +333,27 @@ def test_keep_edits_the_one_comment_in_place_every_five_minutes(home, config, gi
 
 
 def test_who_lists_every_live_lead_and_helper_across_computers(home, config, github, capsys):
-    github.add(lead(folders=["apps/api/"], person="burak", name="burak-engine-lead", computer="Burak-PC"))
-    github.add(presence.Status("builder-2", "helper", person="burak", lead="burak-engine-lead", computer="Burak-PC",
+    github.add(lead(folders=["apps/api/"], person="sam", name="sam-engine-lead", computer="Sam-PC"))
+    github.add(presence.Status("builder-2", "helper", person="sam", lead="sam-engine-lead", computer="Sam-PC",
                                account="work", room=["work: 5h 10%"], at=time.time()))
-    wait.beat("demo", "serdar-lead", "admin", "")  # a lead from before names, on this computer
+    wait.beat("demo", "ana-lead", "admin", "")  # a lead from before names, on this computer
     assert cli.main(["who"]) == 0
     out = capsys.readouterr().out
-    assert "- burak-engine-lead: burak on Burak-PC, account admin" in out and "Folders: apps/api/." in out
-    assert "- builder-2 (helper of burak-engine-lead): burak on Burak-PC, account work" in out
+    assert "- sam-engine-lead: sam on Sam-PC, account admin" in out and "Folders: apps/api/." in out
+    assert "- builder-2 (helper of sam-engine-lead): sam on Sam-PC, account work" in out
     assert "Room: work: 5h 10%." in out
-    assert "- serdar-lead: serdar on " in out
+    assert "- ana-lead: ana on " in out
 
 
 def test_status_names_each_lead_on_this_computer_with_account_and_heartbeat_age(home, config, capsys):
     assert cli.main(["status"]) == 1
     assert "lead: none running on this computer (no heartbeat)" in capsys.readouterr().out
     wait.beat("demo", "ana-engine-lead", "admin", "t", now=time.time() - 30, named=True)
-    wait.beat("demo", "serdar-lead", "main", "", now=time.time() - 3 * 3600)
+    wait.beat("demo", "ana-lead", "main", "", now=time.time() - 3 * 3600)
     cli.main(["status"])
     out = capsys.readouterr().out
     assert "lead: ana-engine-lead on account admin, heartbeat 30 s ago" in out
-    assert "lead: none running as serdar-lead on this computer (its heartbeat is 3 h old)" in out
+    assert "lead: none running as ana-lead on this computer (its heartbeat is 3 h old)" in out
 
 
 # The heartbeat is the lock on one lead's name
@@ -465,7 +465,7 @@ def usage(home: Path, folder: str, five=None, week=None, week_resets_in=timedelt
 
 
 def accounts(home, *specs, last=()):
-    """Serdar's shape: [people.ana] accounts in order, and last_resort."""
+    """Ana's shape: [people.ana] accounts in order, and last_resort."""
     found = {name: {"config_dir": usage(home, name, **kw), "person": "ana"} for name, kw in [*specs, *last]}
     order = [name for name, _ in specs]
     return {"project": {}, "accounts": found,
@@ -475,7 +475,7 @@ def accounts(home, *specs, last=()):
 def test_use_it_or_lose_it_the_soonest_weekly_reset_with_room_comes_first(home):
     config = accounts(home, ("team", {"five": 5, "week": 10, "week_resets_in": timedelta(days=5)}),
                       ("admin", {"five": 40, "week": 70, "week_resets_in": timedelta(hours=20)}),
-                      ("serdar", {"five": 0, "week": 0, "week_resets_in": timedelta(days=6)}))
+                      ("ana", {"five": 0, "week": 0, "week_resets_in": timedelta(days=6)}))
     name, _, why = cli.pick(config, "ana")
     assert name == "admin" and why == "admin: weekly resets in 19 h, 30% left; 5h 40% used, resets in 1 h"
 
@@ -491,10 +491,10 @@ def test_out_of_five_hour_room_or_near_it_with_a_far_reset_is_skipped(home):
     config = accounts(home, ("team", {"five": 97, "week": 10, "week_resets_in": timedelta(hours=1)}),
                       ("admin", {"five": 85, "week": 10, "week_resets_in": timedelta(hours=2),
                                  "five_resets_in": timedelta(hours=3)}),
-                      ("serdar", {"five": 50, "week": 10}))
-    assert cli.pick(config, "ana")[0] == "serdar"
+                      ("ana", {"five": 50, "week": 10}))
+    assert cli.pick(config, "ana")[0] == "ana"
     near_reset = accounts(home, ("admin", {"five": 85, "week": 10, "five_resets_in": timedelta(minutes=20)}),
-                          ("serdar", {"five": 10, "week": 10, "week_resets_in": timedelta(days=6)}))
+                          ("ana", {"five": 10, "week": 10, "week_resets_in": timedelta(days=6)}))
     assert cli.pick(near_reset, "ana")[0] == "admin"  # near its limit, but the reset is minutes off
 
 
@@ -529,17 +529,17 @@ def test_every_account_out_of_room_names_the_first_and_says_why(home):
 
 
 def test_a_session_prints_why_its_account_was_picked(home, config, capsys):
-    usage(home, ".claude-admin", five=10, week=40, week_resets_in=timedelta(hours=30))
+    usage(home, ".claude-work", five=10, week=40, week_resets_in=timedelta(hours=30))
     cli.lead(config, argparse.Namespace(person="ana", here=True, dry_run=True, account=None))
     assert "why: admin: weekly resets in 29 h, 60% left; 5h 10% used" in capsys.readouterr().out
 
 
 def test_the_person_comes_from_the_gh_login_through_people(home, monkeypatch):
-    config = {"accounts": {"a": {"config_dir": "x", "person": "serdar"}, "b": {"config_dir": "y", "person": "burak"}},
-              "people": {"serdar": {"login": "JS-gh"}}}
+    config = {"accounts": {"a": {"config_dir": "x", "person": "ana"}, "b": {"config_dir": "y", "person": "sam"}},
+              "people": {"ana": {"login": "ana-gh"}}}
     monkeypatch.setattr(cli, "git_user", lambda: set())
-    monkeypatch.setattr(cli, "gh_login", lambda: "js-gh")
-    assert cli.default_person(config) == "serdar"
+    monkeypatch.setattr(cli, "gh_login", lambda: "ana-gh")
+    assert cli.default_person(config) == "ana"
 
 
 def test_the_room_text_names_both_windows_and_their_resets(home):
@@ -553,7 +553,7 @@ def test_the_room_text_names_both_windows_and_their_resets(home):
 
 
 def test_skill_install_copies_the_setup_skill_into_a_settings_folder(home, capsys):
-    folder = home / ".claude-admin"
+    folder = home / ".claude-work"
     folder.mkdir()
     assert cli.main(["skill-install", "--config-dir", str(folder)]) == 0
     copied = folder / "skills" / "colony-setup" / "SKILL.md"
@@ -595,9 +595,9 @@ def test_open_them_opens_each_helper_for_this_lead_under_free_names(home, config
 
 
 def test_colony_view_builds_one_cmux_command_per_running_session(home, config, capsys, monkeypatch):
-    (home / ".claude-admin").mkdir()
+    (home / ".claude-work").mkdir()
     (home / ".claude").mkdir()
-    listed = {str(home / ".claude-admin"): [{"id": "aa11", "name": "demo-lead", "cwd": "/r"},
+    listed = {str(home / ".claude-work"): [{"id": "aa11", "name": "demo-lead", "cwd": "/r"},
                                              {"id": "bb22", "name": "demo-builder-1", "cwd": "/r"},
                                              {"id": "cc33", "name": "other-project-lead", "cwd": "/x"}],
               str(home / ".claude"): [{"id": "dd44", "name": "demo-builder-2", "cwd": "/r"}]}
@@ -611,7 +611,7 @@ def test_colony_view_builds_one_cmux_command_per_running_session(home, config, c
         sorted(c[3] for c in commands) == ["demo-builder-1", "demo-builder-2", "demo-lead"]
     assert len(commands) == 3  # one per running Colony session, none for another project
     admin = next(c for c in commands if c[3] == "demo-lead")
-    assert admin[-1] == f"env CLAUDE_CONFIG_DIR={home / '.claude-admin'} claude attach aa11"
+    assert admin[-1] == f"env CLAUDE_CONFIG_DIR={home / '.claude-work'} claude attach aa11"
     default = next(c for c in commands if c[3] == "demo-builder-2")
     assert default[-1] == "claude attach dd44"  # the default folder stays unset, or the login is lost
 

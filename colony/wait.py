@@ -69,7 +69,7 @@ AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
 
 
-LEAD_ENV = f"{cli.NAME.upper()}_LEAD"  # the lead's name a lead and its helpers carry, such as serdar-engine-lead
+LEAD_ENV = f"{cli.NAME.upper()}_LEAD"  # the lead's name a lead and its helpers carry, such as ana-engine-lead
 HEARTBEAT_FRESH = 120  # a lead's heartbeat under 2 minutes old is alive; older, any session may take the lead
 TOKEN_ENV = f"{cli.NAME.upper()}_LEAD_TOKEN"  # which claim a lead's session holds, so its wait refreshes its own beat
 
@@ -415,8 +415,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
 
 
 def lead_name(config: dict, args) -> str:
-    """The lead's name: $COLONY_LEAD, such as serdar-engine-lead, which `colony claim` gives a lead and its helpers
-    carry. A lead from before lead names is `<person>-lead`, such as serdar-lead; in hack mode a person is their
+    """The lead's name: $COLONY_LEAD, such as ana-engine-lead, which `colony claim` gives a lead and its helpers
+    carry. A lead from before lead names is `<person>-lead`, such as ana-lead; in hack mode a person is their
     GitHub login, so it is `<login>-lead`."""
     return os.environ.get(LEAD_ENV, "").lower() or f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
 
@@ -477,7 +477,7 @@ def lead_session(config: dict, name: str) -> Session:
     people = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
     cards = read_json(state_path(config["project"]["name"], f"{state_name(cli.LEAD)}-waiting"), [])
     person = name.removesuffix(f"-{cli.LEAD}") if name.endswith(f"-{cli.LEAD}") else ""
-    if named():  # serdar-engine-lead: the person is the first part, and its helpers address it by name alone
+    if named():  # ana-engine-lead: the person is the first part, and its helpers address it by name alone
         person = name.split("-", 1)[0]
     names = {name} if hack(config) or named() else {cli.LEAD, name}
     logins = person_logins(config, person) if person else frozenset()
@@ -576,7 +576,7 @@ def say(config: dict, args) -> int:
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
     elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
-        raise cli.ColonyError(f"say needs another lead's name, such as burak-lead, or @login (you are {me})")
+        raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
     line = checked(compose(to, sentence, me), sentence)
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
@@ -646,7 +646,7 @@ def add_commands(sub, wait_parser) -> None:
                              help="the lead: the cards the batch waits on, whose done lines come at once")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
                                    "hack mode)")
-    p.add_argument("to", metavar="lead-name", help="the other lead, such as burak-lead, or @login for that person's "
+    p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
                                                    "lead, or @all")
     p.add_argument("sentence", help="one sentence")
     p.set_defaults(run=say)

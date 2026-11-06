@@ -1,0 +1,23 @@
+{
+  "name": "puffin-colony",
+  "version": "0.2.0",
+  "description": "One command that runs a repo's whole software life cycle with Claude Code: a lead, builders, and a gate of checks, review and a browser walk.",
+  "keywords": ["claude", "claude-code", "agents", "ai", "automation", "code-review", "cli"],
+  "homepage": "https://github.com/puffin-ai/puffin-colony",
+  "bugs": "https://github.com/puffin-ai/puffin-colony/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/puffin-ai/puffin-colony.git",
+    "directory": "npm"
+  },
+  "license": "MIT",
+  "author": "Puffin Studios, Inc.",
+  "bin": {
+    "colony": "bin/colony.js",
+    "puffin-colony": "bin/colony.js"
+  },
+  "files": ["bin/colony.js", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=16"
+  }
+}

@@ -724,6 +724,55 @@ def skill_install(args) -> int:
     return 0
 
 
+FIRST_RUN = ".colony-first-run"  # the marker, in the settings folder, that says the first run installed the skill
+
+
+EPHEMERAL = re.compile(r"[\\/](?:archive|builds)-v\d+[\\/]")  # uv's cache folders, where a uvx run lives
+
+
+def install_permanently() -> None:
+    """In a uvx or npx run, which lives in uv's cache and is gone afterwards, install Colony for good with
+    `uv tool install puffin-colony`, once, so the sessions it opens find `colony` on PATH later."""
+    if not EPHEMERAL.search(sys.prefix) or shutil.which("uv") is None:
+        return
+    listed = _out(["uv", "tool", "list"])
+    if re.search(r"^puffin-colony\b", listed, re.M):
+        return
+    print(f"{NAME}: installing {DISPLAY} for good with `uv tool install puffin-colony`, so later sessions find "
+          f"`{NAME}` on PATH", file=sys.stderr)
+    try:
+        run = subprocess.run(["uv", "tool", "install", "puffin-colony"], capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"{NAME}: the install did not run, and this run goes on: {e}", file=sys.stderr)
+        return
+    if run.returncode:
+        print(f"{NAME}: the install failed, and this run goes on: {(run.stderr or run.stdout).strip()[:300]}",
+              file=sys.stderr)
+        return
+    subprocess.run(["uv", "tool", "update-shell"], capture_output=True)
+
+
+def first_run() -> None:
+    """Install Colony for good when this is a uvx or npx run (install_permanently). The first time `colony` runs on
+    a computer, install the colony-setup skill as `colony skill-install` does, so a
+    plain hi works in a repo that has never used Colony. The marker makes it happen once: a skill the person removes
+    stays removed. A computer without Claude's settings folder yet is skipped, and tried again on the next run."""
+    install_permanently()
+    folder = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    marker = folder / FIRST_RUN
+    if not folder.is_dir() or marker.exists():
+        return
+    target = folder / "skills" / SETUP_SKILL
+    try:
+        if not target.exists():
+            _copy_tree(resources.files(__package__).joinpath("skills", SETUP_SKILL), target)
+            print(f"{NAME}: installed the {SETUP_SKILL} skill in {target}/, so a hi in any repo can set {DISPLAY} up",
+                  file=sys.stderr)
+        marker.write_text(f"{__version__}\n")
+    except OSError:
+        pass  # a settings folder we cannot write to never stops the command the person ran
+
+
 def tools_list() -> str:
     """The one yes-or-no list of tools setup shows the person, with each tool's default and what it installs."""
     lines = ["Tools for this repo, one yes or no each, with the default in brackets:"]
@@ -1399,6 +1448,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     """Parse the command line and run one command: setup when the repo has no .colony/colony.toml, else the one asked."""
     args = build_parser().parse_args(argv)
+    if not getattr(args, "dry_run", False):
+        first_run()
     try:
         if args.command is None and in_claude_code():
             return here(args)

@@ -62,7 +62,7 @@ Each person has one issue, `Needs <Person>`, for the decisions only they can mak
 colony needs "Keep the 30 second timeout?" --default "yes"
 ```
 
-That posts `for serdar-lead: Serdar decides: Keep the 30 second timeout? Default: yes (from serdar-lead)`, and makes the issue the first time. `--person <p>` asks someone else.
+That posts `for ana-lead: Ana decides: Keep the 30 second timeout? Default: yes (from ana-lead)`, and makes the issue the first time. `--person <p>` asks someone else.
 
 - The lead keeps working on the default.
 - You answer on the issue with `for <you>-lead: <answer>`. Your line reaches the lead at once, and your answer wins: the lead undoes what the default built when it differs.

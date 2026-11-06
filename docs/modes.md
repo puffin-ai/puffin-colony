@@ -28,7 +28,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 
 **On:**
 - **Leads as peers.** Each person runs `colony` on their own machine and gets a lead named `<login>-lead`. No lead is in charge of another. Each works in its person's folders from the owner table in `AGENTS.md`.
-- **The board issue.** Setup opens an issue titled `Board: <project>`, pins it, and writes its number to `[messages] board`. Every line goes there, not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds that prefix itself.
+- **The board issue.** Setup opens an issue titled `Board: <project>`, pins it, and writes its number to `[messages] board`. Every line goes there, not to cards. A post starts with `[<name>'s <agent>]`, such as `[Ana's Claude]`, and `colony post` adds that prefix itself.
 - **Addresses.** A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
 - **The prompt hook.** When you send your lead a prompt, the hook first prints the new posts addressed to it.
 - **The fast check gate.** `colony merge <branch>` merges the branch into the base and pushes it after a passing fast check, when `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. `colony batch --review --name <n>`, with no `--card`, has one fresh reviewer read the demo build, for the last hour before the demo.

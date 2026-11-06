@@ -216,9 +216,9 @@ def test_tier_against_a_base_that_names_no_commit_says_to_fetch(repo):
 
 @pytest.fixture
 def lead(monkeypatch):
-    """This session is Serdar's lead."""
+    """This session is Ana's lead."""
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
-    monkeypatch.setenv(cli.PERSON_ENV, "serdar")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
 
 
 def test_needs_makes_the_issue_and_posts_the_line(gh, lead, capsys):  # noqa: F811
@@ -227,27 +227,27 @@ def test_needs_makes_the_issue_and_posts_the_line(gh, lead, capsys):  # noqa: F8
     args = parse("needs", "keep health checks at 30 s", "--default", "yes")
     assert args.run(CONFIG, args) == 0
     create = gh.called("issue", "create")[0]
-    assert create[create.index("--title") + 1] == "Needs Serdar"
-    line = "for serdar-lead: Serdar decides: keep health checks at 30 s? Default: yes (from serdar-lead)"
+    assert create[create.index("--title") + 1] == "Needs Ana"
+    line = "for ana-lead: Ana decides: keep health checks at 30 s? Default: yes (from ana-lead)"
     assert gh.called("issue", "comment") == [["issue", "comment", "9", "--repo", "acme/demo", "--body", line]]
     assert capsys.readouterr().out.strip() == f"#9 {line}"
 
 
 def test_needs_for_another_person_posts_on_their_issue(gh, lead):  # noqa: F811
-    gh.answer("issue list", [{"number": 4, "title": "Needs Serdar"}, {"number": 6, "title": "Needs Burak"}])
-    args = parse("needs", "Ship the bundle today?", "--default", "tomorrow.", "--person", "burak")
+    gh.answer("issue list", [{"number": 4, "title": "Needs Ana"}, {"number": 6, "title": "Needs Sam"}])
+    args = parse("needs", "Ship the bundle today?", "--default", "tomorrow.", "--person", "sam")
     args.run(CONFIG, args)
     assert not gh.called("issue", "create")
     search = gh.called("issue", "list")[0]
-    assert search[search.index("--search") + 1] == '"Needs Burak" in:title'
+    assert search[search.index("--search") + 1] == '"Needs Sam" in:title'
     assert gh.called("issue", "comment")[0][2] == "6"
-    assert gh.called("issue", "comment")[0][-1] == ("for serdar-lead: Burak decides: Ship the bundle today? "
-                                                    "Default: tomorrow (from serdar-lead)")
+    assert gh.called("issue", "comment")[0][-1] == ("for ana-lead: Sam decides: Ship the bundle today? "
+                                                    "Default: tomorrow (from ana-lead)")
 
 
 def test_needs_needs_a_session_and_one_short_line(gh, lead, monkeypatch):  # noqa: F811
     with pytest.raises(cli.ColonyError, match="under 300 characters"):
-        cycle.needs_line("serdar-lead", "serdar", "why " * 80, "yes")
+        cycle.needs_line("ana-lead", "ana", "why " * 80, "yes")
     monkeypatch.delenv(cli.SESSION_ENV)
     args = parse("needs", "a question", "--default", "x")
     with pytest.raises(cli.ColonyError, match="set COLONY_SESSION to this session's name"):
@@ -258,14 +258,14 @@ def test_needs_needs_a_session_and_one_short_line(gh, lead, monkeypatch):  # noq
 @pytest.mark.parametrize("session", ["spec", "researcher"])
 def test_a_session_the_lead_opened_posts_needs_signed_with_its_name(gh, lead, monkeypatch, capsys, session):  # noqa: F811
     monkeypatch.setenv(cli.SESSION_ENV, session)
-    gh.answer("issue list", [{"number": 4, "title": "Needs Serdar"}])
+    gh.answer("issue list", [{"number": 4, "title": "Needs Ana"}])
     args = parse("needs", "Approve the requirements of export?", "--default", "no cards until you approve")
     assert args.run(CONFIG, args) == 0
-    line = ("for serdar-lead: Serdar decides: Approve the requirements of export? Default: no cards until you approve "
+    line = ("for ana-lead: Ana decides: Approve the requirements of export? Default: no cards until you approve "
             f"(from {session})")
     assert gh.called("issue", "comment") == [["issue", "comment", "4", "--repo", "acme/demo", "--body", line]]
     assert capsys.readouterr().out.strip() == f"#4 {line}"
-    lead_wait = cycle.wait.lead_session(CONFIG, "serdar-lead")
+    lead_wait = cycle.wait.lead_session(CONFIG, "ana-lead")
     assert [taken for taken, _ in cycle.wait.taken(line, lead_wait, "4")] == [line]  # the lead's wait takes it
 
 
@@ -278,19 +278,19 @@ def test_handover_posts_on_the_coordination_issue_and_prints_the_fresh_lead(gh, 
     args = parse("handover", "--decisions", "#12 uses the default", "--open", "none", "--next", "merge #13")
     assert args.run(CONFIG, args) == 0
     body = gh.called("issue", "comment")[0][-1]
-    assert body.splitlines() == ["handover from serdar-lead, 2026-11-05 14:05 UTC", "decisions: #12 uses the default",
+    assert body.splitlines() == ["handover from ana-lead, 2026-11-05 14:05 UTC", "decisions: #12 uses the default",
                                  "open questions: none", "next: merge #13"]
-    assert "Open the fresh lead: colony --person serdar" in capsys.readouterr().out
+    assert "Open the fresh lead: colony --person ana" in capsys.readouterr().out
 
 
 def test_handover_read_prints_this_leads_last_handover(gh, lead, capsys):  # noqa: F811
     gh.answer("issue list", [{"number": 5, "title": "Colony: coordination"}])
-    gh.answer("issue view", {"comments": [{"body": "handover from serdar-lead, 1\nnext: a"},
-                                          {"body": "handover from burak-lead, 2\nnext: b"},
-                                          {"body": "handover from serdar-lead, 3\nnext: c"}]})
+    gh.answer("issue view", {"comments": [{"body": "handover from ana-lead, 1\nnext: a"},
+                                          {"body": "handover from sam-lead, 2\nnext: b"},
+                                          {"body": "handover from ana-lead, 3\nnext: c"}]})
     args = parse("handover", "--read")
     args.run(CONFIG, args)
-    assert capsys.readouterr().out.strip() == "handover from serdar-lead, 3\nnext: c"
+    assert capsys.readouterr().out.strip() == "handover from ana-lead, 3\nnext: c"
 
 
 def test_handover_needs_all_three_parts(gh, lead):  # noqa: F811
@@ -372,7 +372,7 @@ def items_answer(*cards):
     nodes = []
     for number, status, last, helper in cards:
         values = [{"name": status, "field": {"name": "Status"}}, {"text": last, "field": {"name": "Last update"}},
-                  {"text": helper, "field": {"name": "Helper"}}, {"text": "serdar-lead", "field": {"name": "Lead"}}]
+                  {"text": helper, "field": {"name": "Helper"}}, {"text": "ana-lead", "field": {"name": "Lead"}}]
         nodes.append({"id": f"I{number}", "content": {"number": number, "url": f"u/{number}", "state": "OPEN"},
                       "fieldValues": {"nodes": values}})
     return {"data": {"node": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}
@@ -446,7 +446,7 @@ def test_retro_dry_run_finds_the_reports_and_prints_the_plan_and_prompt(repo, tm
     reports = root / ".colony" / "reports" / "b1"
     reports.mkdir(parents=True)
     (reports / "review-1.md").write_text("open: 0\n")
-    monkeypatch.setenv(cli.PERSON_ENV, "serdar")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
     config = {**CONFIG, "project": {**CONFIG["project"], "worktrees": str(tmp_path / "trees")}}
     args = parse("retro", "--name", "b1", "--dry-run")
     assert args.run(config, args) == 0

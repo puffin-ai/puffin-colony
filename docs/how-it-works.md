@@ -25,7 +25,7 @@ Everything Colony writes into your repo lives in `.colony/` at its root, apart f
 ## 1. Install
 
 ```sh
-uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
+uv tool install git+https://github.com/puffin-ai/puffin-colony
 ```
 
 Colony needs Python 3.11 or later, `git`, `gh` and `claude`. It uses `cmux` when it is on your PATH. It has no Python dependencies of its own.
@@ -236,7 +236,7 @@ The merge is yours. In Startup and Solo, Colony never merges into your base bran
 
 1. **Setup** asks the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. It writes the owner table into `AGENTS.md` and a hack core of about 300 words as the rules. It opens the issue `Board: <project>`, pins it, and writes its number to `[messages] board`. It copies the board script to `tools/board`.
 2. **Each person runs `colony`** on their own machine and gets a lead named `<login>-lead`. The leads are peers, and each may open builders. The lead and its builders follow the playbook's Hack section, which has no cards: the lead hands out tasks as lines on the board, and each builder lands its own branch with `colony merge`.
-3. **Every line goes to the board,** not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds the prefix. A post is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
+3. **Every line goes to the board,** not to cards. A post starts with `[<name>'s <agent>]`, such as `[Ana's Claude]`, and `colony post` adds the prefix. A post is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
 4. **Posts reach the agent between prompts.** `colony wait` keeps the lines addressed to this session that it hasn't printed under `unread` in `~/.colony/<project>/<session>.json`. When you send a prompt, the prompt hook prints them, empties `unread`, and makes no network call. When `colony wait` isn't running, the hook makes one ETag-cached `gh api` call, at most once per 30 seconds.
 5. **The gate is the fast check.** `colony merge <branch>` fetches, merges the branch into the base locally, and runs the fast check. It pushes the base only when the check passes and `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. It never force-pushes. Before the demo, `colony batch --review --name <n>`, with no `--card`, has one fresh reviewer read the demo build, `origin/<base>` as it stands, and posts the open count and the report's link on the board.
 

@@ -28,7 +28,7 @@ for i, answer in enumerate(answers):
 """
 CONFIG = {"project": {"name": "demo", "repo": "acme/demo", "base": "dev", "checks": "make check",
                       "worktrees": "~/trees"},
-          "accounts": {"main": {"config_dir": "~/.claude", "person": "serdar"}},
+          "accounts": {"main": {"config_dir": "~/.claude", "person": "ana"}},
           "roles": {role: {"model": "m", "effort": "high"} for role in cli.ROLES}}
 NOW = datetime(2026, 11, 5, 14, 5, tzinfo=timezone.utc)
 

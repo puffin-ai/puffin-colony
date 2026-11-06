@@ -23,7 +23,7 @@ def parse(*argv):
     return parser.parse_args(list(argv))
 
 
-def card(number, status, last="", lead="serdar-lead", helper="", state="OPEN", title=None, closed=None):
+def card(number, status, last="", lead="ana-lead", helper="", state="OPEN", title=None, closed=None):
     """One board item as the items query answers it, on the five-field board."""
     values = [{"name": status, "field": {"name": "Status"}}, {"text": last, "field": {"name": "Last update"}},
               {"text": lead, "field": {"name": "Lead"}}, {"text": helper, "field": {"name": "Helper"}}]
@@ -39,7 +39,7 @@ def items_answer(*cards):
 
 def comment(body):
     """One comment as `gh issue view --json comments` answers it."""
-    return {"body": body, "createdAt": "2026-11-05T10:00:00Z", "author": {"login": "serdar-gh"}}
+    return {"body": body, "createdAt": "2026-11-05T10:00:00Z", "author": {"login": "ana-gh"}}
 
 
 def git(cwd, *args):
@@ -84,18 +84,18 @@ def changes(gh):  # noqa: F811
 
 
 def test_card_new_refuses_a_lead_at_its_open_card_limit(gh, capsys):  # noqa: F811
-    full = [card(n, "In progress") for n in range(1, 11)] + [card(11, "Done"), card(12, "To do", lead="burak-lead")]
+    full = [card(n, "In progress") for n in range(1, 11)] + [card(11, "Done"), card(12, "To do", lead="sam-lead")]
     quiet(gh, items=full)
     args = parse("card", "new", "builder-1: the export button", "--body", "predicted: S, 20 min", "--size", "S")
-    with pytest.raises(cli.ColonyError, match="serdar-lead has 10 open cards, and \\[limits\\] open_cards_per_lead is "
+    with pytest.raises(cli.ColonyError, match="ana-lead has 10 open cards, and \\[limits\\] open_cards_per_lead is "
                                               "10: close or finish one first"):
         args.run(CONFIG, args)
     assert changes(gh) == []
-    # Another lead's cards, and Done ones, never count: burak-lead has room, and so has a higher limit.
+    # Another lead's cards, and Done ones, never count: sam-lead has room, and so has a higher limit.
     gh.answer("issue create", "https://github.com/acme/demo/issues/40\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_40"})
-    args = parse("card", "new", "builder-1: the export button", "--body", "b", "--size", "S", "--lead", "burak-lead")
+    args = parse("card", "new", "builder-1: the export button", "--body", "b", "--size", "S", "--lead", "sam-lead")
     assert args.run(CONFIG, args) == 0
     args = parse("card", "new", "builder-1: the import button", "--body", "b", "--size", "M")
     assert args.run({**CONFIG, "limits": {"open_cards_per_lead": 11}}, args) == 0
@@ -113,10 +113,10 @@ def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lea
                                              "builder-2: the login form", "--body", "done when: it signs in"]]
     head = ["project", "item-edit", "--project-id", "PVT_3", "--id", "PVTI_41", "--field-id"]
     assert gh.called("project", "item-edit") == [head + ["F2", "--single-select-option-id", "F2-0"],
-                                                 head + ["F3", "--text", "serdar-lead"],
+                                                 head + ["F3", "--text", "ana-lead"],
                                                  head + ["F5", "--single-select-option-id", "F5-1"],
                                                  head + ["F6", "--text", "2026-11-05 14:05 UTC"]]
-    assert capsys.readouterr().out.strip() == "#41 builder-2: the login form (Status=To do, Lead=serdar-lead, Size=M)"
+    assert capsys.readouterr().out.strip() == "#41 builder-2: the login form (Status=To do, Lead=ana-lead, Size=M)"
 
 
 @pytest.mark.parametrize("title", ["builder-1: Add dark-mode to settings!", "ADD DARK MODE TO SETTINGS",
@@ -178,7 +178,7 @@ def sent(monkeypatch):
     """transport.send, recorded instead of posted."""
     lines = []
     monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: lines.append(line) or 41)
-    monkeypatch.setenv(cli.PERSON_ENV, "serdar")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
     return lines
 
 
@@ -213,7 +213,7 @@ def test_post_lets_a_lead_hand_out_and_answer_work(sent, monkeypatch, sentence):
 def test_post_refuses_a_leads_chatter_to_a_helper_and_lets_lead_to_lead_talk_run_free(sent, monkeypatch):
     with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `urgent:`"):
         post_as(monkeypatch, "lead", "builder-2", "nice work on the form")
-    assert post_as(monkeypatch, "lead", "burak-lead", "can your builders take the export card?") == 0
+    assert post_as(monkeypatch, "lead", "sam-lead", "can your builders take the export card?") == 0
     assert post_as(monkeypatch, "lead", "@all", "I merge dev into main in 10 minutes") == 0
     assert len(sent) == 2
 
@@ -222,23 +222,23 @@ def test_post_refuses_a_leads_chatter_to_a_helper_and_lets_lead_to_lead_talk_run
 
 
 def coordination_answers(gh, count):  # noqa: F811
-    """The answers of a repo whose coordination issue, #5, holds `count` comments, and whose Needs Serdar, #6,
+    """The answers of a repo whose coordination issue, #5, holds `count` comments, and whose Needs Ana, #6,
     holds 3."""
     gh.answer("api repos/acme/demo/issues/5", {"state": "open", "title": wait.COORDINATION, "comments": count,
                                                "body": "Leads post lines for each other here."})
-    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Serdar", "comments": 3, "body": "b"})
-    quiet(gh, issues=[{"number": 5, "title": wait.COORDINATION}, {"number": 6, "title": "Needs Serdar"}])
+    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Ana", "comments": 3, "body": "b"})
+    quiet(gh, issues=[{"number": 5, "title": wait.COORDINATION}, {"number": 6, "title": "Needs Ana"}])
 
 
 def test_tidy_rotates_the_coordination_issue_at_200_comments_and_the_watcher_follows_it(gh, repo, tmp_path,  # noqa: F811
                                                                                      capsys):
     coordination_answers(gh, 200)
-    chatter = [comment(f"for burak-lead: note {n} (from serdar-lead)") for n in range(60)]
-    early = comment("for serdar-lead: question: an old question, past the last 50? (from burak-lead)")
+    chatter = [comment(f"for sam-lead: note {n} (from ana-lead)") for n in range(60)]
+    early = comment("for ana-lead: question: an old question, past the last 50? (from sam-lead)")
     gh.answer("issue view 5", {"comments": [early, *chatter[:-3],
-                                            comment("for serdar-lead: question: can you take #12? (from burak-lead)"),
-                                            comment("[Bo's Claude] for burak-lead: blocked: main is red (from bo-lead)"),
-                                            comment("for burak-lead: urgent: I merge in 5 minutes (from serdar-lead)")]})
+                                            comment("for ana-lead: question: can you take #12? (from sam-lead)"),
+                                            comment("[Bo's Claude] for sam-lead: blocked: main is red (from bo-lead)"),
+                                            comment("for sam-lead: urgent: I merge in 5 minutes (from ana-lead)")]})
     gh.answer("issue create", "https://github.com/acme/demo/issues/31\n")
     assert tidy.run_tidy(CONFIG, repo) == 0
 
@@ -247,14 +247,14 @@ def test_tidy_rotates_the_coordination_issue_at_200_comments_and_the_watcher_fol
     assert create[create.index("--body") + 1].endswith("Continues #5, closed at 200 comments.")
     closing = gh.called("issue", "comment", "5")[0][-1]
     assert closing.startswith("Closed at 200 comments; this thread goes on in #31.")
-    assert ("- for serdar-lead: question: can you take #12? (from burak-lead)\n"
-            "- for burak-lead: blocked: main is red (from bo-lead)\n"
-            "- for burak-lead: urgent: I merge in 5 minutes (from serdar-lead)") in closing
+    assert ("- for ana-lead: question: can you take #12? (from sam-lead)\n"
+            "- for sam-lead: blocked: main is red (from bo-lead)\n"
+            "- for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
     assert "note 1 " not in closing and "an old question" not in closing
     assert gh.called("issue", "close") == [["issue", "close", "5", "--repo", "acme/demo"]]
-    assert not gh.called("issue", "create", "--repo", "acme/demo", "--title", "Needs Serdar")
+    assert not gh.called("issue", "create", "--repo", "acme/demo", "--title", "Needs Ana")
     out = capsys.readouterr().out
-    assert "#5 Colony: coordination 200 → 0" in out and "#6 Needs Serdar 3 → 3" in out and "rotations: 1" in out
+    assert "#5 Colony: coordination 200 → 0" in out and "#6 Needs Ana 3 → 3" in out and "rotations: 1" in out
     # This computer's watcher follows the new issue at once, with no call to GitHub.
     calls = len(gh.calls())
     assert wait.coordination_issue("acme/demo", "demo") == 31
@@ -275,24 +275,24 @@ def test_another_computers_watcher_drops_the_closed_coordination_issue_and_finds
 
 
 def test_a_post_on_a_full_needs_issue_rotates_it_first_and_names_the_unanswered_decisions(gh):  # noqa: F811
-    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Serdar", "comments": 200,
-                                               "body": "The decisions only Serdar makes.\n\nContinues #2."})
+    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Ana", "comments": 200,
+                                               "body": "The decisions only Ana makes.\n\nContinues #2."})
     gh.answer("issue view 6", {"comments": [
-        comment("for serdar-lead: Serdar decides: keep 30 s? Default: yes (from serdar-lead)"),
-        comment("for serdar-lead: no, 60 s"),
-        comment("for serdar-lead: Serdar decides: ship on Friday? Default: yes (from serdar-lead)")]})
+        comment("for ana-lead: Ana decides: keep 30 s? Default: yes (from ana-lead)"),
+        comment("for ana-lead: no, 60 s"),
+        comment("for ana-lead: Ana decides: ship on Friday? Default: yes (from ana-lead)")]})
     gh.answer("issue create", "https://github.com/acme/demo/issues/44\n")
     assert tidy.keep_short(CONFIG, 6) == 44
     create = gh.called("issue", "create")[0]
-    assert create[create.index("--body") + 1] == ("The decisions only Serdar makes.\n\nContinues #6, closed at 200 "
+    assert create[create.index("--body") + 1] == ("The decisions only Ana makes.\n\nContinues #6, closed at 200 "
                                                   "comments.")
     closing = gh.called("issue", "comment", "6")[0][-1]
-    assert "unanswered: for serdar-lead: Serdar decides: ship on Friday? Default: yes" in closing
+    assert "unanswered: for ana-lead: Ana decides: ship on Friday? Default: yes" in closing
     assert "keep 30 s" not in closing
 
 
 def test_a_post_on_an_issue_under_its_limit_costs_one_read(gh):  # noqa: F811
-    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Serdar", "comments": 199})
+    gh.answer("api repos/acme/demo/issues/6", {"state": "open", "title": "Needs Ana", "comments": 199})
     assert tidy.keep_short(CONFIG, 6) == 6
     assert gh.calls() == [["api", "repos/acme/demo/issues/6"]]
 
@@ -304,7 +304,7 @@ def test_tidy_closes_a_started_stale_card_and_moves_a_never_started_one_to_futur
     quiet(gh, items=[card(20, "In progress", "2026-10-20 10:00 UTC", helper="builder-1"),
                      card(21, "To do", "2026-10-25 10:00 UTC", title="builder-2: the login form"),
                      card(22, "In review", "2026-11-04 10:00 UTC"),
-                     card(23, "To do", "2026-11-01 10:00 UTC", lead="burak-lead")])
+                     card(23, "To do", "2026-11-01 10:00 UTC", lead="sam-lead")])
     assert tidy.run_tidy(CONFIG, repo) == 0
     closed = gh.called("issue", "close")
     assert closed == [["issue", "close", "20", "--repo", "acme/demo", "--reason", "not planned", "--comment",
@@ -313,7 +313,7 @@ def test_tidy_closes_a_started_stale_card_and_moves_a_never_started_one_to_futur
                        "tidy: moved to future-work: its work never started, and it shows no update since 2026-10-25"]]
     assert (repo / ".colony" / "future-work.md").read_text().endswith("- 2026-11-05: the login form (was #21)\n")
     out = capsys.readouterr().out
-    assert "open cards per lead: burak-lead 1 → 1, serdar-lead 3 → 1" in out
+    assert "open cards per lead: ana-lead 3 → 1, sam-lead 1 → 1" in out
     assert "stale cards: 1 closed, 1 moved to future-work" in out
 
 
@@ -382,7 +382,7 @@ def test_tidy_dry_run_prints_the_plan_and_changes_nothing(gh, repo, tmp_path, ca
     out = capsys.readouterr().out
     for planned in ("dry run, nothing changes", "#20: closed:", "#21: moved to future-work",
                     "rotate #5 Colony: coordination: 250 comments", "archive #40", "turn on delete_branch_on_merge",
-                    f"remove the worktree {clean}", "serdar-lead 2 → 0 (planned)"):
+                    f"remove the worktree {clean}", "ana-lead 2 → 0 (planned)"):
         assert planned in out, planned
 
 

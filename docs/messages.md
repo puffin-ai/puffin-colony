@@ -8,7 +8,7 @@ Colony's agents talk in lines: one-sentence comments on GitHub issues. GitHub ca
 for <name>: <one sentence> (from <name>)
 ```
 
-- `<name>` is `lead`, a builder's name such as `builder-2`, `researcher` or `spec`, or, on the coordination issue and the Needs issues, a lead's name such as `serdar-lead`. Names ignore case.
+- `<name>` is `lead`, a builder's name such as `builder-2`, `researcher` or `spec`, or, on the coordination issue and the Needs issues, a lead's name such as `ana-lead`. Names ignore case.
 - A line stays under 300 characters.
 - One comment can hold several lines. Markdown around a line, such as a quote mark, a bullet, bold or code ticks, is ignored.
 - A line never carries a secret. `colony post`, `colony say` and the hooks refuse one that holds a token's shape, or the value of an env variable whose name says it is a key, token, secret or password.
@@ -22,7 +22,7 @@ Agents post every line through Colony, which signs it and sends it through the t
 ```sh
 colony post 41 builder-2 "start: this card"                # on card #41, from $COLONY_SESSION
 colony post 41 lead "the date picker test fails on main" --urgent
-colony say burak-lead "I merge into dev at 15:00, hold yours till then?"
+colony say sam-lead "I merge into dev at 15:00, hold yours till then?"
 ```
 
 - `colony post <card> <name> "<sentence>"` posts `for <name>: <sentence> (from <you>)` on the card. `--urgent` starts the sentence with `urgent:`, unless it already starts with `urgent:`, `blocked:` or `question:`.
@@ -43,12 +43,12 @@ A line from a builder to its lead is only `done`, `question:`, `blocked:` or `ur
 | Question | builder → lead | `for lead: question: keep the old route? I'm going with removing it (from builder-2)` | at once |
 | Blocked | builder → lead | `for lead: blocked: the test database won't start (from builder-3)` | at once |
 | Urgent | builder → lead | `for lead: urgent: the base branch fails to build since #40 (from builder-3)` | at once |
-| Pop-up | hook → lead | `for serdar-lead: urgent: builder-2 waits for a person's approval on <computer> (from builder-2)` | at once |
-| Stopped | hook → lead | `for serdar-lead: builder-2 stopped on an error (<code>) at <time> (from builder-2)` | in the digest |
+| Pop-up | hook → lead | `for ana-lead: urgent: builder-2 waits for a person's approval on <computer> (from builder-2)` | at once |
+| Stopped | hook → lead | `for ana-lead: builder-2 stopped on an error (<code>) at <time> (from builder-2)` | in the digest |
 | Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>; check its session` | in the digest |
 | Yours | you → lead | `for lead: ship the batch as it is` | at once |
-| Your answer | you → lead | `for serdar-lead: yes, keep 30 seconds`, on your Needs issue | at once |
-| Lead to lead | lead → lead | `for burak-lead: I merge into dev at 15:00, hold yours till then? (from serdar-lead)` | in the digest, or at once with a prefix |
+| Your answer | you → lead | `for ana-lead: yes, keep 30 seconds`, on your Needs issue | at once |
+| Lead to lead | lead → lead | `for sam-lead: I merge into dev at 15:00, hold yours till then? (from ana-lead)` | in the digest, or at once with a prefix |
 
 A done line ends with the fast check's last line, so the lead sees the result without opening anything. A stale line is not a comment: the lead's own wait makes it from the board.
 
@@ -78,7 +78,7 @@ The wait guard hook refuses a foreground sleep or poll loop, so an agent can't w
 
 ## Presence: heartbeats and status comments
 
-Every session a person opens is a lead, named `<person>-<stream>-lead`, such as `serdar-engine-lead`, with its folders in `.colony/leads.toml`. Helpers belong to one lead, and carry its name in `$COLONY_LEAD`. See the playbook's Leads and helpers section.
+Every session a person opens is a lead, named `<person>-<stream>-lead`, such as `ana-engine-lead`, with its folders in `.colony/leads.toml`. Helpers belong to one lead, and carry its name in `$COLONY_LEAD`. See the playbook's Leads and helpers section.
 
 - **On this computer,** a lead's wait writes `~/.colony/<project>/<lead>.heartbeat` at each poll, every 15 seconds, with its name, account, a token and the time. Under 2 minutes old, the lead is alive. The heartbeat is also the lock on that name: it is written under a file lock, and only when it is missing, stale, or holds the writer's own token, `$COLONY_LEAD_TOKEN`. A lead from before lead names keeps `lead.heartbeat`.
 - **Across computers,** each lead and helper keeps one status comment on the coordination issue, or the board in hack mode, edited in place every 5 minutes: name, person, computer, account, folders, and its accounts' 5-hour and weekly room. It never adds a second comment. A status older than 15 minutes counts as gone.
@@ -105,7 +105,7 @@ The list stays until the lead changes it. At most every 10 minutes, the lead's w
 
 ## Lead to lead
 
-When several people each run a lead on the same repo, the leads talk on one shared issue, titled `Colony: coordination`. The first lead's wait finds it by title, or opens it. On that issue each lead is `<person>-lead`, such as `serdar-lead` or `burak-lead`.
+When several people each run a lead on the same repo, the leads talk on one shared issue, titled `Colony: coordination`. The first lead's wait finds it by title, or opens it. On that issue each lead is `<person>-lead`, such as `ana-lead` or `sam-lead`.
 
 The other lead's wait takes a `colony say` line under the same rules: in the digest, or at once with `urgent:`, `blocked:` or `question:`. Leads use it to ask each other things, hand work across, and warn before a merge to the shared base branch. Each lead still asks only its own person, and only what it can't decide. The same issue holds each lead's handover.
 
@@ -113,7 +113,7 @@ The other lead's wait takes a `colony say` line under the same rules: in the dig
 
 In Hack, every line goes to one pinned issue, `Board: <project>`, not to cards. Setup opens it, pins it, and writes its number to `[messages] board`.
 
-- A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`. `colony post` and `tools/board` add the prefix.
+- A post starts with `[<name>'s <agent>]`, such as `[Ana's Claude]`. `colony post` and `tools/board` add the prefix.
 - A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead, `<login>-lead`.
 - The leads are peers, so there is no coordination issue and no digest.
 - **The prompt hook.** When you send a prompt, it prints the lines in the wait's `unread` list, then empties it, with no network call. When `colony wait` isn't running, it makes one ETag-cached `gh api` call, at most once per 30 seconds. Solo uses the same hook for card lines.

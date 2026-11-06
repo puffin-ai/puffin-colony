@@ -56,7 +56,7 @@ def computer() -> str:
 
 
 def lead_of(name: str, person: str, stream: str) -> str:
-    """A lead's name, `<person>-<stream>-lead`, such as serdar-engine-lead."""
+    """A lead's name, `<person>-<stream>-lead`, such as ana-engine-lead."""
     if not STREAM.fullmatch(stream):
         raise cli.ColonyError(f"{stream!r} is not a stream name: use lowercase letters, digits and dashes")
     return f"{person.lower()}-{stream}-{cli.LEAD}"

@@ -35,11 +35,11 @@ else:
 """
 NOT_MODIFIED = 'HTTP/2.0 304 Not Modified\r\nEtag: W/"e1"\r\n\r\n'
 CONFIG = {"project": {"repo": "acme/demo", "name": "demo"}, "messages": {"lead_digest_minutes": 1},
-          "people": {"logins": ["Serdar-GH"]}}
+          "people": {"logins": ["Ana-GH"]}}
 DIGEST_LINE = "for lead: done, builder-1/7 pushed, 12 passed (from builder-1)"
 
 
-def comment(id, body, updated="2026-11-05T10:00:00Z", issue=7, login="serdar-gh"):
+def comment(id, body, updated="2026-11-05T10:00:00Z", issue=7, login="ana-gh"):
     """One issue comment as GitHub's REST API answers it. Agents post through their person's login."""
     return {"id": id, "issue_url": f"https://api.github.com/repos/acme/demo/issues/{issue}", "body": body,
             "updated_at": updated, "user": {"login": login}}
@@ -75,7 +75,7 @@ class Gh:
 
 @pytest.fixture
 def gh(tmp_path, monkeypatch):
-    """A temporary HOME, the stand-in gh first on PATH, and Serdar as the person. colony.cycle doesn't import, so the
+    """A temporary HOME, the stand-in gh first on PATH, and Ana as the person. colony.cycle doesn't import, so the
     lead's wait runs no stale-card check unless a test gives it one."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -83,7 +83,7 @@ def gh(tmp_path, monkeypatch):
     (bin_dir / "gh").chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
-    monkeypatch.setenv("COLONY_PERSON", "serdar")
+    monkeypatch.setenv("COLONY_PERSON", "ana")
     monkeypatch.setitem(sys.modules, "colony.cycle", None)
     return Gh(bin_dir)
 
@@ -127,7 +127,7 @@ def test_the_lead_takes_every_line_for_it_but_its_own(gh, capsys, monkeypatch):
     gh.answer(ok(comment(1, "- **for lead: done, builder-1/7 pushed, 12 passed (from builder-1)**"),
                  comment(2, "For Lead: yes, merge it"),
                  comment(3, "for lead: note to self (from lead)\nfor builder-1: start this card (from lead)"),
-                 comment(4, "for serdar-lead: note to self (from serdar-lead)\nfor the record: nothing here")))
+                 comment(4, "for ana-lead: note to self (from ana-lead)\nfor the record: nothing here")))
     code, out, _ = run_as("lead", capsys, monkeypatch)
     assert code == 0
     assert out.splitlines() == ["#7 for lead: done, builder-1/7 pushed, 12 passed (from builder-1)",
@@ -234,10 +234,10 @@ def test_an_urgent_blocked_or_question_line_returns_at_once(gh, capsys, monkeypa
 
 
 @pytest.mark.parametrize("line, login, at_once", [
-    ("for lead: ship the batch as it is", "burak-gh", True),
-    ("for lead: ship the batch as it is (from serdar-gh)", "serdar-gh", True),
-    ("for lead: ship the batch as it is (from builder-1)", "serdar-gh", False),
-    ("for lead: done, and no question: left (from builder-1)", "serdar-gh", False),
+    ("for lead: ship the batch as it is", "sam-gh", True),
+    ("for lead: ship the batch as it is (from ana-gh)", "ana-gh", True),
+    ("for lead: ship the batch as it is (from builder-1)", "ana-gh", False),
+    ("for lead: done, and no question: left (from builder-1)", "ana-gh", False),
 ])
 def test_a_persons_line_returns_at_once(gh, capsys, monkeypatch, line, login, at_once):
     gh.answer(ok(comment(1, line, login=login)))
@@ -305,11 +305,11 @@ def test_the_lead_creates_the_coordination_issue_on_first_use(gh, capsys, monkey
 
 
 def test_the_lead_takes_lead_to_lead_lines_by_the_same_rules(gh, capsys, monkeypatch):
-    ask = "for serdar-lead: can your builders take the export card? (from burak-lead)"
-    warn = "for serdar-lead: urgent: I merge dev into main in 10 minutes (from burak-lead)"
-    gh.answer(ok(comment(1, ask, issue=5, login="burak-gh"),
-                 comment(2, "for burak-lead: yes, after lunch (from serdar-lead)", issue=5)),
-              ok(comment(3, warn, issue=5, login="burak-gh", updated="2026-11-05T10:01:00Z")))
+    ask = "for ana-lead: can your builders take the export card? (from sam-lead)"
+    warn = "for ana-lead: urgent: I merge dev into main in 10 minutes (from sam-lead)"
+    gh.answer(ok(comment(1, ask, issue=5, login="sam-gh"),
+                 comment(2, "for sam-lead: yes, after lunch (from ana-lead)", issue=5)),
+              ok(comment(3, warn, issue=5, login="sam-gh", updated="2026-11-05T10:01:00Z")))
     code, out, clock = run_as("lead", capsys, monkeypatch)
     assert code == 0 and clock.naps == [15]  # the question waited for the digest, the warning didn't
     assert out.splitlines() == [f"#5 {ask}", f"#5 {warn}"]
@@ -320,19 +320,19 @@ def test_say_posts_a_line_for_another_lead_on_the_coordination_issue(gh, tmp_pat
     (host / ".colony").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(host)], check=True)
     (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
-    env = {"HOME": str(tmp_path), "PATH": f"{gh.bin}:/usr/bin:/bin", "COLONY_SESSION": "lead", "COLONY_PERSON": "Serdar"}
-    run = subprocess.run([sys.executable, "-m", "colony", "say", "burak-lead", "can you  review #12\nbefore noon?"],
+    env = {"HOME": str(tmp_path), "PATH": f"{gh.bin}:/usr/bin:/bin", "COLONY_SESSION": "lead", "COLONY_PERSON": "Ana"}
+    run = subprocess.run([sys.executable, "-m", "colony", "say", "sam-lead", "can you  review #12\nbefore noon?"],
                          capture_output=True, text=True, cwd=host, env=env)
-    line = "for burak-lead: can you review #12 before noon? (from serdar-lead)"
+    line = "for sam-lead: can you review #12 before noon? (from ana-lead)"
     assert run.returncode == 0, run.stderr
     assert run.stdout == f"#5 {line}\n"
     assert gh.calls()[-1] == ["issue", "comment", "5", "--repo", "owner/myapp", "--body", line]
 
 
 @pytest.mark.parametrize("session, to, why", [
-    ("builder-1", "burak-lead", "say is for leads"),
-    ("lead", "burak", "another lead's name"),
-    ("lead", "serdar-lead", "another lead's name"),
+    ("builder-1", "sam-lead", "say is for leads"),
+    ("lead", "sam", "another lead's name"),
+    ("lead", "ana-lead", "another lead's name"),
 ])
 def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, why):
     monkeypatch.setenv("COLONY_SESSION", session)
@@ -340,7 +340,7 @@ def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, 
         wait.say(CONFIG, Namespace(person=None, to=to, sentence="hello"))
     with pytest.raises(cli.ColonyError, match="under 300 characters"):
         monkeypatch.setenv("COLONY_SESSION", "lead")
-        wait.say(CONFIG, Namespace(person=None, to="burak-lead", sentence="word " * 60))
+        wait.say(CONFIG, Namespace(person=None, to="sam-lead", sentence="word " * 60))
     assert gh.calls() == []
 
 
@@ -349,7 +349,7 @@ def test_an_unknown_transport_stops_the_wait_and_say(gh, capsys, monkeypatch):
     with pytest.raises(cli.ColonyError, match="transport = 'pigeon' is gone"):
         run_as("lead", capsys, monkeypatch, config=pigeon)
     with pytest.raises(cli.ColonyError, match="'pigeon' is gone"):
-        wait.say(pigeon, Namespace(person=None, to="burak-lead", sentence="hello"))
+        wait.say(pigeon, Namespace(person=None, to="sam-lead", sentence="hello"))
     assert gh.calls() == []
 
 
