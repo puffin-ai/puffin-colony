@@ -1464,6 +1464,8 @@ def build_parser() -> argparse.ArgumentParser:
                                                      "([people.<person>] accounts by room, soonest weekly reset first)")
     p.add_argument("--review", action="store_true",
                    help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
+    p.add_argument("--fast", action="store_true",
+                   help="run the full checks once, with no reviewer, walk or fixers, and open the PR when they pass")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
