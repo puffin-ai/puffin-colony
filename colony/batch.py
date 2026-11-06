@@ -236,6 +236,24 @@ def _touches(paths: list[str], prefixes: list[str]) -> bool:
     return any(path.startswith(prefix) for path in paths for prefix in prefixes)
 
 
+def should_walk(settings: dict, rounds: list[dict], changed: list[str]) -> bool:
+    """Say whether this round walks: when the last walk failed, or the change touches walk_paths.
+
+    Once a walk has passed, a later round walks only when its change touches a screen file under walk_paths, one
+    ending in a screen_suffixes entry (".tsx" and ".css" by default), so a fix that only moves code does not wait
+    on a second walk of the same screens.
+    """
+    if not settings.get("walk"):
+        return False
+    if rounds and rounds[-1]["walk"] == "fail":
+        return True
+    paths = settings.get("walk_paths") or [""]
+    if any(x["walk"] == "pass" for x in rounds):
+        suffixes = tuple(settings.get("screen_suffixes") or (".tsx", ".css"))
+        changed = [path for path in changed if path.endswith(suffixes)]
+    return _touches(changed, paths)
+
+
 def claude_cmd(config: dict, role: str, prompt: str, add_dirs=()) -> list[str]:
     """Build the headless `claude -p` command for one role, with its model, effort and optional agent."""
     settings = config["roles"][role]
@@ -564,8 +582,7 @@ def gate(b: Batch, r: int) -> list[Finding]:
     else:
         full = _touches(changed, project.get("backend_paths", [])) or not b.state["backend_passed"] or not project.get("web_checks")
         cmd = project["checks"] if full else project["web_checks"]
-    rewalk = bool(prev and prev["walk"] == "fail")
-    walk = bool(settings.get("walk")) and (rewalk or _touches(changed, settings.get("walk_paths") or [""]))
+    walk = should_walk(settings, b.state["rounds"], changed)
     b.state["round"] = r
     log = b.reports / f"checks-{r}.log"
     started, clock = time.time(), time.strftime("%H:%M")
