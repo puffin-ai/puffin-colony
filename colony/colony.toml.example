@@ -15,6 +15,8 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
+release = ""                       # optional: the branch `colony release` releases the base into, such as main
+deploy_workflow = ""               # optional: the workflow `colony release --after` watches, such as deploy.yml
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
 # --account, else the first of its person's [people.<person>] accounts with room (the soonest weekly reset first),
@@ -31,6 +33,7 @@ walker     = { model = "claude-opus-5-5", effort = "medium" }   # add agent = "<
 fixer      = { model = "claude-opus-5-5", effort = "medium" }
 researcher = { model = "claude-opus-5-5", effort = "high" }     # `colony research`; left out, it takes the builder's
 spec       = { model = "claude-opus-5-5", effort = "high" }     # `colony spec`; left out, it takes the builder's
+tester     = { model = "claude-opus-5-5", effort = "high" }     # `colony tester`; left out, it takes the builder's
 
 [gate]
 rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]   # the reviewer's checklist
@@ -53,6 +56,8 @@ logins = []                        # GitHub logins of the people; a line they po
 # [people.ana]
 # accounts = ["ana-team", "ana"]
 # last_resort = ["shared"]
+# quiet_lead = true               # the lead acts on notifications silently, and writes to ana only to converse or
+                                   # when ana must act; false by default, which keeps the person posted on progress
 
 [knowledge]
 vault = "knowledge"                # the knowledge vault's folder at the top of the repo

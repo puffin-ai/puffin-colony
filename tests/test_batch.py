@@ -437,3 +437,63 @@ def test_a_round_after_a_passing_walk_walks_only_when_a_screen_file_changes():
     assert batch.should_walk(settings, passed, ["web/lib/words.ts", "web/panel.tsx"])
     assert batch.should_walk(settings, [{"walk": "fail"}], ["api/app.py"])
     assert not batch.should_walk({"walk": False}, [], ["web/panel.tsx"])
+
+
+def test_paid_checks_run_once_in_the_passing_round_inside_the_ceiling_and_the_pr_shows_the_spend(repo, config, stubs,
+                                                                                               capsys):
+    config["budget"]["provider_dollars"] = 5
+    config["gate"]["paid_checks"] = "echo \"ceiling $COLONY_SPEND_CEILING\" > ../paid.txt; echo 'spent: $1.25'"
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 0
+    assert "done in round 2." in capsys.readouterr().out
+    wt = Path(config["project"]["worktrees"])
+    assert (wt / "paid.txt").read_text() == "ceiling 5.00\n"
+    reports = wt / "demo-batch-b1" / ".colony" / "reports" / "b1"
+    assert not (reports / "paid-checks-1.log").exists() and (reports / "paid-checks-2.log").exists()
+    body = (reports / "pr.md").read_text()
+    assert "## Paid checks\n- Round 2: `" in body and "pass, $1.25 spent of a $5.00 ceiling" in body
+    assert "- Total: $1.25 of the $5.00 budget" in body
+
+
+def test_paid_checks_never_run_at_a_zero_budget_and_a_spend_past_the_budget_stops_the_batch(repo, config, stubs,
+                                                                                           capsys):
+    config["gate"]["paid_checks"] = "echo ran > ../paid.txt; echo 'spent: $2'"
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 0
+    wt = Path(config["project"]["worktrees"])
+    assert not (wt / "paid.txt").exists()
+    assert "None: [gate] paid_checks is unset or [budget] provider_dollars is 0, so $0.00 spent." in (
+        wt / "demo-batch-b1" / ".colony" / "reports" / "b1" / "pr.md").read_text()
+    config["budget"]["provider_dollars"] = 1
+    args = batch_args(repo, "11=card/a", "12=card/b")
+    args.name = "b2"
+    capsys.readouterr()
+    assert batch.run_batch(config, args) == 1
+    assert "the paid checks spent $2.00, past the $1.00 budget" in capsys.readouterr().out
+    assert git(repo.parent / "origin.git", "branch", "--list", "demo/batch-b2") == ""
+
+
+def test_fast_runs_the_full_checks_once_with_no_agents_and_writes_gate_fast_in_the_pr(repo, config, stubs, capsys):
+    config["project"]["web_checks"] = "false"  # the full checks run, never the web checks
+    args = batch_args(repo, "11=card/a", "12=card/b")
+    args.fast = True
+    assert batch.run_batch(config, args) == 0
+    assert "done in round 1. https://example.test/pull/1" in capsys.readouterr().out
+    assert not stubs["claude"].exists()
+    body = (Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1" / "pr.md").read_text()
+    assert body.startswith("gate: fast\n")
+    assert "| 1 | skipped | skipped | pass |" in body and "- Round 1: `true` pass" in body
+    assert config["gate"]["walk"] is True and config["gate"]["max_rounds"] == 3  # the default gate is unchanged
+
+
+def test_fast_stops_when_the_checks_fail_and_runs_no_fixer_or_pr(repo, config, stubs, capsys):
+    config["project"]["checks"] = "echo 'FAIL web lint (3s), exit 1'; exit 1"
+    args = batch_args(repo, "11=card/a", "12=card/b")
+    args.fast = True
+    assert batch.run_batch(config, args) == 1
+    assert "the full checks failed, and --fast runs no fixers: checks failed: FAIL web lint" in capsys.readouterr().out
+    assert not stubs["claude"].exists() and not stubs["gh"].exists()
+    assert git(repo.parent / "origin.git", "branch", "--list", "demo/*") == ""
+    args.dry_run, args.name = True, "b2"
+    assert batch.run_batch(config, args) == 0
+    plan = capsys.readouterr().out
+    assert "no reviewer, walk or fixers" in plan and "--- fixer" not in plan and "--- reviewer" not in plan
+

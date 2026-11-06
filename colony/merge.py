@@ -15,6 +15,7 @@ any other conflict stops the merge and leaves the branch as it was. It pushes no
 """
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import re
@@ -138,6 +139,38 @@ def open_pr(config: dict, root: Path, branch: str, reason: str) -> str:
                    f"{project['name']}: {branch} into {base}", "--body", body).strip()
 
 
+@contextlib.contextmanager
+def one_at_a_time(config: dict):
+    """Hold this computer's merge lock, so one merge or release runs at a time; closing the file releases it."""
+    lock = wait.state_path(config["project"]["name"], "merge").with_suffix(".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        yield
+
+
+def merge_back(config: dict, root: Path, ref: str) -> str:
+    """`colony release --after`'s merge: merge `ref`, the released branch, into origin/<base> in the merge worktree
+    and push the base, never forced. A conflict, or a base that moved on, stops it with the base untouched."""
+    base = config["project"]["base"]
+    with one_at_a_time(config):
+        wt = worktree(config)
+        ready(root, wt, base)
+        if _behind(root, ref, f"origin/{base}"):
+            return f"{base} already holds {ref}: nothing to merge back"
+        if batch._run(["git", "merge", "--no-ff", "--no-edit", ref], wt, check=False).returncode:
+            paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
+            _git(wt, "merge", "--abort", check=False)
+            raise cli.ColonyError(f"merging {ref} back into {base} conflicts in {', '.join(paths) or 'the merge'}: "
+                                  "merge it by hand")
+        head = _git(wt, "rev-parse", "HEAD")
+        push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
+        if push.returncode:
+            raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}: run "
+                                  f"`{cli.NAME} release --after` again")
+    return f"merged {ref} back into {base} at {head[:9]}"
+
+
 def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     """What the merge would run, for --dry-run."""
     project = config["project"]
@@ -236,10 +269,7 @@ def run(config: dict, args) -> int:
     if why:
         print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
-    lock = wait.state_path(project["name"], "merge").with_suffix(".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock, "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)  # one merge at a time on this computer; closing the file releases it
+    with one_at_a_time(config):
         landed, what = land(config, root, wt, branch)
     if landed:
         print(what)

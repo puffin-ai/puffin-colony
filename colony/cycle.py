@@ -7,7 +7,8 @@ stale-card lines for the lead's wait.
   from a session the lead opened, such as the spec agent or a researcher.
 - `colony handover` posts the lead's handover on `Colony: coordination` and prints the command for a fresh lead.
 - `colony stats` sums each card's predicted and actual minutes and tokens, from its lines and its builder's
-  Claude Code transcripts.
+  Claude Code transcripts. `--calibrate` prints the median actual minutes per size over the last 30 cards,
+  and `colony card new` prints that median beside a new card's prediction.
 - `colony retro` runs one agent on a batch's reports that writes each lesson as a rule line and a check, or a
   decision, into a pull request.
 - `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update.
@@ -29,6 +30,7 @@ import json
 import os
 import re
 import shlex
+import statistics
 import subprocess
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -777,8 +779,54 @@ def stats_card(value: str) -> tuple[str, str | None]:
     return number.lstrip("#"), branch or None
 
 
+CALIBRATE_CARDS = 30
+CALIBRATE_LISTED = 100  # closed issues read to find the last CALIBRATE_CARDS measured cards among them
+
+
+def calibration(config: dict) -> dict[str, tuple[float, int]]:
+    """The median actual minutes per size, {size: (median, cards)}, over the last CALIBRATE_CARDS closed cards with a
+    prediction and a done line. A card's actual minutes are its wall minutes, from the start line to the done line."""
+    listed = json.loads(wait.gh("issue", "list", "--repo", config["project"]["repo"], "--state", "closed", "--json",
+                                "number,title,body,comments", "--limit", str(CALIBRATE_LISTED)) or "[]")
+    sizes: dict[str, list[float]] = {}
+    measured = 0
+    for card in listed:
+        window = card_window(card)
+        if window.prediction is None or window.ends_by != "done line":
+            continue
+        sizes.setdefault(window.prediction.size, []).append((window.end - window.start).total_seconds() / 60)
+        measured += 1
+        if measured == CALIBRATE_CARDS:
+            break
+    return {size: (statistics.median(minutes), len(minutes)) for size, minutes in sizes.items()}
+
+
+def calibration_line(config: dict, size: str, prediction: Prediction | None) -> str | None:
+    """The median beside a new card's prediction, or None when no measured card of its size is found or gh fails."""
+    try:
+        found = calibration(config).get(size.upper())
+    except cli.ColonyError:
+        return None
+    if found is None:
+        return None
+    median, count = found
+    guess = f"predicted {prediction.minutes:g} min; " if prediction else ""
+    return f"{guess}the last {count} {size.upper()} cards took a median of {median:.0f} min"
+
+
 def stats(config: dict, args) -> int:
-    """`colony stats --card N[=BRANCH] ...`: print the cards' table."""
+    """`colony stats --card N[=BRANCH] ...`: print the cards' table, or with --calibrate the median actual minutes
+    per size over the last CALIBRATE_CARDS cards."""
+    if args.calibrate:
+        found = calibration(config)
+        print(f"Median actual (wall) minutes per size, over the last {CALIBRATE_CARDS} closed cards with a prediction "
+              "and a done line:")
+        print("| Size | Cards | Median min |\n| --- | --- | --- |")
+        for size in sorted(found, key="SML".index):
+            print(f"| {size} | {found[size][1]} | {found[size][0]:.0f} |")
+        return 0
+    if not args.card:
+        raise cli.ColonyError("stats needs --card N[=BRANCH], or --calibrate")
     print(stats_table(config, dict(args.card), args.base))
     return 0
 
@@ -938,9 +986,11 @@ def add_commands(sub) -> None:
     p.set_defaults(run=handover)
 
     p = sub.add_parser("stats", help="each card's predicted and actual minutes and tokens, as a table")
-    p.add_argument("--card", action="append", required=True, type=stats_card, metavar="N[=BRANCH]",
+    p.add_argument("--card", action="append", type=stats_card, metavar="N[=BRANCH]",
                    help="a card's issue number, and its branch for the lines column; repeat for each card")
     p.add_argument("--base", help="the branch the cards' branches are measured against, origin/<base> by default")
+    p.add_argument("--calibrate", action="store_true",
+                   help=f"print the median actual minutes per size over the last {CALIBRATE_CARDS} cards instead")
     p.set_defaults(run=stats)
 
     p = sub.add_parser("retro", help="after a batch: an agent turns its lessons into rules and checks, in a PR")

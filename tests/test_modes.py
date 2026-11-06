@@ -155,7 +155,7 @@ def test_a_config_with_no_mode_runs_startup_with_its_own_keys_unchanged(tmp_path
     own = tomllib.loads(EXAMPLE.read_text())
     config = cli.load_config(EXAMPLE)
     assert "mode" not in own["project"] and config["project"]["mode"] == "startup"
-    assert config["gate"] == {**own["gate"], "check": "full", "review": True}
+    assert config["gate"] == {**own["gate"], "check": "full", "review": True, "paid_checks": ""}
     assert config["messages"] == own["messages"]  # its lead_digest_minutes is startup's 10
     assert config["features"] == dict.fromkeys(("knowledge", "specs", "research", "board", "retro"), True)
     for table in ("budget", "people", "knowledge", "board"):
@@ -493,6 +493,7 @@ def state_file(home: Path, session: str = "lead") -> Path:
 def test_the_wait_lists_each_gathered_line_in_unread_for_the_hook(gh, tmp_path, monkeypatch, capsys):
     seen = []
     clock = Clock(on_nap=lambda n: seen.append(json.loads(state_file(tmp_path).read_text())))
+    wait.write_json(tmp_path / ".colony" / "demo" / "lead-waiting.json", [99])  # a batch runs, so LINE_1 waits
     gh.answer(ok(comment(1, LINE_1, login="ana-gh"), {**comment(2, LINE_2, login="ana-gh"),
                                                        "html_url": "https://github.com/acme/demo/issues/7#c2"}))
     code, out = run_wait(STARTUP_WAIT, "lead", "ana", monkeypatch, capsys, clock)
@@ -512,12 +513,14 @@ def test_a_line_the_hook_showed_never_prints_again(gh, tmp_path, monkeypatch, ca
             state["unread"] = []
             state_file(tmp_path).write_text(json.dumps(state))
 
+    wait.write_json(tmp_path / ".colony" / "demo" / "lead-waiting.json", [99])  # a batch runs, so LINE_1 waits
     gh.answer(ok(comment(1, LINE_1)), ok(comment(2, LINE_2, updated="2026-11-05T10:01:00Z")))
     code, out = run_wait(STARTUP_WAIT, "lead", "ana", monkeypatch, capsys, Clock(on_nap=hook))
     assert code == 0 and out == f"#7 {LINE_2}\n"
 
 
 def test_lines_the_hook_showed_between_waits_never_print(gh, tmp_path, monkeypatch, capsys):
+    wait.write_json(tmp_path / ".colony" / "demo" / "lead-waiting.json", [99])  # a batch runs, so LINE_1 waits
     gh.answer(ok(comment(1, LINE_1)))
     with pytest.raises(AssertionError, match="never ended"):
         run_wait(STARTUP_WAIT, "lead", "ana", monkeypatch, capsys, Clock(most=1))

@@ -319,6 +319,17 @@ def test_lead_dry_run_with_cmux_opens_a_workspace_and_runs_nothing(home, config,
     assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
 
+def test_lead_opens_cmux_from_the_app_when_it_is_not_on_path(home, config, capsys, monkeypatch):
+    app = home / "cmux.app" / "bin"
+    app.mkdir(parents=True)
+    cmux_log = make_stub(app, "cmux")
+    monkeypatch.setattr(cli, "CMUX_APP", app / "cmux")
+    make_stub(home / "bin", "claude")
+    code, out = run_lead(config, capsys, dry_run=False)
+    assert code == 0 and "in a new cmux workspace" in out
+    assert cmux_log.read_text().splitlines()[:3] == ["new-workspace", "--name", "demo-lead"]
+
+
 def test_here_forces_this_terminal_when_cmux_is_on_path(home, config, capsys):
     cmux_log = make_stub(home / "bin", "cmux")
     _, out = run_lead(config, capsys, here=True)
@@ -391,6 +402,7 @@ def test_join_opens_the_builder_once_nothing_is_missing(home, host, config, caps
     assert args[:3] == ["new-workspace", "--name", "demo-builder-1"]
     assert "COLONY_SESSION=builder-1" in args and "COLONY_PERSON=ana" in args
     assert "COLONY_LEAD=ana-main-lead" in args  # a helper belongs to one lead
+    assert set(json.loads((home / ".colony" / "demo" / "ana-main-lead-opened.json").read_text())) == {"builder-1"}
 
 
 def test_open_dry_run_opens_the_builder_in_cmux(home, config, capsys):
@@ -407,6 +419,17 @@ def test_open_without_cmux_or_a_terminal_opens_a_background_session(home, config
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
     cli.open_builder(config, builder_args("builder-1"))
     assert "in a background session" in capsys.readouterr().out
+
+
+def test_open_from_a_named_lead_expects_the_helpers_status_and_a_dry_run_does_not(home, host, config, monkeypatch):
+    make_stub(home / "bin", "claude")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setenv("COLONY_LEAD", "ana-main-lead")
+    opened = home / ".colony" / "demo" / "ana-main-lead-opened.json"
+    cli.open_builder(config, builder_args("builder-1"))
+    assert not opened.exists()
+    cli.open_builder(config, builder_args("builder-1", dry_run=False))
+    assert set(json.loads(opened.read_text())) == {"builder-1"}
 
 
 def test_a_background_session_runs_claude_with_bg_and_its_name(home, host, config, monkeypatch):
@@ -469,6 +492,8 @@ def test_a_builder_name_refuses_the_lead_and_odd_names(name, capsys):
 def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, config):
     (host / ".colony" / "colony.toml").write_text(CONFIG.replace('"~/first"', '"~/.claude"'))
     claude_log = make_stub(home / "bin", "claude")
+    # A cmux that refuses the probe, so a cmux app on the machine running the suite is not used.
+    make_stub(home / "bin", "cmux", code=1)
     run = run_colony(home, "--person", "ana", "--dry-run", cwd=host)
     assert run.returncode == 0, run.stderr
     assert "command: env -u CLAUDE_CONFIG_DIR claude --remote-control demo-lead" in run.stdout
@@ -495,9 +520,9 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "sync", "tier",
+COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "who", "whoami",
-            "tidy", "idea", "card", "setup", "skill-install", "tools")
+            "tidy", "idea", "card", "release", "setup", "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):
@@ -519,6 +544,17 @@ def test_research_opens_a_researcher_whose_brief_holds_the_question(config, caps
     assert "`knowledge/.types/research-report.md`" in out
     assert "{question}" not in out and "{knowledge}" not in out and "{project}" not in out
     assert "dry run: demo-researcher on account first" in out
+
+
+def test_tester_opens_a_tester_whose_brief_holds_the_release(config, capsys):
+    url = "https://github.com/acme/demo/pull/20"
+    assert cli.main(["tester", url, "--dry-run", "--person", "ana"]) == 0
+    out = capsys.readouterr().out
+    assert "command: claude --remote-control demo-tester --model m --effort medium " in out
+    assert "You are the tester for demo." in out and f"The release: {url}" in out
+    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings issue" in out
+    assert "{release}" not in out and "{project}" not in out
+    assert "dry run: demo-tester on account first" in out
 
 
 def test_spec_names_the_vault_colony_toml_sets(host, capsys):
@@ -552,9 +588,9 @@ def test_a_brief_with_an_unknown_placeholder_or_an_empty_request_is_refused(conf
     assert error in capsys.readouterr().err
 
 
-def test_a_config_without_the_researcher_or_spec_role_takes_the_builders_settings(config):
-    assert "researcher" not in CONFIG and "spec =" not in CONFIG  # an 0.1 colony.toml keeps loading
-    for role in (cli.RESEARCHER, cli.SPEC):
+def test_a_config_without_the_researcher_spec_or_tester_role_takes_the_builders_settings(config):
+    assert "researcher" not in CONFIG and "spec =" not in CONFIG and "tester" not in CONFIG  # an 0.1 colony.toml loads
+    for role in (cli.RESEARCHER, cli.SPEC, cli.TESTER):
         assert config["roles"][role] == config["roles"]["builder"] == {"model": "m", "effort": "medium"}
     config["roles"]["builder"]["effort"] = "low"
     assert config["roles"][cli.SPEC]["effort"] == "medium"  # a copy, not the builder's own table
@@ -573,6 +609,7 @@ def test_the_example_config_holds_the_new_tables(home):
 
     config = cli.load_config(PACKAGE / "colony.toml.example")
     assert config["roles"]["researcher"]["model"] and config["roles"]["spec"]["effort"]
+    assert config["roles"]["tester"]["model"] and config["roles"]["tester"]["effort"]
     assert "transport" not in config["messages"]  # every line goes by GitHub
     assert "board" in config and "prefer_account" not in config["project"]
     knowledge = config["knowledge"]
@@ -600,6 +637,12 @@ def test_prefer_account_and_drain_are_gone_and_an_old_config_still_loads(host):
 def test_a_people_table_must_name_real_accounts(host):
     (host / "colony.toml").write_text(CONFIG + '\n[people.ana]\naccounts = ["first", "ghost"]\n')
     with pytest.raises(cli.ColonyError, match=r"\[people.ana\] names the account 'ghost'"):
+        cli.load_config(host / "colony.toml")
+
+
+def test_quiet_lead_must_be_true_or_false(host):
+    (host / "colony.toml").write_text(CONFIG + '\n[people.ana]\nquiet_lead = "yes"\n')
+    with pytest.raises(cli.ColonyError, match=r"\[people.ana\] quiet_lead is true or false"):
         cli.load_config(host / "colony.toml")
 
 

@@ -50,6 +50,8 @@ person = "ben"
 
 **How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one whose weekly window resets soonest goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing.
 
+**How much the lead tells the person.** `[people.<person>] quiet_lead = true` makes that person's lead act on notifications silently, and write to them only to converse or when they must act; its own status lines go on the board, never in chat. `colony` prints the line when it starts a lead for that person. It is false by default, and the lead keeps the person posted on progress.
+
 Most teams list one account per person. Spreading one person's work across several seats may conflict with [Anthropic's terms](https://www.anthropic.com/legal), so check them before you list more than one for yourself.
 
 ## `[roles]`
@@ -94,6 +96,7 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | `max_rounds` | yes | `5` | The most rounds a batch runs. A last round that still has findings stops the batch. |
 | `walk` | yes | `true` | Whether to walk the changed screens in a browser. Set `false` for a repo with no web UI. |
 | `walk_paths` | no | `["web/", "app/"]` | Path prefixes. A round that changes none of them skips the walk, unless the last walk failed. Empty walks every round. |
+| `paid_checks` | no | `"npm run eval"` | A command whose model calls cost money, such as your app's evals. A batch runs it once, in the round whose checks, review and walk pass, only while `[budget] provider_dollars` is above 0. It gets the dollars the batch has left as `COLONY_SPEND_CEILING`, must stop there, and must print `spent: $<dollars>`. The batch stops when it prints none or spends past the budget, and the PR lists what it spent. Empty by default. |
 | `merge_after_fast_check` | no | `true` | Hack only. `true` lets `colony merge <branch>` push the base after the fast check passes on the merged result. Otherwise `colony merge` opens a PR. Setup asks, with yes as the default. |
 
 ## `[budget]`
@@ -103,7 +106,7 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | `provider_dollars` | yes | `0` | Model spend allowed inside your app's own checks and evals. Raise it only with the person's yes. |
 | `use_api_key` | no | `false` | `true` lets the lead and builders bill `ANTHROPIC_API_KEY`. Otherwise Colony drops it, so sessions use the account's subscription. |
 
-At `0`, the checks run without `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in their environment. Above `0`, those keys stay for the checks. Colony reads only whether the value is 0. Agents treat any spend above it as a stop-list item that needs your yes.
+At `0`, the checks run without `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in their environment. Above `0`, those keys stay for the checks. Colony reads the value itself only for `[gate] paid_checks`, whose ceiling it sets. Agents treat any spend above it as a stop-list item that needs your yes.
 
 Whatever the budget, Colony removes `ANTHROPIC_API_KEY` from the reviewer's, walker's, fixers' and retro's environment, so they always run on your Claude Code login and never bill an API key.
 

@@ -38,10 +38,10 @@ LEAD = "lead"
 LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
-RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
+RESEARCHER, SPEC, TESTER = "researcher", "spec", "tester"  # the sessions `colony research`, `spec` and `tester` open
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
 # Roles a colony.toml may leave out: each one missing takes the builder's settings.
-BUILDER_LIKE = (RESEARCHER, SPEC)
+BUILDER_LIKE = (RESEARCHER, SPEC, TESTER)
 FULL = 90.0  # an account at or past this percent of a window has no room, for has_room
 FIVE_HOUR_OUT = 95.0  # at or past this 5-hour use, an account is out of room
 FIVE_HOUR_NEAR = 80.0  # at or past this 5-hour use with its reset over FAR_RESET away, it is skipped too
@@ -150,6 +150,8 @@ def load_config(path=None) -> dict:
                 if name not in config["accounts"]:
                     raise ColonyError(f"{path}: [people.{person}] names the account {name!r}, which no "
                                       "[accounts.<name>] table holds")
+            if not isinstance(table.get("quiet_lead", False), bool):
+                raise ColonyError(f"{path}: [people.{person}] quiet_lead is true or false")
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = os.path.expanduser(project[key])
@@ -299,6 +301,12 @@ def person_accounts(config: dict, person: str) -> tuple[list[str], list[str]]:
     if isinstance(table, dict) and table.get("accounts"):
         return list(table["accounts"]), list(table.get("last_resort", []))
     return [name for name, a in config["accounts"].items() if a["person"] in (person, "any")], []
+
+
+def quiet_lead(config: dict, person: str) -> bool:
+    """Whether the person wants a quiet lead, `[people.<person>] quiet_lead = true`; false by default."""
+    table = config.get("people", {}).get(person)
+    return isinstance(table, dict) and table.get("quiet_lead", False)
 
 
 def in_hours(when: datetime | None, now: datetime) -> str:
@@ -474,12 +482,24 @@ def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: st
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
 
+# Where the cmux app keeps its command when the app's installer left it off PATH, as on Burak's Mac.
+CMUX_APP = Path("/Applications/cmux.app/Contents/Resources/bin/cmux")
+
+
+def cmux_command() -> str | None:
+    """The cmux command: the one on PATH, else the one inside the cmux app, else None."""
+    if shutil.which("cmux") is not None:
+        return "cmux"
+    return str(CMUX_APP) if os.access(CMUX_APP, os.X_OK) else None
+
+
 def cmux_usable() -> bool:
-    """Whether cmux is on PATH and takes commands from this process, which it does only inside cmux."""
-    if shutil.which("cmux") is None:
+    """Whether cmux is found and takes commands from this process, which it does only inside cmux."""
+    cmux = cmux_command()
+    if cmux is None:
         return False
     try:
-        return subprocess.run(["cmux", "workspace", "list"], capture_output=True, timeout=10).returncode == 0
+        return subprocess.run([cmux, "workspace", "list"], capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -529,7 +549,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
     if mode == "cmux":
         command = argv if keep_key else ["env", "-u", "ANTHROPIC_API_KEY", *argv]
-        cmd = ["cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
+        cmd = [cmux_command() or "cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
         cmd += [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
         return subprocess.run(cmd).returncode
     if mode == "background":
@@ -743,6 +763,10 @@ def here(args) -> int:
         return 0
     print('A session a person types into is a lead. (When their first message was "join" or "join <lead>", run '
           f"`{NAME} join [<lead>]` instead, and be that lead's helper.)")
+    if quiet_lead(config, person):
+        print(f"{person} wants a quiet lead ([people.{person}] quiet_lead = true): act on notifications silently, "
+              "write to them only to converse or when they must act, and put your own status lines on the board, "
+              "never in chat.")
     alive, _, note = presence.everyone(config)
     if note:
         print(note)
@@ -978,7 +1002,13 @@ def builder_prompt(name: str, config: dict) -> str:
 
 
 def open_builder(config: dict, args) -> int:
-    """Open a builder on this computer in a new cmux workspace (the lead runs this)."""
+    """Open a builder on this computer in a new cmux workspace (the lead runs this). A named lead's wait then expects
+    its status comment (wait.expect_status)."""
+    from colony import wait
+
+    lead = os.environ.get(wait.LEAD_ENV, "").lower()
+    if lead and not args.dry_run:
+        wait.expect_status(config["project"]["name"], lead, args.name)
     return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
 
 
@@ -1078,7 +1108,7 @@ def view_commands(config: dict) -> list[list[str]]:
         attach = ["claude", "attach", agent["id"]]
         if not is_default_dir(agent["config_dir"]):
             attach = ["env", f"CLAUDE_CONFIG_DIR={agent['config_dir']}", *attach]
-        commands.append(["cmux", "new-workspace", "--name", agent["name"], "--cwd", agent.get("cwd") or str(repo_root()),
+        commands.append([cmux_command() or "cmux", "new-workspace", "--name", agent["name"], "--cwd", agent.get("cwd") or str(repo_root()),
                          "--command", shlex.join(attach)])
     return commands
 
@@ -1112,8 +1142,9 @@ def brief(name: str) -> tuple[str, str]:
 
 
 def open_brief(config: dict, args, role: str, **values: str) -> int:
-    """Open a researcher or the spec agent on this computer, whose first prompt is its brief filled in: `{project}`,
-    `{knowledge}` (the vault folder, `[knowledge] vault`) and the request (`{question}` or `{feature}`)."""
+    """Open a researcher, the spec agent or a tester on this computer, whose first prompt is its brief filled in:
+    `{project}`, `{knowledge}` (the vault folder, `[knowledge] vault`) and the request (`{question}`, `{feature}` or
+    `{release}`)."""
     from colony import batch, vault
 
     for key, value in values.items():
@@ -1137,6 +1168,11 @@ def research(config: dict, args) -> int:
 def spec(config: dict, args) -> int:
     """`colony spec "<feature>"`: open the spec agent, which writes a FEATURE's requirements, design and tasks."""
     return open_brief(config, args, SPEC, feature=args.feature)
+
+
+def tester(config: dict, args) -> int:
+    """`colony tester "<release pull request>"`: open a tester, which checks a release's cards on the deployed app."""
+    return open_brief(config, args, TESTER, release=args.release)
 
 
 def origin_url() -> str:
@@ -1234,6 +1270,8 @@ def join(config: dict, args) -> int:
     if missing and not args.dry_run:
         return 1
     print(f"Joining {args.lead_name} as {name}.")
+    if not args.dry_run:
+        wait.expect_status(config["project"]["name"], args.lead_name, name)
     return launch(config, args, name, "builder", builder_prompt(name, config))
 
 
@@ -1391,7 +1429,7 @@ ACCOUNT_HELP = ("the account to open on, instead of the pick: [people.<person>] 
 def build_parser() -> argparse.ArgumentParser:
     """The command line: no command for setup or the lead, then the sessions (join, open, research, spec), the lines
     (wait, say, post), the gate (batch, status, merge), the cycle's, the board, check-docs, the guards', and tools."""
-    from colony import board, cycle, guards, presence, tidy, vault
+    from colony import board, cycle, guards, presence, release, tidy, vault
     parser = argparse.ArgumentParser(prog=NAME, description=f"{DISPLAY}: run with no command to open your lead "
                                      f"(or to set up the repo, the first time).")
     parser.add_argument("--version", action="version", version=f"{DISPLAY} {__version__}")
@@ -1447,7 +1485,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     for command, run, field, text in (
             ("research", research, "question", "open a researcher on one question, answered with cited sources"),
-            ("spec", spec, "feature", "open the spec agent on a FEATURE: requirements, design and tasks")):
+            ("spec", spec, "feature", "open the spec agent on a FEATURE: requirements, design and tasks"),
+            ("tester", tester, "release", "open a tester after a release: it checks the release's cards on the deployed "
+                                          "app and files one findings issue")):
         p = sub.add_parser(command, help=text)
         p.add_argument(field, help=f"the {field}, in quotes")
         p.add_argument("--person", help="whose accounts to use")
@@ -1471,6 +1511,8 @@ def build_parser() -> argparse.ArgumentParser:
                                                      "([people.<person>] accounts by room, soonest weekly reset first)")
     p.add_argument("--review", action="store_true",
                    help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
+    p.add_argument("--fast", action="store_true",
+                   help="run the full checks once, with no reviewer, walk or fixers, and open the PR when they pass")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
@@ -1490,7 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("branch", help="the branch to bring up to the base, such as lead/integration")
     p.set_defaults(run=sync)
 
-    for module in (cycle, board, vault, guards, presence, tidy):
+    for module in (cycle, board, vault, guards, presence, tidy, release):
         module.add_commands(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "

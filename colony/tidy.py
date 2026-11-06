@@ -198,6 +198,10 @@ def card_new(config: dict, args) -> int:
         except cli.ColonyError as e:
             raise cli.ColonyError(f"made #{number}, but the board didn't take it: {e}") from None
     print(f"#{number} {title} (Status=To do, Lead={lead}, Size={args.size})")
+    from colony import cycle
+    calibrated = cycle.calibration_line(config, args.size, cycle.prediction_of(args.body))
+    if calibrated:
+        print(calibrated)
     return 0
 
 
