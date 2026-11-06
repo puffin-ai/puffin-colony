@@ -84,7 +84,7 @@ class World:
 
     def config(self, release_branch: str = "prod") -> dict:
         path = self.tmp / "colony.toml"
-        path.write_text(CONFIG.format(release=release_branch, worktrees=self.tmp / "wt"))
+        path.write_text(CONFIG.format(release=release_branch, worktrees=(self.tmp / "wt").as_posix()))
         return cli.load_config(path)
 
     def answer(self, name: str, value) -> None:

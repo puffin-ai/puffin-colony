@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from colony import cli
+from conftest import stub_path
+from colony import cli, portable
 
 PACKAGE = Path(str(resources.files("colony")))
 CONFIG = """
@@ -77,7 +78,7 @@ def make_stub(bin_dir: Path, name: str, code: int = 0) -> Path:
 def home(tmp_path, monkeypatch):
     """A temporary HOME, a PATH with a stub folder and no real claude, cmux or gh, and no session env."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(tmp_path / 'bin'))
     for key in (cli.SESSION_ENV, cli.PERSON_ENV, "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(key, raising=False)
     # A person at a terminal, unless a test says otherwise: with no cmux, the session opens right here.
@@ -119,9 +120,9 @@ def builder_args(name="builder-2", **flags):
 
 
 def run_colony(home, *args, cwd):
-    """Run the installed command line as a new process, with only HOME and PATH set."""
+    """Run the installed command line as a new process, with only HOME and PATH set, and no terminal on stdin."""
     return subprocess.run([sys.executable, "-m", "colony", *args], capture_output=True, text=True, cwd=cwd,
-                          env={"HOME": str(home), "PATH": f"{home / 'bin'}:/usr/bin:/bin"})
+                          env={"HOME": str(home), "PATH": stub_path(home / 'bin')}, stdin=subprocess.DEVNULL)
 
 
 def test_the_example_config_loads(home):
@@ -496,7 +497,9 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
     make_stub(home / "bin", "cmux", code=1)
     run = run_colony(home, "--person", "ana", "--dry-run", cwd=host)
     assert run.returncode == 0, run.stderr
-    assert "command: env -u CLAUDE_CONFIG_DIR claude --remote-control demo-lead" in run.stdout
+    # Windows has no `env`, so there the session drops CLAUDE_CONFIG_DIR from its own environment instead.
+    unset = "" if portable.WINDOWS else "env -u CLAUDE_CONFIG_DIR "
+    assert f"command: {unset}claude --remote-control demo-lead" in run.stdout
     assert "env: COLONY_SESSION COLONY_PERSON CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
     assert "on account first, in a background session" in run.stdout  # a subprocess has no terminal
     assert not claude_log.exists()

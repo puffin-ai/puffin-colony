@@ -1,0 +1,3 @@
+# Every text file checks out with LF, on Windows too, where Git for Windows' core.autocrlf would write CRLF: the
+# board script and the hooks run under sh and bash, which read a CR as part of the command.
+* text=auto eol=lf

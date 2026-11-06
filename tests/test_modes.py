@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import batch, cli, transport, wait
 
 PACKAGE = Path(str(resources.files("colony")))
@@ -95,7 +96,7 @@ class Gh:
     def answer(self, *texts: str, kind: str = "poll") -> None:
         for text in texts:
             self.count += 1
-            (self.bin / f"{kind}-{self.count:03}.txt").write_text(text)
+            (self.bin / f"{kind}-{self.count:03}.txt").write_text(text, newline="")  # as written, \r\n too
 
     def calls(self) -> list[list[str]]:
         log = self.bin / "calls.jsonl"
@@ -115,7 +116,7 @@ def gh(tmp_path, monkeypatch):
     (bin_dir / "gh").write_text(GH_STUB.replace("{python}", sys.executable))
     (bin_dir / "gh").chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(bin_dir))
     for key in (cli.SESSION_ENV, cli.PERSON_ENV):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(sys.modules, "colony.cycle", None)
@@ -220,7 +221,7 @@ def test_every_mode_file_sets_the_keys_each_mode_sets_its_own_way(mode):
 def host(tmp_path, monkeypatch):
     """A git repo to run the command line in, with a temporary HOME."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(tmp_path / 'bin'))
     repo = tmp_path / "host"
     (repo / ".colony").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

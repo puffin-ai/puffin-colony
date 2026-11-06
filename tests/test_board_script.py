@@ -117,7 +117,7 @@ class Board:
         (bin_dir / "gh").chmod(0o755)
         self.db, self.log = tmp_path / "db.json", tmp_path / "gh.log"
         self.save({"repo": REPO, "issue": ISSUE, "login": "ana", "comments": []})
-        self.env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(self.home), "STUB_DB": str(self.db),
+        self.env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "HOME": str(self.home), "STUB_DB": str(self.db),
                     "STUB_LOG": str(self.log), "BOARD_AGENT": "Codex"}
 
     def save(self, db: dict) -> None:
@@ -144,6 +144,8 @@ class Board:
 
 @pytest.fixture(params=SHELLS)
 def board(tmp_path, request) -> Board:
+    if shutil.which("jq") is None:
+        pytest.skip("the stub gh runs each --jq program through jq, which is not installed")
     return Board(tmp_path, request.param)
 
 

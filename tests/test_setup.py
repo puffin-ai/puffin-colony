@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import cli
 
 PACKAGE = Path(str(resources.files("colony")))
@@ -27,7 +28,7 @@ def repo(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
-    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(tmp_path / 'bin'))
     monkeypatch.chdir(root)
     return root.resolve()
 

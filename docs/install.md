@@ -16,6 +16,16 @@ You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitH
 
 The sessions Colony opens run `colony` commands themselves (`colony`, `colony wait`, `colony helpers`), so Colony must be on PATH. A first `uvx` or `npx` run takes care of that: it installs Colony for good with `uv tool install puffin-colony`, once, and says so. uv tool, npm, the curl installer and pipx install it for good directly.
 
+## On Windows
+
+Colony runs on Windows with [Git for Windows](https://gitforwindows.org), which Claude Code needs there too.
+
+- It runs your repo's commands, such as `checks` and `fast_check`, through Git's bash, so a `colony.toml` written on a Mac works unchanged.
+- It restarts itself once in Python's UTF-8 mode, so it reads gh's output and your files as UTF-8.
+- Its hooks run `python3`. Put `%USERPROFILE%\.local\bin`, where `uv tool install` and `uv python install --default` write, before `%LOCALAPPDATA%\Microsoft\WindowsApps` on your PATH. Or turn off the python and python3 aliases under Settings > Apps > Advanced app settings > App execution aliases, which only open the Microsoft Store.
+- cmux is macOS only, so helpers open in this terminal or as background sessions.
+- To run the tests: `uv run --with pytest python -X utf8 -m pytest tests`.
+
 ## Then `colony` does everything
 
 Run `colony` in your repo. The first time, it sets the repo up; every time after, it opens the lead. `colony --help` lists the rest, and [commands.md](commands.md) explains each one.

@@ -31,7 +31,6 @@ token is $COLONY_LEAD_TOKEN, which `colony` and `colony claim` print when they c
 from __future__ import annotations
 
 import argparse
-import fcntl
 import functools
 import importlib
 import json
@@ -48,7 +47,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from colony import cli
+from colony import cli, portable
 
 INTERVAL = 15
 LOOKBACK = timedelta(hours=1)
@@ -154,12 +153,8 @@ def heartbeat_lock(project: str, name: str = ""):
     """Hold the heartbeat's file lock, so a read, check and write of the heartbeat is one step."""
     path = heartbeat_path(project, name).with_suffix(".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    with open(path, "a") as handle, portable.lock(handle):
+        yield
 
 
 def beat(project: str, session: str, account: str, token: str, now: float | None = None, named: bool = False) -> dict:

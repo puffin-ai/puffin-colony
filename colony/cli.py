@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from colony import __version__
+from colony import __version__, portable
 
 NAME = "colony"
 DISPLAY = "Puffin Colony"
@@ -142,7 +142,7 @@ def load_config(path=None) -> dict:
         for key in ("config_dir", "person"):
             if key not in account:
                 raise ColonyError(f"{path}: [accounts.{name}] needs {key!r}")
-        account["config_dir"] = os.path.expanduser(account["config_dir"])
+        account["config_dir"] = portable.native(os.path.expanduser(account["config_dir"]))
     project = config["project"]
     for person, table in config.get("people", {}).items():
         if isinstance(table, dict):
@@ -154,7 +154,7 @@ def load_config(path=None) -> dict:
                 raise ColonyError(f"{path}: [people.{person}] quiet_lead is true or false")
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
-            project[key] = os.path.expanduser(project[key])
+            project[key] = portable.native(os.path.expanduser(project[key]))
     return config
 
 
@@ -479,6 +479,8 @@ def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: st
             *(["--settings", settings] if settings else []),
             "--permission-mode", role_settings.get("permission_mode", "auto"), prompt]
     # The default folder also drops a CLAUDE_CONFIG_DIR inherited from the caller's shell.
+    if portable.WINDOWS:  # no `env` there: launch's portable.process_env drops it
+        return argv
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
 
@@ -510,7 +512,7 @@ def where_to_open(args) -> str:
         return "terminal"
     if cmux_usable():
         return "cmux"
-    return "terminal" if sys.stdin.isatty() else "background"
+    return "terminal" if portable.is_terminal(sys.stdin) else "background"
 
 
 def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
@@ -555,9 +557,11 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     if mode == "background":
         at = argv.index("claude") + 1
         background = [*argv[:at], "--bg", "--name", title, *argv[at:]]
-        return subprocess.run(background, cwd=root, env={**inherited, **env}).returncode
+        background[0] = portable.program(background[0])
+        return subprocess.run(background, cwd=root,
+                              env=portable.process_env(inherited, env, is_default_dir(config_dir))).returncode
     os.chdir(root)
-    os.execvpe(argv[0], argv, {**inherited, **env})
+    return portable.hand_over(argv, portable.process_env(inherited, env, is_default_dir(config_dir)))
 
 
 # The placeholders the puffin preset's files hold, which the setup session fills with this repo's values:
@@ -624,7 +628,7 @@ def setup(args) -> int:
         raise ColonyError(f"claude is not on PATH: install Claude Code, then run {NAME} again")
     print(f"No {DIR}/{CONFIG_NAME} yet, so {DISPLAY} starts setup.", flush=True)
     os.chdir(root)
-    os.execvp("claude", ["claude", prompt])
+    return portable.hand_over(["claude", prompt])
 
 
 def ago(seconds: float) -> str:
@@ -1213,7 +1217,7 @@ def pick_lead(config: dict, args, alive: list) -> str:
         return mine[0].name
     choices = "\n".join(f"  {i}. {s.name}: {', '.join(s.folders) or 'the rest of the repo'}"
                         for i, s in enumerate(mine, 1))
-    if not sys.stdin.isatty():
+    if not portable.is_terminal(sys.stdin):
         raise ColonyError(f"you have {len(mine)} live leads, so name one: `{NAME} join <lead>`\n{choices}")
     answer = input(f"Which lead does this computer help?\n{choices}\nNumber or name: ").strip().lower()
     for i, status in enumerate(mine, 1):
@@ -1557,6 +1561,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     """Parse the command line and run one command: setup when the repo has no .colony/colony.toml, else the one asked."""
+    if portable.needs_utf8():
+        return portable.relaunch_in_utf8(sys.argv[1:] if argv is None else list(argv))
     args = build_parser().parse_args(argv)
     if not getattr(args, "dry_run", False):
         first_run()

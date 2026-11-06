@@ -88,7 +88,7 @@ class World:
     def config(self, fast_check: str = PASSES, allowed: bool = True, template: str = HACK) -> dict:
         """A hack config (or the template's), loaded as the command line loads it."""
         path = self.tmp / "colony.toml"
-        path.write_text(template.format(worktrees=self.tmp / "wt", fast_check=fast_check.replace('"', '\\"'),
+        path.write_text(template.format(worktrees=(self.tmp / "wt").as_posix(), fast_check=fast_check.replace('"', '\\"'),
                                         allowed=str(allowed).lower()))
         return cli.load_config(path)
 
@@ -202,9 +202,10 @@ def test_an_open_pr_for_the_branch_is_reused(world, capsys):
 def test_the_base_moving_under_the_check_is_merged_again_and_never_forced(world, capsys):
     world.branch("ana/login", {"a.txt": "good\n"})
     marker = world.tmp / "moved"
-    teammate_push = (f'if [ ! -f "{marker}" ]; then touch "{marker}"; echo more > "{world.teammate}/c.txt"; '
-                     f'git -C "{world.teammate}" add c.txt; git -C "{world.teammate}" commit -qm teammate; '
-                     f'git -C "{world.teammate}" push -q origin main; fi; {PASSES}')
+    marker, teammate = marker.as_posix(), world.teammate.as_posix()  # a shell command's paths, in TOML too
+    teammate_push = (f'if [ ! -f "{marker}" ]; then touch "{marker}"; echo more > "{teammate}/c.txt"; '
+                     f'git -C "{teammate}" add c.txt; git -C "{teammate}" commit -qm teammate; '
+                     f'git -C "{teammate}" push -q origin main; fi; {PASSES}')
     assert land(world.config(fast_check=teammate_push), "ana/login") == 0
     assert capsys.readouterr().out.startswith("merged ana/login into main at ")
     assert world.on_origin_main("c.txt") == "more"  # the teammate's commit stays on the base
@@ -214,8 +215,9 @@ def test_the_base_moving_under_the_check_is_merged_again_and_never_forced(world,
 def test_a_base_that_keeps_moving_opens_a_pr(world, capsys, monkeypatch):
     world.branch("ana/login", {"a.txt": "good\n"})
     monkeypatch.setattr(merge, "TRIES", 1)
-    teammate_push = (f'echo more >> "{world.teammate}/c.txt"; git -C "{world.teammate}" add c.txt; '
-                     f'git -C "{world.teammate}" commit -qm teammate; git -C "{world.teammate}" push -q origin main; '
+    teammate = world.teammate.as_posix()  # a shell command's path, in TOML too
+    teammate_push = (f'echo more >> "{teammate}/c.txt"; git -C "{teammate}" add c.txt; '
+                     f'git -C "{teammate}" commit -qm teammate; git -C "{teammate}" push -q origin main; '
                      f'{PASSES}')
     assert land(world.config(fast_check=teammate_push), "ana/login") == 1
     assert "main moved on 1 times while the fast check ran" in capsys.readouterr().out

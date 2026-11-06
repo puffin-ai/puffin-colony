@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from colony import board, cli, wait
+from colony import board, cli, portable, wait
 
 LIMITS = {"open_cards_per_lead": 10, "stale_days": 7, "issue_comments": 200, "archive_days": 7}
 SUMMARY_COMMENTS = 50  # a rotation's closing comment lists the open items among the old issue's last 50 comments
@@ -284,7 +284,7 @@ def worktrees(root: Path) -> list[dict]:
     for block in run.stdout.strip().split("\n\n"):
         entry = dict(line.partition(" ")[::2] for line in block.splitlines() if line.strip())
         if "worktree" in entry:
-            found.append({"path": entry["worktree"], "branch": entry.get("branch", "").removeprefix("refs/heads/"),
+            found.append({"path": portable.native(entry["worktree"]), "branch": entry.get("branch", "").removeprefix("refs/heads/"),
                           "main": not found, "locked": "locked" in entry, "bare": "bare" in entry})
     return found
 

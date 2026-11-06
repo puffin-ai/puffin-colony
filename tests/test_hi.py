@@ -4,6 +4,7 @@ heartbeats, and the accounts' usage, resets and order."""
 import argparse
 import json
 import multiprocessing
+import shlex
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import cli, presence, wait
 
 PACKAGE = Path(str(resources.files("colony")))
@@ -47,7 +49,7 @@ provider_dollars = 0
 def home(tmp_path, monkeypatch):
     """A temporary HOME, a PATH with a stub folder and no real claude or gh, and no session env."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(tmp_path / 'bin'))
     for key in (cli.SESSION_ENV, cli.PERSON_ENV, wait.TOKEN_ENV, wait.LEAD_ENV, "CLAUDE_CONFIG_DIR"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
@@ -651,7 +653,7 @@ def test_colony_view_builds_one_cmux_command_per_running_session(home, config, c
         sorted(c[3] for c in commands) == ["demo-builder-1", "demo-builder-2", "demo-lead"]
     assert len(commands) == 3  # one per running Colony session, none for another project
     admin = next(c for c in commands if c[3] == "demo-lead")
-    assert admin[-1] == f"env CLAUDE_CONFIG_DIR={home / '.claude-work'} claude attach aa11"
+    assert admin[-1] == shlex.join(["env", f"CLAUDE_CONFIG_DIR={home / '.claude-work'}", "claude", "attach", "aa11"])
     default = next(c for c in commands if c[3] == "demo-builder-2")
     assert default[-1] == "claude attach dd44"  # the default folder stays unset, or the login is lost
 

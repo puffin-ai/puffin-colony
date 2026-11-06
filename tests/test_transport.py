@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import cli, transport, wait
 
 STUB = """#!{python}
@@ -29,7 +30,7 @@ def gh(tmp_path, monkeypatch):
     (bin_dir / "gh").write_text(STUB.replace("{python}", sys.executable))
     (bin_dir / "gh").chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(bin_dir))
     monkeypatch.setenv("COLONY_PERSON", "ana")
     log = bin_dir / "calls.jsonl"
     return lambda: [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -91,7 +92,7 @@ def test_post_is_a_command_on_the_command_line(gh, tmp_path):
     (host / ".colony").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(host)], check=True)
     (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
-    env = {"HOME": str(tmp_path), "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "COLONY_SESSION": "builder-2"}
+    env = {"HOME": str(tmp_path), "PATH": stub_path(tmp_path / 'bin'), "COLONY_SESSION": "builder-2"}
     run = subprocess.run([sys.executable, "-m", "colony", "post", "#41", "lead", "done, builder-2/41 pushed"],
                          capture_output=True, text=True, cwd=host, env=env)
     assert run.returncode == 0, run.stderr
