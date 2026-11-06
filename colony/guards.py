@@ -276,7 +276,7 @@ def hook_event() -> dict:
 
 def post(config: dict, to: str, sentence: str, sender: str) -> int:
     """Post `for <to>: <sentence> (from <sender>)` on the coordination issue, where the lead's wait reads it, through
-    transport.send, which also relays it at once when [messages] transport is "relay"."""
+    transport.send."""
     from colony import transport
 
     line = f"for {to}: {sentence} (from {sender})"
@@ -341,7 +341,7 @@ def save_state(path: Path, state: dict) -> None:
 
 def read_unread(config: dict, args, me: str) -> list[dict]:
     """The unread cache's lines for the session `me`, taken out of its state file (see `unread`)."""
-    from colony import transport, wait
+    from colony import wait
 
     path = wait.state_path(config["project"]["name"], me)
     state = wait.read_json(path, {})
@@ -352,9 +352,8 @@ def read_unread(config: dict, args, me: str) -> list[dict]:
         state["hook_polled_at"] = now  # before the call, so a hanging network is tried again only after the interval
         state.setdefault("since", (datetime.now(timezone.utc) - wait.LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
         state.setdefault("pending", [])
-        mark = transport.MARK if transport.kind(config) == "relay" else None
         try:
-            wait.poll(config["project"]["repo"], state, wait.session(config, args, me), mark)
+            wait.poll(config["project"]["repo"], state, wait.session(config, args, me))
         except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             print(f"{cli.NAME} hooks unread: GitHub was not read, and the hook tries again in {UNREAD_EVERY} seconds: "
                   f"{e}", file=sys.stderr)

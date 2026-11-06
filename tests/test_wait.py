@@ -346,36 +346,11 @@ def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, 
 
 def test_an_unknown_transport_stops_the_wait_and_say(gh, capsys, monkeypatch):
     pigeon = {**CONFIG, "messages": {"transport": "pigeon"}}
-    with pytest.raises(cli.ColonyError, match="\"github\" or \"relay\", not 'pigeon'"):
+    with pytest.raises(cli.ColonyError, match="transport = 'pigeon' is gone"):
         run_as("lead", capsys, monkeypatch, config=pigeon)
-    with pytest.raises(cli.ColonyError, match="not 'pigeon'"):
+    with pytest.raises(cli.ColonyError, match="'pigeon' is gone"):
         wait.say(pigeon, Namespace(person=None, to="burak-lead", sentence="hello"))
     assert gh.calls() == []
-
-
-# The relay transport
-
-
-@pytest.mark.parametrize("name, printed", [
-    ("relay", ["#13 for builder-1: and take #13 next (from lead)"]),
-    ("github", ["#12 for builder-1: start this card (from lead)", "#13 for builder-1: and take #13 next (from lead)"]),
-])
-def test_a_relay_wait_skips_a_line_that_also_came_through_the_relay(gh, capsys, monkeypatch, tmp_path, name, printed):
-    config = {**CONFIG, "messages": {"transport": name}}
-    gh.answer(ok(comment(1, f"for builder-1: start this card (from lead)\n{transport.MARK}", issue=12),
-                 comment(2, "for builder-1: and take #13 next (from lead)", issue=13)))
-    code, out, _ = run_as("builder-1", capsys, monkeypatch, config=config)
-    assert code == 0 and out.splitlines() == printed
-    seen = json.loads((tmp_path / ".colony" / "demo" / "builder-1.json").read_text())["seen"]
-    assert "1:for builder-1: start this card (from lead)" in seen  # the relayed line is taken, and never prints later
-
-
-def test_a_relayed_urgent_line_leaves_the_lead_digest_to_its_time(gh, capsys, monkeypatch):
-    config = {**CONFIG, "messages": {"lead_digest_minutes": 1, "transport": "relay"}}
-    urgent = f"for serdar-lead: urgent: I merge dev into main in 10 minutes (from burak-lead)\n{transport.MARK}"
-    gh.answer(ok(comment(1, DIGEST_LINE), comment(2, urgent, issue=5, login="burak-gh")))
-    code, out, clock = run_as("lead", capsys, monkeypatch, config=config)
-    assert code == 0 and out == f"#7 {DIGEST_LINE}\n" and clock.t == 60  # the urgent line came by relay already
 
 
 # Stale cards, from the cycle module

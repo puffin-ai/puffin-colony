@@ -45,7 +45,7 @@ The board is the pinned issue `Board: <project>`. Every line goes there, so the 
 
 A post with none of these stays on the board for anyone to read, and wakes no agent.
 
-**How it arrives.** Each lead keeps `colony wait` running in the background. When you send your lead a prompt, the prompt hook first prints the new posts addressed to it. Where Agent Relay runs, a post also arrives at once. An `@login` is a real GitHub mention too, so the person gets GitHub's notification.
+**How it arrives.** Each lead keeps `colony wait` running in the background. When you send your lead a prompt, the prompt hook first prints the new posts addressed to it. An `@login` is a real GitHub mention too, so the person gets GitHub's notification.
 
 **Good posts** say what changed and where, ask for one thing, or warn the team. You can post yourself, from GitHub on any device. Never paste a key or a token: the board is an issue, and anyone with access to the repo reads it.
 

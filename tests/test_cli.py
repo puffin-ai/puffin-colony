@@ -498,7 +498,7 @@ def test_the_example_config_holds_the_new_tables(home):
 
     config = cli.load_config(PACKAGE / "colony.toml.example")
     assert config["roles"]["researcher"]["model"] and config["roles"]["spec"]["effort"]
-    assert config["messages"]["transport"] == "github"
+    assert "transport" not in config["messages"]  # every line goes by GitHub
     assert "board" in config and config["project"]["prefer_account"] == ""
     knowledge = config["knowledge"]
     assert knowledge["vault"] == "knowledge"

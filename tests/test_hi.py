@@ -227,7 +227,7 @@ def test_the_leads_wait_beats_with_its_token_and_stops_when_another_lead_holds_i
 
 def test_the_wait_loop_beats_at_each_poll(home, monkeypatch):
     beats = []
-    monkeypatch.setattr(wait, "poll", lambda repo, state, me, mark: state["pending"].append(["for lead: hi", True]))
+    monkeypatch.setattr(wait, "poll", lambda repo, state, me: state["pending"].append(["for lead: hi", True]))
     me = wait.Session(name=cli.LEAD, names=frozenset({cli.LEAD}))
     assert wait.wait("acme/demo", "demo", me, heartbeat=lambda: beats.append(1)) == 0
     assert beats == [1]
@@ -236,7 +236,7 @@ def test_the_wait_loop_beats_at_each_poll(home, monkeypatch):
 def test_a_heartbeat_that_fails_to_write_never_stops_the_wait(home, monkeypatch, capsys):
     def broken():
         raise OSError("disk full")
-    monkeypatch.setattr(wait, "poll", lambda repo, state, me, mark: state["pending"].append(["for lead: hi", True]))
+    monkeypatch.setattr(wait, "poll", lambda repo, state, me: state["pending"].append(["for lead: hi", True]))
     me = wait.Session(name=cli.LEAD, names=frozenset({cli.LEAD}))
     assert wait.wait("acme/demo", "demo", me, heartbeat=broken) == 0
     assert "the heartbeat was not written: disk full" in capsys.readouterr().err

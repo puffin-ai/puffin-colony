@@ -145,7 +145,7 @@ def test_each_role_skill_names_itself_triggers_on_its_role_and_points_to_the_pla
         assert ".colony/playbook.md" in text[front.end():]
 
 
-# Colony 0.2: the starter skills and the relay in the tools list, and the setup prompt with the three sections spliced in
+# Colony 0.2: the starter skills in the tools list, and the setup prompt with the three sections spliced in
 
 SETUP = cli.fill_names(cli.package_file("prompts", "setup.md"))
 
@@ -167,27 +167,13 @@ def test_tools_copies_the_starter_skills_and_keeps_one_the_repo_has(repo, capsys
     assert f"skills = {json.dumps(list(guards.STARTER_SKILLS))}" in out
 
 
-@pytest.mark.parametrize("running", [True, False])
-def test_the_relay_defaults_to_yes_only_where_a_core_runs(repo, capsys, monkeypatch, running):
-    from colony import transport
-
-    monkeypatch.setattr(transport, "relay_available", lambda: running)
-    assert cli.main(["tools"]) == 0
-    assert re.search(rf"^  relay +\[{'yes' if running else 'no'}\] Instant lines", capsys.readouterr().out, re.M)
-    assert cli.main(["tools", "relay"]) == 0
-    out = capsys.readouterr().out
-    assert 'and set this line in its [messages] table:\ntransport = "relay"' in out
-    assert ("No Agent Relay core runs on this computer now" in out) is not running
-    assert not (repo / ".mcp.json").exists() and not (repo / ".claude").exists()
-
-
 def test_setup_asks_five_questions_and_one_list_that_folds_in_the_new_items():
     asked = SETUP.split("## 2. Ask everything in one message", 1)[1].split("## 3.", 1)[0]
     assert re.findall(r"^(\d)\. ", asked, re.M) == ["1", "2", "3", "4", "5"]
     assert "one yes-or-no list" in asked and asked.count("?") <= 6
     for item, default in (("knowledge", "yes"), ("hooks", "yes"), ("board", "yes"), ("pointer", "yes")):
         assert f"- `{item}` [{default}]:" in asked, item
-    assert "Its `relay` item says whether this computer runs an Agent Relay core" in SETUP
+    assert "relay" not in SETUP.lower()  # the Agent Relay transport is gone
     assert "`knowledge/`" in asked and "adopt it in place" in asked
 
 

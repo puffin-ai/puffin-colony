@@ -45,9 +45,6 @@ use_api_key = false                # true lets sessions bill ANTHROPIC_API_KEY i
 
 [messages]
 lead_digest_minutes = 10           # the lead reads gathered lines this often; urgent, blocked, questions and your lines come at once
-transport = "github"               # "github" (the default): lines live on issue comments. "relay": each line that can't
-                                   # wait also goes at once through this computer's Agent Relay core, and the comment
-                                   # stays the record; when the relay fails, the comment alone carries the line
 
 [people]
 logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once

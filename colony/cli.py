@@ -392,16 +392,13 @@ OUTSIDE_SKILLS = {
                    "test-driven-development"),
 }
 # The tools `colony tools` writes, in the order setup's one yes-or-no list shows them (see offered).
-TOOLS = ("playwright", "context7", "role-skills", "starter-skills", "relay", "ui-design", "test-first")
-RELAY_LINE = 'transport = "relay"'  # the [messages] line a yes to relay puts in colony.toml
+TOOLS = ("playwright", "context7", "role-skills", "starter-skills", "ui-design", "test-first")
 
 
 def offered() -> dict[str, tuple[str, str]]:
-    """Each tool with its default (yes, no, or ask for no default) and what it is. The relay's default is yes when
-    this computer runs an Agent Relay core."""
-    from colony import guards, transport
+    """Each tool with its default (yes, no, or ask for no default) and what it is."""
+    from colony import guards
 
-    relay = transport.relay_available()
     return {
         "playwright": ("yes", "Playwright MCP, the walker's browser. It installs a package: npx downloads "
                               "@playwright/mcp on first use."),
@@ -410,10 +407,6 @@ def offered() -> dict[str, tuple[str, str]]:
                                "copied from the package."),
         "starter-skills": ("yes", f"{DISPLAY}'s starter skills, {', '.join(guards.STARTER_SKILLS)}, copied from the "
                                   "package. A skill the repo already has is kept."),
-        "relay": ("yes" if relay else "no",
-                  "Instant lines: each line also goes at once through this computer's Agent Relay core, and the issue "
-                  "comment stays the record. " + ("A core runs on this computer." if relay else
-                                                  "No core runs on this computer now.")),
         "ui-design": ("ask", "A UI design skill, Anthropic's frontend-design. Its files download from "
                              "github.com/anthropics/skills."),
         "test-first": ("no", "A test-first skill, superpowers' test-driven-development. Its files download from "
@@ -645,10 +638,9 @@ def tools(args) -> int:
     """`colony tools`: print the list setup offers, or write the named tools into this repo after the person's yes.
 
     The MCP servers merge into .mcp.json, the role and starter skills copy from the package, and an outside skill
-    downloads at its pinned commit through gh. It ends by printing the [tools] table for colony.toml, and with relay,
-    the [messages] transport line.
+    downloads at its pinned commit through gh. It ends by printing the [tools] table for colony.toml.
     """
-    from colony import guards, transport
+    from colony import guards
 
     if not args.names:
         print(tools_list())
@@ -668,8 +660,6 @@ def tools(args) -> int:
             print(f"  .mcp.json: add {', '.join(mcps)}, keeping every entry already there")
         for skill in skills:
             print(f"  .claude/skills/{skill}/")
-        if "relay" in chosen:
-            print(f"  {DIR}/{CONFIG_NAME}: [messages] {RELAY_LINE}")
         print("Nothing ran.")
         return 0
     if mcps:
@@ -687,10 +677,6 @@ def tools(args) -> int:
         if name in OUTSIDE_SKILLS:
             print("wrote", fetch_skill(root, name))
     print(f"\nAdd this table to {DIR}/{CONFIG_NAME}:\n[tools]\nmcp = {json.dumps(mcps)}\nskills = {json.dumps(skills)}")
-    if "relay" in chosen:
-        print(f"\nand set this line in its [messages] table:\n{RELAY_LINE}")
-        if not transport.relay_available():
-            print("No Agent Relay core runs on this computer now: until one does, each line goes by GitHub alone.")
     return 0
 
 
@@ -916,7 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
     p.set_defaults(run=skill_install)
 
-    p = sub.add_parser("tools", help="list the MCPs, skills and relay setup offers, or write the named ones "
+    p = sub.add_parser("tools", help="list the MCPs and skills setup offers, or write the named ones "
                                      "(setup runs it)")
     p.add_argument("names", nargs="*", metavar="tool", help=f"the tools to write: {', '.join(TOOLS)}")
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")

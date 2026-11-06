@@ -75,7 +75,6 @@ The core and the stop list are instructions, not locks: a model can still get on
 - **Code and prompts go to Anthropic,** the same as in any Claude Code session.
 - **Cards, lines, the board, your Needs issue and PRs go to GitHub.** On a public repo they are public, so keep secrets and personal data out of them.
 - **The batch reports are committed** to the batch branch: the review, walk and check summaries, the minutes and the PR body. The raw logs stay local.
-- **The relay stays local.** With `transport = "relay"`, Colony talks only to the Agent Relay core's socket on your computer.
 - **The researcher fetches public pages** to cite them, and pays for no source.
 - **Context7,** when you accept it, sends library lookups to its service. Playwright runs on your machine.
 

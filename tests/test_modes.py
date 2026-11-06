@@ -458,16 +458,6 @@ def test_hack_mode_needs_the_board_number(tmp_path, gh, monkeypatch):
     assert gh.calls() == []
 
 
-def test_the_relay_carries_an_at_login_line_to_that_persons_lead(tmp_path, gh):
-    hack, startup = load(tmp_path, HACK), startup_people()
-    assert transport.relay_name(hack, "@bo") == "bo-lead"
-    assert transport.relay_name(hack, "@all") is None and transport.relay_name(startup, "@bo-gh") is None
-    assert transport.relay_name(startup, "builder-2") == "builder-2"
-    # Hack's leads have no digest, so every line for one is due at once; startup's lead waits for its digest.
-    assert transport.due_at_once(hack, "bo-lead", "@bo can you look? (from ana-lead)", 12)
-    assert not transport.due_at_once(startup, "bo-lead", "for bo-lead: can you look? (from ana-lead)", 5)
-
-
 # hack's wait
 
 
@@ -538,14 +528,6 @@ def test_lines_the_hook_showed_between_waits_never_print(gh, tmp_path, monkeypat
     gh.answer(ok(comment(2, "for lead: urgent: main is red (from builder-2)", updated="2026-11-05T10:01:00Z")))
     code, out = run_wait(STARTUP_WAIT, "lead", "ana", monkeypatch, capsys)
     assert code == 0 and out == "#7 for lead: urgent: main is red (from builder-2)\n"
-
-
-def test_a_relayed_line_never_enters_the_unread_cache(gh, monkeypatch):
-    body = f"for builder-1: start this card (from lead)\n{transport.MARK}"
-    state = {"since": "2026-11-05T09:00:00Z", "pending": []}
-    monkeypatch.setattr(wait, "gh_get", lambda path, etag: (200, etag, [comment(1, body, issue=12)]))
-    wait.poll("acme/demo", state, wait.builder_session(startup_people(), "builder-1"), transport.MARK)
-    assert state["pending"] == [] and state.get("unread", []) == [] and len(state["seen"]) == 1
 
 
 def test_the_wait_and_the_prompt_hook_read_one_session(tmp_path, gh, monkeypatch):

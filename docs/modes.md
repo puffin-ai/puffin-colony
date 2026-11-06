@@ -15,7 +15,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 | For | A team, for hours or a weekend | One person, a small project | A company's whole life cycle |
 | Leads | One per person, as peers, each named `<login>-lead` | One | One per person, with a digest |
 | Builders | Optional. Each person's lead may open them | Yes | Yes |
-| Messages | One pinned board issue, with `@login` and `@all` mentions, the prompt hook, and the instant relay where it runs | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, the digest, and the relay |
+| Messages | One pinned board issue, with `@login` and `@all` mentions, and the prompt hook | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, and the digest |
 | Owner table | Yes, per person, in `AGENTS.md` | No | Optional |
 | Gate | The fast check only. `colony merge <branch>` merges into the base after a passing fast check, when setup's yes allows it. `--review` adds one reviewer before the demo | The checks and a reviewer. The browser walk is optional | The checks, a reviewer and the walk, until 0 problems are open |
 | Knowledge vault, specs, research, card board, retro | No | Off, and each can be turned on | Yes |
@@ -30,7 +30,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 - **Leads as peers.** Each person runs `colony` on their own machine and gets a lead named `<login>-lead`. No lead is in charge of another. Each works in its person's folders from the owner table in `AGENTS.md`.
 - **The board issue.** Setup opens an issue titled `Board: <project>`, pins it, and writes its number to `[messages] board`. Every line goes there, not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds that prefix itself.
 - **Addresses.** A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
-- **The prompt hook.** When you send your lead a prompt, the hook first prints the new posts addressed to it. Where Agent Relay runs, a post also arrives at once.
+- **The prompt hook.** When you send your lead a prompt, the hook first prints the new posts addressed to it.
 - **The fast check gate.** `colony merge <branch>` merges the branch into the base and pushes it after a passing fast check, when `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. `colony batch --review` adds one fresh reviewer, for the last hour before the demo.
 - **`tools/board`.** Setup copies a small shell script into the repo, so Codex or any agent with `gh` can read and post on the board in the same format.
 

@@ -28,7 +28,7 @@ Everything Colony writes into your repo lives in `.colony/` at its root, apart f
 uv tool install git+https://github.com/Puffin-Calendar/puffin-colony
 ```
 
-Colony needs Python 3.11 or later, `git`, `gh` and `claude`. It uses `cmux` when it is on your PATH, and Agent Relay when a core runs on your computer. It has no Python dependencies of its own.
+Colony needs Python 3.11 or later, `git`, `gh` and `claude`. It uses `cmux` when it is on your PATH. It has no Python dependencies of its own.
 
 ## 2. Setup, the first time
 
@@ -54,7 +54,7 @@ Run `colony` in a repo that has no `.colony/colony.toml`. It starts an interacti
 4. Any spend limit on model calls inside the app's own evals? Default $0.
 5. Anything agents must never do here?
 
-Then it shows one yes-or-no list, each item with its default: the MCPs, the role and starter skills, instant messages through Agent Relay (yes when a core runs on this computer), the knowledge vault (at `knowledge/`, or your docs folder adopted in place), the hooks, the board, and the lines that load the core from `CLAUDE.md`.
+Then it shows one yes-or-no list, each item with its default: the MCPs, the role and starter skills, the knowledge vault (at `knowledge/`, or your docs folder adopted in place), the hooks, the board, and the lines that load the core from `CLAUDE.md`.
 
 **It writes:**
 
@@ -238,7 +238,7 @@ The merge is yours. In Startup and Solo, Colony never merges into your base bran
 1. **Setup** asks the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. It writes the owner table into `AGENTS.md` and a hack core of about 300 words as the rules. It opens the issue `Board: <project>`, pins it, and writes its number to `[messages] board`. It copies the board script to `tools/board`.
 2. **Each person runs `colony`** on their own machine and gets a lead named `<login>-lead`. The leads are peers, and each may open builders. The lead and its builders follow the playbook's Hack section, which has no cards: the lead hands out tasks as lines on the board, and each builder lands its own branch with `colony merge`.
 3. **Every line goes to the board,** not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds the prefix. A post is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
-4. **Posts reach the agent between prompts.** `colony wait` keeps the lines addressed to this session that it hasn't printed under `unread` in `~/.colony/<project>/<session>.json`. When you send a prompt, the prompt hook prints them, empties `unread`, and makes no network call. When `colony wait` isn't running, the hook makes one ETag-cached `gh api` call, at most once per 30 seconds. Where Agent Relay runs, a post also arrives at once.
+4. **Posts reach the agent between prompts.** `colony wait` keeps the lines addressed to this session that it hasn't printed under `unread` in `~/.colony/<project>/<session>.json`. When you send a prompt, the prompt hook prints them, empties `unread`, and makes no network call. When `colony wait` isn't running, the hook makes one ETag-cached `gh api` call, at most once per 30 seconds.
 5. **The gate is the fast check.** `colony merge <branch>` fetches, merges the branch into the base locally, and runs the fast check. It pushes the base only when the check passes and `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. It never force-pushes. Before the demo, `colony batch --review` adds one fresh reviewer.
 
 Codex and other agents take part through `tools/board`. The step-by-step guide is [hackathon.md](hackathon.md).

@@ -1,6 +1,6 @@
 # Messages
 
-Colony's agents talk in lines: one-sentence comments on GitHub issues. GitHub carries every line and keeps the record, so a builder on another computer needs only `gh` to take part, and you can read every exchange on the card it belongs to. Where Agent Relay runs, a line that can't wait also arrives at once. This page describes Startup; [Hack](#hack-the-board) puts every line on one board issue.
+Colony's agents talk in lines: one-sentence comments on GitHub issues. GitHub carries every line and keeps the record, so a builder on another computer needs only `gh` to take part, and you can read every exchange on the card it belongs to. This page describes Startup; [Hack](#hack-the-board) puts every line on one board issue.
 
 ## A line
 
@@ -68,7 +68,7 @@ Each session keeps one `colony wait` running in the background, all session. The
 3. sends the last ETag with each request, so a quiet poll comes back as `304 Not Modified` and costs nothing against GitHub's rate limit;
 4. prints the lines that are due, each as `#<issue> <line>`, and exits.
 
-The agent reads what it printed, starts the wait again at once, and then acts on the lines. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds, or at once through the relay.
+The agent reads what it printed, starts the wait again at once, and then acts on the lines. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
 
 A session's first wait reads the last hour, so a start line the lead posted while the builder was opening still counts. The wait keeps its read time, its ETag, the lines it has gathered and the lines it has already printed in `~/.colony/<project>/<session>.json`. Its `unread` key lists the lines for this session it hasn't printed yet, each as `{card, author, body, url}`, for the prompt hook. Gathered lines stay there until they print, so a restart loses none. After 40 failed polls in a row, about 10 minutes, the wait prints the error and exits. A 401 from GitHub adds the hint `run: gh auth login`.
 
@@ -117,18 +117,11 @@ In Hack, every line goes to one pinned issue, `Board: <project>`, not to cards. 
 
 The full guide is [hackathon.md](hackathon.md).
 
-## Transport
+## Where talk happens
 
-`[messages] transport` picks how lines travel.
+- **About a card:** comments on that card's issue.
+- **Lead to lead:** the one coordination issue, `Colony: coordination`.
+- **A decision for a person:** their Needs issue, `Needs <Person>`.
+- **The board** shows status only, in its fields. It never carries a message.
 
-- **`github`**, the default, carries every line as an issue comment, read by the wait every 15 seconds.
-- **`relay`** also sends a line through this computer's Agent Relay core, which puts it into the receiving session between its turns, at once. Setup offers it, with yes as the default when a core runs on this computer. Without a running core, each line goes by GitHub alone.
-
-With `relay`, each line still goes:
-
-1. **The comment is always posted.** It is the record, and a computer without the relay still sees every line.
-2. **Only a line the receiver's wait would print at once is relayed.** That is every lead-signed line for a builder, and for the lead an `urgent:`, `blocked:` or `question:` line, a person's line, or a waited-on `done`. A line that belongs in the digest goes by GitHub alone, so the relay never wakes a quiet lead early.
-3. **A relayed comment carries a hidden mark**, `<!-- colony: relayed -->`. The receiver's wait skips the copy it reads later, so a line delivered both ways is acted on once.
-4. **When the relay fails**, Colony says why on stderr and posts the comment without the mark, so the wait still delivers it.
-
-Colony finds the core's probe (`agent-relay-probe`) and socket the way the messaging-agents-on-the-relay skill describes: the permission rule the core writes for Claude Code or Codex, then the socket pointer and the usual install folders. It talks only to that local socket, and never to a cloud connector.
+Agents never open an issue to message each other. Each session's `colony wait` shows it only the lines addressed to it. Every line goes as a GitHub comment, read within the wait's 15-second poll, and `transport.send` is the one place in the code that posts it.

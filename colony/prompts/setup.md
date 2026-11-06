@@ -32,7 +32,7 @@ Find out, and keep each answer for the later steps:
 - Any folder that already holds the repo's docs: `knowledge/`, `docs/`, `doc/`, `wiki/`, `vault/`, a folder holding `.obsidian/`, or a folder of decision records such as `adr/` or `docs/decisions/`.
 - Whether the gh login has the project scope: run `gh auth status` and read only its `Token scopes` line, never the token.
 - The folders that hold sign-in, payment, database migration, secret or public API code under a name the built-in risk list misses. That list already matches paths holding words such as `auth`, `login`, `session`, `payment`, `billing`, `migrations/`, `secret`, `.env`, `api/` and `routes/`, and every dependency manifest, CI file and `AGENTS.md`.
-- The tools list: run `{name} tools` and keep what it prints. Its `relay` item says whether this computer runs an Agent Relay core.
+- The tools list: run `{name} tools` and keep what it prints.
 
 ## 2. Ask everything in one message
 
@@ -117,7 +117,7 @@ On a yes to `knowledge`. Its templates are in `{package}/knowledge/`: `templates
 
 ## 7. Add the tools and the guards
 
-1. **The tools.** Run `{name} tools` with the names from the tools list the person said yes to, such as `{name} tools playwright context7 role-skills starter-skills`, and skip it when they said yes to none. It merges the MCP servers into `.mcp.json` and keeps every entry already there, copies the role skills and the starter skills into `.claude/skills/`, keeping a starter skill the repo already has, and downloads an outside skill at its pinned commit. Never edit `.mcp.json` by hand. Add the `[tools]` table it prints to `{dir}/{name}.toml`, and on a yes to `relay`, the `transport` line it prints to the `[messages]` table there. When it fails, say why in one line and go on without that tool.
+1. **The tools.** Run `{name} tools` with the names from the tools list the person said yes to, such as `{name} tools playwright context7 role-skills starter-skills`, and skip it when they said yes to none. It merges the MCP servers into `.mcp.json` and keeps every entry already there, copies the role skills and the starter skills into `.claude/skills/`, keeping a starter skill the repo already has, and downloads an outside skill at its pinned commit. Never edit `.mcp.json` by hand. Add the `[tools]` table it prints to `{dir}/{name}.toml`. When it fails, say why in one line and go on without that tool.
 2. **The hooks.** On a yes to `hooks`, run `{name} hooks install`. It merges five hooks into `.claude/settings.json`, keeping every hook and setting already there, and writes `{dir}/hooks/wait_guard.py`. Never edit `.claude/settings.json` by hand. When it fails, say why in one line and go on without the hooks.
 3. **The suppressions ledger.** Run `{name} suppressions --update`. It records each file's count of lint and type suppressions, such as `# noqa`, `eslint-disable` and `@ts-expect-error`, in `{dir}/suppressions.json`. Then add ` && {name} suppressions` to the end of `checks` in `{dir}/{name}.toml`, so a batch fails when a count grows.
 4. **The board.** On a yes to `board`, run `{name} board init`. Put the board link it prints in the pull request's body. When it fails, say why in one line, and add that the person can run `{name} board init` later.
@@ -160,7 +160,6 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
    - The repo as `owner/name` and its default branch, and the folders at the top of the repo, for the owner question.
    - Any `CLAUDE.md` or `AGENTS.md` at the top, and the settings folders on this computer, by name only.
    - The person's name, from `git config user.name`, and GitHub login, from `gh api user --jq .login`.
-   - Whether this computer runs an Agent Relay core: the `relay` item that `{name} tools` prints.
 2. **Ask everything in one message.** This is the only other time you ask. Number these 5 questions, and give your default after each, so "defaults" is a full answer:
    1. Who is on the team? Each person's GitHub login and name, and which one is the team lead, who alone reassigns work. Default: you alone, as the lead.
    2. Who owns which folders? Default: with you alone, the whole repo; with a team, "not yet" for each person, until the team splits the folders at kickoff.
@@ -199,7 +198,7 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        config_dir = "~/.claude"
        person = "<login>"
 
-   Write one `[accounts.<login>]` table per person, with `~/.claude`, the folder on their own computer. For each other settings folder step 1 found on this computer, add `[accounts.<login>-<folder>]` with the person's login. When this computer runs an Agent Relay core, add `transport = "relay"` to `[messages]`: a line then also arrives at once wherever a core runs, and the board keeps the record.
+   Write one `[accounts.<login>]` table per person, with `~/.claude`, the folder on their own computer. For each other settings folder step 1 found on this computer, add `[accounts.<login>-<folder>]` with the person's login.
 5. **Write the core, the playbook and the pointer.** Copy `{package}/presets/hack/core.md` to `{dir}/core.md`, and fill `{project}`, `{base}` and `{fast_check}`. Copy the playbook as step 5 says, without the briefs, since every lead starts by reading it. Add both of step 8's lines without asking, and below the core's line add `@AGENTS.md`, unless the file already loads it.
 6. **Write AGENTS.md's two sections.** At the end of the top `AGENTS.md`, or in a new one, add `{package}/templates/hack/agents-board.md` and then `{package}/templates/hack/agents-owners.md`, and keep every line already there. Fill `{project}`, `{repo}`, `{board}` (the issue's number), `{lead}` and `{demo}` as in step 3, and `{owners}` with one table row per person: `| <Name> | `<login>` | <each folder in backticks, comma-separated, or not yet> |`.
 7. **Add the board script.** Copy `{package}/scripts/board` to `tools/board`, run `chmod +x tools/board`, and run `tools/board whoami`, which must name the board's issue. Any agent with `sh` and `gh`, Codex among them, reads and posts on the board with it.

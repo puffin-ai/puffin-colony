@@ -8,7 +8,7 @@ Agents talk only in lines. A line is one comment on a card (a GitHub issue), und
 
     for <name>: <one sentence> (from <name>)
 
-The names are `lead` and each builder's name. Post every line with `colony post <card> <to> "<sentence>"`, which signs it with your name; `--urgent` starts it `urgent:`. Where Agent Relay runs, the line reaches its session at once, and the card comment stays the record. `colony wait` prints the lines addressed to you. A person's line carries no `(from …)`.
+The names are `lead` and each builder's name. Post every line with `colony post <card> <to> "<sentence>"`, which signs it with your name; `--urgent` starts it `urgent:`. `colony wait` prints the lines addressed to you. A person's line carries no `(from …)`.
 
 A sentence starts with its kind, when it has one:
 - `done, …`: the card is pushed. It reaches the lead in its next digest, or at once when the batch waits on that card.

@@ -14,7 +14,7 @@ You type `colony`, and `colony join <name>` when the lead asks. The agents and t
 | `colony open <name>` | Opens a builder on this computer, in cmux or as a background session. The lead runs it. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
 | `colony spec "<feature>"` | Opens the spec agent on a FEATURE, with `.colony/prompts/spec.md` as its first prompt. The lead runs it. |
-| `colony tools [tool …]` | Prints the tools setup offers, each with its default, or writes the named ones: `playwright`, `context7`, `role-skills`, `starter-skills`, `relay`, `ui-design`, `test-first`. Setup runs it. |
+| `colony tools [tool …]` | Prints the tools setup offers, each with its default, or writes the named ones: `playwright`, `context7`, `role-skills`, `starter-skills`, `ui-design`, `test-first`. Setup runs it. |
 
 ## Lines
 

@@ -7,8 +7,7 @@ first line for it. The lead's wait gathers its lines and ends every `lead_digest
 can't wait. Leads talk to each other as `<person>-lead` on one issue per repo, `Colony: coordination`. Every 15
 seconds the wait asks `gh api` for the repo's issue comments changed since its last read, sending the last ETag, so
 a quiet poll costs nothing against the rate limit. Its state lives in ~/.colony/<project>/<session>.json, and a
-session's first wait reads the last hour. Lines are posted through transport.send. With transport = "relay", a line
-that also came through Agent Relay is skipped, so it is acted on once. Every line goes out by `colony post` on a
+session's first wait reads the last hour. Lines are posted through transport.send. Every line goes out by `colony post` on a
 card, or `colony say` lead to lead. When colony.cycle imports and the card board is on, the lead's wait also
 gathers its cycle.stale_lines.
 
@@ -272,26 +271,23 @@ def unread_text(entry: dict) -> str:
     return f"#{entry.get('card')} {entry.get('body')}"
 
 
-def poll(repo: str, state: dict, me: Session, mark: str | None = None) -> bool:
+def poll(repo: str, state: dict, me: Session) -> bool:
     """Read the comments changed since state["since"] once, add the new lines `me` takes to state["pending"] and to
     the unread cache (state["unread"], with their texts in state["listed"]), and say whether a full page came. The
-    read time moves to the newest comment, so the next poll asks only after it. A comment that carries `mark`
-    (transport.MARK, with relay on) reached `me` through the relay too: its lines go into seen and never print."""
+    read time moves to the newest comment, so the next poll asks only after it."""
     path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
     _, state["etag"], comments = gh_get(path, state.get("etag"))
     seen = state.setdefault("seen", [])
     for comment in comments:
         card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
-        relayed = mark is not None and mark in body.splitlines()
         for line, cant_wait in taken(body, me, card):
             key = f"{comment['id']}:{line}"
             if key not in seen:
                 seen.append(key)
-                if not relayed:
-                    entry = unread_entry(repo, comment, card, line)
-                    state["pending"].append([unread_text(entry), cant_wait])
-                    state.setdefault("unread", []).append(entry)
-                    state.setdefault("listed", []).append(unread_text(entry))
+                entry = unread_entry(repo, comment, card, line)
+                state["pending"].append([unread_text(entry), cant_wait])
+                state.setdefault("unread", []).append(entry)
+                state.setdefault("listed", []).append(unread_text(entry))
     if comments:
         state["since"] = comments[-1]["updated_at"]
     del seen[:-KEEP_SEEN]
@@ -349,11 +345,10 @@ def add_stale(state: dict, stale) -> None:
 
 
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         mark: str | None = None, stale=None, heartbeat=None) -> int:
+         stale=None, heartbeat=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
-    when one can't wait. Gathered lines stay in the state file until they print. `mark` skips relayed lines (poll),
-    and `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
+    when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
     lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr."""
     clock = clock or CLOCK
@@ -368,7 +363,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     while True:
         listed = set(state["listed"])  # what the file's cache holds since the last write, unless the hook took it
         try:
-            more = poll(repo, state, me, mark)
+            more = poll(repo, state, me)
             failures = 0
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             failures, more = failures + 1, False
@@ -473,14 +468,14 @@ def run(config: dict, args, clock=None) -> int:
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
-    mark = transport.MARK if transport.kind(config) == "relay" else None
+    transport.check_transport(config)
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
-        return wait(repo, project, session(config, args, me), clock=clock, mark=mark)
+        return wait(repo, project, session(config, args, me), clock=clock)
     waiting_path = state_path(project, f"{cli.LEAD}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -493,7 +488,7 @@ def run(config: dict, args, clock=None) -> int:
     name, account, token = lead_name(config, args), cli.current_account(config), os.environ.get(TOKEN_ENV, "")
     heartbeat = functools.partial(beat, project, name, account, token)
     keep_beat(heartbeat)  # before any poll, so a second lead stops at once
-    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, mark, stale, heartbeat)
+    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:
@@ -528,7 +523,7 @@ def say(config: dict, args) -> int:
 
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
-    transport.kind(config)
+    transport.check_transport(config)
     me, to, sentence = lead_name(config, args), args.to.lower(), " ".join(args.sentence.split())
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
@@ -552,7 +547,7 @@ def post(config: dict, args) -> int:
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
-    transport.kind(config)
+    transport.check_transport(config)
     on_board, card = hack(config), getattr(args, "card", None)
     sender = lead_name(config, args) if on_board and me == cli.LEAD else me
     to, sentence = args.to.lower(), " ".join(args.sentence.split())

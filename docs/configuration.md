@@ -114,7 +114,6 @@ How lines travel between sessions. See [messages.md](messages.md).
 
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
-| `transport` | no | `"relay"` | `"github"`, the default, posts every line as an issue comment and polls for it. `"relay"` also sends each line that can't wait through this computer's Agent Relay core, at once, and keeps the comment as the record. Setup offers `relay`, with yes as the default when a core runs on this computer. |
 | `board` | no | `12` | Hack only. The number of the pinned `Board: <project>` issue, which setup opens and pins. Every line goes there instead of to cards. |
 | `lead_digest_minutes` | no | `10` | How long the lead's wait gathers lines before it prints them as a digest. A line that can't wait prints at once: `urgent:`, `blocked:` and `question:` lines, your lines, and `done` for a card the batch waits on. |
 
@@ -177,7 +176,7 @@ Tiers and stale cards. See [cycle.md](cycle.md). Setup writes this table only wh
 
 ## `[tools]`
 
-`colony tools` prints this table after it writes the tools you accepted, and setup adds it. It records `mcp`, the MCP servers, and `skills`, the skill folders. The commands don't read it. A yes to `relay` also prints the `[messages]` line `transport = "relay"`.
+`colony tools` prints this table after it writes the tools you accepted, and setup adds it. It records `mcp`, the MCP servers, and `skills`, the skill folders. The commands don't read it.
 
 ## What the sessions' environment holds
 
