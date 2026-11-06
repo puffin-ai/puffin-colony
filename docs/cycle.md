@@ -23,9 +23,9 @@ The lead picks a tier for each request before it writes a card:
 
 | Tier | What makes it | Docs in the same change |
 | --- | --- | --- |
-| TINY | Code of at most 100 non-test lines in one area outside `backend_paths`, or docs of at most 300 lines, with nothing on the risk list | The living-spec and wiki lines it makes stale |
+| TINY | Code of at most 100 non-test lines in one area outside `backend_paths` (and inside `tiny_folders`, when set), or docs of at most 300 lines, with nothing on the risk list and no page, layout, route or feature-folder file moved or deleted | The living-spec and wiki lines it makes stale |
 | SMALL | Every other change | TINY's, and a decision record for a structure, dependency or interface choice |
-| FEATURE | A new feature folder, module, route or page, a migration that creates a table, a new spec page, over 400 non-test lines, or `--feature` | SMALL's, and the spec pages |
+| FEATURE | A new feature folder, module, route or page, a migration that creates a table, a new spec page, a line one of the repo's `feature_triggers` finds, over 400 non-test lines, or `--feature` | SMALL's, and the spec pages |
 
 `colony tier --head origin/<branch> --why` prints the lowest tier a branch's diff allows, the reasons, and the risk list. Tests, lockfiles and generated files don't count toward the line limits.
 
@@ -33,7 +33,7 @@ The risk list names each changed file that touches one of these: auth, payments,
 
 When a done card's branch prints a higher tier than the lead picked, a FEATURE with no approved spec goes to the spec agent before its next card. The board keeps no Tier: the tier is the lead's call at the card's start, and `colony tier` reads it again from the branch.
 
-The limits and the extra risk paths live in `[cycle]`. See [configuration.md](configuration.md#cycle).
+A rename is read at both ends, so moving a file off the risk list is on it too. The limits, the extra risk paths, the TINY folders, the page files and the repo's own FEATURE lines live in `[cycle]`. See [configuration.md](configuration.md#cycle).
 
 ## Research first
 

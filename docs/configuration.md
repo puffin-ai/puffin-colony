@@ -164,8 +164,26 @@ Tiers and stale cards. See [cycle.md](cycle.md). Setup writes this table only wh
 | `feature_code_lines` | `400` | Over this many non-test code lines, a change is a FEATURE |
 | `docs` | `["knowledge/", "docs/", ".colony/reports/"]` | The documentation folders. Their lines count as docs, and a new page under `<folder>/specs/` makes a FEATURE. |
 | `feature_folders` | `[]` | Folders whose new entries are features, beside those named `features`, `modules`, `routes`, `pages` and `screens` |
-| `risk` | `{ payments = ["src/ledger/"] }` | Extra path fragments per risk kind, for code the built-in list misses |
+| `risk` | `{ payments = ["src/ledger/"] }` | Extra path fragments per risk kind, for code the built-in list misses. A path an entry starts, such as `REVIEW.md` or `guide/`, is never docs, so it stays on the list. |
+| `tiny_folders` | `["apps/web/", "apps/site/"]` | When set, the only folders a TINY change's code may be in. Any other non-docs file, a test or a root file too, makes it at least SMALL. |
+| `structure_files` | `["apps/*/src/screens/*.screen.tsx"]` | Globs (`*` crosses folders) of page, layout or route files, beside the built-in `app/**/page`, `layout` and `route` files. A new one is a FEATURE. Moving or deleting one, or any file under `feature_folders`, is never TINY. |
+| `feature_triggers` | see below | The repo's own FEATURE lines, each `{ path, why, added, removed, line }` |
 | `stale_hours` | `2.5` | How long a card In progress can go without an update before the lead gets a `stale:` line |
+
+Each `feature_triggers` entry names a file glob, `path`, the reason `--why` prints, `why`, and a regular expression, `added`, `removed` or both. `added` makes the change a FEATURE when it finds something, its first group or else the whole match, more often in the file's added lines than in its removed ones, so moving or editing a line keeps no trigger unless what the pattern captures changes. `removed` reads the other way, for a name that leaves a list. `line`, optional, limits both to the lines it matches. Triggers read test files too.
+
+```toml
+[[cycle.feature_triggers]]
+why = "a new registry key"
+path = "src/commands/registry.py"
+added = '^\s*"([a-z_]+)"\s*:\s*Entry\('
+
+[[cycle.feature_triggers]]
+why = "a name leaving the held-back list"
+path = "src/tools/list.py"
+line = '^\s*HELD\b'
+removed = '"([^"]+)"'
+```
 
 ## `[limits]`
 

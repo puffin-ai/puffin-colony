@@ -15,8 +15,11 @@ stale-card lines for the lead's wait.
 `needs` and `handover` check their issue's comment count before they post, and rotate a full one (tidy.keep_short).
 
 Optional settings live in `[cycle]` in colony.toml: `stale_hours`, `tiny_code_lines`, `tiny_docs_lines`,
-`feature_code_lines`, `docs` (the documentation folders), `feature_folders`, and `risk`, a table of extra path
-fragments per risk kind, such as `risk = { payments = ["src/ledger/"] }`.
+`feature_code_lines`, `docs` (the documentation folders), `feature_folders`, `risk`, a table of extra path
+fragments per risk kind, such as `risk = { payments = ["src/ledger/"] }`, `structure_files` (globs of files whose
+addition is a FEATURE and whose move or deletion is never TINY), `tiny_folders` (the only folders a TINY change's
+code may be in), and `feature_triggers`, the repo's own FEATURE lines, such as
+`{ path = "src/catalog.py", added = '"(\\w+)": Entry\\(', why = "a new catalog key" }`.
 """
 from __future__ import annotations
 
@@ -177,12 +180,34 @@ def is_test(path: str) -> bool:
     return bool(TEST_PATH.search(path))
 
 
+def _risk_fragments(config: dict) -> dict[str, tuple[str, ...]]:
+    """The [cycle] risk table, each kind's fragments lowercased."""
+    return {kind: tuple(str(f).lower() for f in fragments)
+            for kind, fragments in _settings(config).get("risk", {}).items()}
+
+
 def is_docs(path: str, config: dict) -> bool:
     """Whether a path is documentation: under a [cycle] docs folder, or a Markdown file at the repo's top other than
-    the agents' AGENTS.md and CLAUDE.md, which are on the risk list."""
+    the agents' AGENTS.md and CLAUDE.md, which are on the risk list. A path that a [cycle] risk entry of any kind
+    starts, such as `REVIEW.md` or `guide/`, is never docs, so it stays on the risk list. A fragment inside a docs
+    path, such as `session` in a wiki page's name, leaves the page docs."""
     if path.rsplit("/", 1)[-1].lower() in AGENT_FILES:
         return False
+    if path.lower().startswith(tuple(f for fragments in _risk_fragments(config).values() for f in fragments)):
+        return False
     return path.startswith(tuple(_settings(config).get("docs", DOCS))) or ("/" not in path and path.endswith(".md"))
+
+
+def in_folders(path: str, folders: Iterable[str]) -> bool:
+    """Whether a path sits in one of these folders, each given with or without its trailing slash."""
+    return any(path.startswith(folder.rstrip("/") + "/") for folder in folders)
+
+
+def is_structure(path: str, config: dict) -> bool:
+    """Whether a path is a page, layout or route file by the built-in pattern, or matches a [cycle]
+    structure_files glob, in which `*` crosses folders."""
+    return bool(SCREEN.search(path)) or any(fnmatch.fnmatchcase(path, glob)
+                                            for glob in _settings(config).get("structure_files", ()))
 
 
 def area(path: str) -> str:
@@ -205,15 +230,18 @@ def risks_of(change: FileChange, config: dict) -> list[tuple[str, str]]:
     """One file's places on the risk list, as (kind, what) pairs."""
     path, found = change.path, []
     docs, test = is_docs(path, config), is_test(path)
-    lower, name = path.lower(), path.rsplit("/", 1)[-1]
-    extra = {kind: tuple(str(f).lower() for f in fragments)
-             for kind, fragments in _settings(config).get("risk", {}).items()}
+    name = path.rsplit("/", 1)[-1]
+    extra = _risk_fragments(config)
+    # A rename is read at both ends, so moving a file off the risk list puts it on the list too.
+    ends = [path, change.old_path] if change.status == "R" and change.old_path else [path]
+    paths = [end.lower() for end in dict.fromkeys(ends) if not is_docs(end, config)]
+    for kind in [*RISK_PATHS, *(kind for kind in extra if kind not in RISK_PATHS)]:
+        pattern = RISK_PATHS.get(kind)
+        hit = any(bool(pattern and pattern.search(lower)) or any(f in lower for f in extra.get(kind, ()))
+                  for lower in paths)
+        if hit and (not test or kind == "config"):  # a test of sign-in code is not itself a risk
+            found.append((kind, "the path"))
     if not docs:
-        for kind in [*RISK_PATHS, *(kind for kind in extra if kind not in RISK_PATHS)]:
-            pattern = RISK_PATHS.get(kind)
-            hit = bool(pattern and pattern.search(lower)) or any(f in lower for f in extra.get(kind, ()))
-            if hit and (not test or kind == "config"):  # a test of sign-in code is not itself a risk
-                found.append((kind, "the path"))
         if name in MANIFESTS or (name.startswith("requirements") and name.endswith(".txt")):
             found.append(("dependencies", "a dependency manifest"))
         for kind, pattern in RISK_LINES.items():
@@ -232,20 +260,72 @@ def risks_of(change: FileChange, config: dict) -> list[tuple[str, str]]:
     return found
 
 
+def _rules(config: dict) -> list[dict]:
+    """The [cycle] feature_triggers, each checked and with its patterns compiled."""
+    rules = []
+    for i, rule in enumerate(_settings(config).get("feature_triggers", ())):
+        if not isinstance(rule, dict) or not rule.get("path") or not rule.get("why") or not (
+                rule.get("added") or rule.get("removed")):
+            raise cli.ColonyError(f"[cycle] feature_triggers entry {i + 1} needs path, why, and added or removed")
+        try:
+            rules.append({**rule, **{key: re.compile(rule[key]) for key in ("added", "removed", "line")
+                                     if rule.get(key)}})
+        except re.error as e:
+            raise cli.ColonyError(f"[cycle] feature_triggers entry {i + 1} ({rule['why']}): bad pattern, {e}") from None
+    return rules
+
+
+def _found(pattern: re.Pattern[str], lines: Iterable[str], only: re.Pattern[str] | None) -> Counter[str]:
+    """What a pattern finds in these lines, counted: each match's first group that took part, else the whole match,
+    stripped. With `only`, it reads just the lines that pattern matches."""
+    found: Counter[str] = Counter()
+    for line in lines:
+        if only and not only.search(line):
+            continue
+        for match in pattern.finditer(line):
+            found[next((g for g in match.groups() if g is not None), match.group(0)).strip()] += 1
+    return found
+
+
+def configured_triggers(change: FileChange, config: dict) -> list[str]:
+    """The [cycle] feature_triggers one changed file meets. A rule's `added` pattern fires on what it finds more
+    often in the added lines than in the removed ones, so a line moved within the file is no trigger, and its
+    `removed` pattern the other way round."""
+    found = []
+    for rule in _rules(config):
+        if not fnmatch.fnmatchcase(change.path, rule["path"]):
+            continue
+        only = rule.get("line")
+        names: Counter[str] = Counter()
+        if rule.get("added"):
+            names += _found(rule["added"], change.added, only) - _found(rule["added"], change.removed, only)
+        if rule.get("removed"):
+            names += _found(rule["removed"], change.removed, only) - _found(rule["removed"], change.added, only)
+        if names:
+            what = ", ".join(sorted(names))
+            found.append(f"{rule['why']}, {change.path}: {what if len(what) <= 80 else what[:77] + '...'}")
+    return found
+
+
 def feature_triggers(change: FileChange, existed: Callable[[str], bool], config: dict) -> list[str]:
-    """The FEATURE triggers one changed file meets, one sentence each."""
-    path, found = change.path, []
+    """The FEATURE triggers one changed file meets, one sentence each. The repo's own [cycle] feature_triggers read
+    test files too, and a new feature folder counts whatever file it starts with, unless the folder is itself under
+    a tests folder."""
+    path, found = change.path, configured_triggers(change, config)
+    if change.status == "A":
+        parts = path.split("/")
+        folders = {folder.rstrip("/") for folder in _settings(config).get("feature_folders", ())}
+        for i, part in enumerate(parts[:-1]):
+            entry = "/".join(parts[:i + 2])
+            if is_test(entry + "/"):
+                break
+            if (part in FEATURE_SEGMENTS or "/".join(parts[:i + 1]) in folders) and not existed(entry):
+                found.append(f"a new entry under {part}/, {entry}")
+                break
     if is_test(path):
         return found
     if change.status == "A":
-        parts = path.split("/")
-        folders = tuple(_settings(config).get("feature_folders", ()))
-        for i, part in enumerate(parts[:-1]):
-            entry = "/".join(parts[:i + 2])
-            if (part in FEATURE_SEGMENTS or "/".join(parts[:i + 1]) + "/" in folders) and not existed(entry):
-                found.append(f"a new entry under {part}/, {entry}")
-                break
-        if SCREEN.search(path):
+        if is_structure(path, config):
             found.append(f"a new page, layout or route file, {path}")
         specs = [f"{d.rstrip('/')}/specs/" for d in _settings(config).get("docs", DOCS)]
         if path.endswith(".md") and path.startswith(tuple(specs)):
@@ -259,27 +339,37 @@ def classify(changes: list[FileChange], existed: Callable[[str], bool], config: 
              feature: bool = False) -> Verdict:
     """Pick the lowest tier a diff allows, with the reasons and the risk list.
 
-    TINY is code of at most tiny_code_lines non-test lines in one area outside backend_paths, or docs of at most
-    tiny_docs_lines lines, with nothing on the risk list. FEATURE is a new feature folder, module, route or page, a
-    migration that creates a table, a new spec page, over feature_code_lines non-test lines, or `--feature`.
-    SMALL is everything else.
+    TINY is code of at most tiny_code_lines non-test lines in one area outside backend_paths (and inside
+    tiny_folders, when set), or docs of at most tiny_docs_lines lines, with nothing on the risk list and no page,
+    layout, route or feature-folder file moved or deleted. FEATURE is a new feature folder, module, route or page, a
+    migration that creates a table, a new spec page, a [cycle] feature_triggers line, over feature_code_lines
+    non-test lines, or `--feature`. SMALL is everything else.
     """
     settings = _settings(config)
     tiny_code = int(settings.get("tiny_code_lines", TINY_CODE_LINES))
     tiny_docs = int(settings.get("tiny_docs_lines", TINY_DOCS_LINES))
     feature_lines = int(settings.get("feature_code_lines", FEATURE_CODE_LINES))
     backend = tuple(config.get("project", {}).get("backend_paths", []))
+    tiny_folders = tuple(settings.get("tiny_folders", ()))
+    feature_folders = tuple(settings.get("feature_folders", ()))
     features = ["FEATURE was asked for with --feature"] if feature else []
-    features += [reason for change in changes for reason in feature_triggers(change, existed, config)]
+    features += dict.fromkeys(reason for change in changes for reason in feature_triggers(change, existed, config))
     code_lines: Counter[str] = Counter()
-    docs_lines, blocks, risks, seen = 0, [], [], set()
+    docs_lines, blocks, risks, seen, areas, outside = 0, [], [], set(), set(), []
     for change in changes:
         if is_docs(change.path, config):
             docs_lines += change.lines
             if change.status in ("D", "R"):
                 blocks.append(f"a docs page moved or deleted, {change.old_path}")
-        elif counts(change.path, config):
-            code_lines[area(change.path)] += change.lines
+        else:
+            areas.add(area(change.path))  # tests, lockfiles and generated files have an area too
+            if counts(change.path, config):
+                code_lines[area(change.path)] += change.lines
+            if tiny_folders and not in_folders(change.path, tiny_folders):
+                outside.append(change.path)
+        if change.status in ("D", "R") and not is_test(change.old_path) and (
+                is_structure(change.old_path, config) or in_folders(change.old_path, feature_folders)):
+            blocks.append(f"a page, layout, route or feature-folder file moved or deleted, {change.old_path}")
         if backend and change.path.startswith(backend) and not is_test(change.path):
             blocks.append(f"code in a backend path, {change.path}")
         for kind, what in risks_of(change, config):
@@ -295,8 +385,11 @@ def classify(changes: list[FileChange], existed: Callable[[str], bool], config: 
         return Verdict(FEATURE, features, risk_lines)
     if risks:
         blocks.insert(0, f"{len(risks)} {'place' if len(risks) == 1 else 'places'} on the risk list")
-    if len(code_lines) > 1:
-        blocks.append(f"code in more than one area, {', '.join(sorted(code_lines))}")
+    if outside:
+        more = ", ..." if len(outside) > 3 else ""
+        blocks.append(f"code outside the tiny_folders, {', '.join(outside[:3])}{more}")
+    if len(areas) > 1:
+        blocks.append(f"code in more than one area, {', '.join(sorted(areas))}")
     if total > tiny_code:
         blocks.append(f"{total} non-test code lines, over {tiny_code}")
     if docs_lines > tiny_docs:
