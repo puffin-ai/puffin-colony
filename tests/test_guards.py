@@ -7,6 +7,7 @@ import platform
 import re
 import subprocess
 import sys
+import time
 from importlib import resources
 from pathlib import Path
 
@@ -221,6 +222,53 @@ def test_a_line_github_refuses_fails_the_hook_and_says_so(posted, monkeypatch, c
     monkeypatch.setattr(wait, "gh", refuse)
     assert hook(monkeypatch, guards.stopped, {"error": "rate_limit"}, "builder-2") == 1
     assert "the line was not posted: GitHub answered 401" in capsys.readouterr().err
+
+
+def test_a_line_gh_cant_post_waits_in_the_outbox_and_the_next_hook_posts_it_first(posted, monkeypatch, capsys):
+    working = wait.gh
+
+    def refuse(*args):
+        raise wait.GhError("gh issue failed: connection reset")
+    monkeypatch.setattr(wait, "gh", refuse)
+    assert hook(monkeypatch, guards.stopped, {"error": "rate_limit"}, "builder-2") == 1
+    assert hook(monkeypatch, guards.asking, {}, "builder-3") == 1
+    assert "waits in" in capsys.readouterr().err and posted == []
+    kept = [item["line"] for item in guards.read_outbox(CONFIG)]
+    assert len(kept) == 2 and kept[0].startswith("for ana-lead: builder-2 stopped") and "builder-3 waits" in kept[1]
+    assert guards.outbox_path(CONFIG) == wait.state_path("demo", "outbox")
+    monkeypatch.setattr(wait, "gh", working)
+    assert hook(monkeypatch, guards.stopped, {"error": "server_error"}, "builder-3") == 0
+    assert [call[-1] for call in posted][:2] == kept and "builder-3 stopped" in posted[2][-1]
+    assert guards.read_outbox(CONFIG) == []
+
+
+def test_an_outbox_line_that_can_never_post_is_dropped_and_the_rest_post(posted, monkeypatch, capsys):
+    guards.write_outbox(CONFIG, [{"to": "lead", "line": "for lead: token ghp_" + "a" * 36 + " (from builder-1)"},
+                                 {"to": "lead", "line": "for lead: hello (from builder-1)"}, "broken"])
+    assert guards.flush_outbox(CONFIG) == 2
+    assert [call[-1] for call in posted] == ["for lead: hello (from builder-1)"]
+    assert "can never post, and is dropped" in capsys.readouterr().err and guards.read_outbox(CONFIG) == []
+
+
+def test_a_flush_while_another_runs_skips(posted, monkeypatch):
+    guards.write_outbox(CONFIG, [{"to": "lead", "line": "for lead: hello (from builder-1)"}])
+    with guards.outbox_lock(CONFIG):
+        assert guards.flush_outbox(CONFIG) == 0
+    assert guards.flush_outbox(CONFIG) == 1 and len(posted) == 1
+
+
+def test_the_prompt_hook_says_once_a_day_when_the_session_runs_without_the_retry_watchdog(posted, monkeypatch, capsys):
+    monkeypatch.delenv(guards.WATCHDOG_ENV)
+    wait.write_json(wait.state_path("demo", "builder-2"), {"polled_at": 9e12})  # a running wait: no GitHub read
+    assert hook(monkeypatch, guards.unread, {}, "builder-2") == 0
+    assert capsys.readouterr().out == (f"builder-2 runs without {guards.WATCHDOG_ENV}=1, so a usage limit or a dropped "
+                                       "connection can end a turn for good: reopen it through `colony`, which sets it "
+                                       "(this note shows once a day).\n")
+    assert hook(monkeypatch, guards.unread, {}, "builder-2") == 0
+    assert capsys.readouterr().out == ""
+    assert guards.watchdog_note(CONFIG, "builder-2", now=time.time() + guards.WATCHDOG_EVERY + 1)
+    monkeypatch.setenv(guards.WATCHDOG_ENV, "1")
+    assert guards.watchdog_note(CONFIG, "builder-2", now=time.time() + 3 * guards.WATCHDOG_EVERY) == ""
 
 
 FILES = {

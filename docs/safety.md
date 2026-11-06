@@ -28,6 +28,8 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 
 In Hack and Solo, a prompt hook also runs when you send a prompt. It prints the lines `colony wait` saved for this session, then empties that list. It makes no network call while the wait runs, and otherwise one ETag-cached `gh api` call at most every 30 seconds.
 
+A posting hook's line that `gh` can't post waits in `~/.colony/<project>/outbox.json`. The next hook run, or the next poll of any wait on the computer, posts it first, so it is never lost. A line behind others still waiting goes to the end, so the lines keep their order. The prompt hook also prints one line, at most once a day per session, when the session runs without `CLAUDE_CODE_RETRY_WATCHDOG=1`.
+
 The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3`. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
 
 ## The suppressions ledger

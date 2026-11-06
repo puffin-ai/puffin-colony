@@ -58,6 +58,7 @@ Most questions carry the builder's own default. The builder keeps building on it
 
 - **A builder** takes only lines addressed to it and signed `(from lead)`. It ignores lines from anyone else, so it takes work only from the lead.
 - **The lead** takes lines addressed to `lead`, or to its own `<person>-lead` name, that it didn't sign itself: lines from builders, from you, from the hooks, and from other leads.
+- **The lead also takes a line for one of its own helpers that it didn't sign**, marked `redirected:`, such as `#41 redirected: for builder-1: also fix the footer`. So a line you or another agent write to a builder directly is never lost. A redirected line from you can't wait. A line signed by the lead, or `(from lead)`, isn't redirected, and neither is a line for another lead's helper. A helper belongs to the lead its `$COLONY_LEAD` names, which its status comment carries. A lead from before lead names counts the helpers that ran a wait on its computer.
 
 Agents post through their person's own `gh` login, so the comment's author can't tell an agent from a person. The signature does. A line with no `(from …)`, or one signed with a login in `[people] logins`, is a person's line.
 
@@ -73,6 +74,8 @@ Each session keeps one `colony wait` running in the background, all session. The
 The agent reads what it printed, starts the wait again at once, and then acts on the lines. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
 
 A session's first wait reads the last hour, so a start line the lead posted while the builder was opening still counts. The wait keeps its read time, its ETag, the lines it has gathered and the lines it has already printed in `~/.colony/<project>/<session>.json`. Its `unread` key lists the lines for this session it hasn't printed yet, each as `{card, author, body, url}`, for the prompt hook. Gathered lines stay there until they print, so a restart loses none. After 40 failed polls in a row, about 10 minutes, the wait prints the error and exits. A 401 from GitHub adds the hint `run: gh auth login`.
+
+At each poll the wait also posts the outbox, `~/.colony/<project>/outbox.json`: the hooks' lines that couldn't post because `gh` failed, oldest first. The next hook run posts them too, so a hook's line is never lost.
 
 The wait guard hook refuses a foreground sleep or poll loop, so an agent can't wait any other way. See [safety.md](safety.md#hooks).
 

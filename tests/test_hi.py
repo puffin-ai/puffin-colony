@@ -310,6 +310,36 @@ def test_a_helper_takes_only_its_own_leads_lines(home, monkeypatch):
     assert not wait.taken("for builder-1: start: #4 (from ana-web-lead)", me, "4")
 
 
+def whoami(config, *flags):
+    parser = argparse.ArgumentParser()
+    presence.add_commands(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["whoami", *flags])
+    return args.run(config, args)
+
+
+def test_whoami_names_a_helpers_session_lead_person_and_stream(home, config, monkeypatch, capsys):
+    monkeypatch.setenv(cli.SESSION_ENV, "builder-2")
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-engine-lead")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    assert whoami(config) == 0
+    assert capsys.readouterr().out == ("session: builder-2\nkind: helper\nlead: ana-engine-lead\nperson: ana\n"
+                                       "stream: engine\n")
+    assert whoami(config, "--json") == 0
+    assert json.loads(capsys.readouterr().out) == {"session": "builder-2", "kind": "helper", "lead": "ana-engine-lead",
+                                                   "person": "ana", "stream": "engine"}
+
+
+def test_whoami_for_a_lead_from_before_lead_names_has_no_stream(home, config, monkeypatch, capsys):
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    assert whoami(config, "--json") == 0
+    assert json.loads(capsys.readouterr().out) == {"session": "lead", "kind": "lead", "lead": "ana-lead",
+                                                   "person": "ana", "stream": ""}
+    monkeypatch.delenv(cli.SESSION_ENV)
+    with pytest.raises(cli.ColonyError, match="COLONY_SESSION is not set"):
+        whoami(config)
+
+
 # Presence: one status comment per session, edited in place
 
 

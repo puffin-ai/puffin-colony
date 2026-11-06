@@ -214,9 +214,10 @@ Colony sets these for every interactive session: the lead, each builder, the res
 | --- | --- |
 | `COLONY_SESSION` | `lead`, the builder's name, `researcher` or `spec` |
 | `COLONY_PERSON` | Whose session it is |
+| `COLONY_LEAD` | The lead's name, such as `ana-engine-lead`, on a lead from `colony claim` and on each of its helpers. A helper belongs to this lead. |
 | `CLAUDE_CONFIG_DIR` | The picked settings folder, left unset for `~/.claude` |
-| `CLAUDE_CODE_RETRY_WATCHDOG` | `1` |
+| `CLAUDE_CODE_RETRY_WATCHDOG` | `1`. Without it, the prompt hook says so once a day. |
 | `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS` | `21600000`, the longest the retry watchdog waits: 6 hours |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `250000` |
 
-`--dry-run` prints these names, never their values. The hooks run only in a session that has `COLONY_SESSION`.
+`--dry-run` prints these names, never their values. The hooks run only in a session that has `COLONY_SESSION`. `colony whoami --json` prints the session's name, kind, lead, person and stream for a repo's own tools.

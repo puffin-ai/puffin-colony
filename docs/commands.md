@@ -8,6 +8,7 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | --- | --- |
 | `colony` | In a terminal: runs setup when the repo has no `.colony/colony.toml`, and opens your lead every time after. Inside a Claude Code session, which the line setup adds to `CLAUDE.md` asks for: that session becomes the lead, with no new session. With no lead alive it leads `<person>-main-lead` over the whole repo; with leads alive it lists them and their folders, and asks you only "What's mine?". Without a config, it sets Colony up in that session. It opens no second lead while one's heartbeat is fresh. |
 | `colony claim <stream> [folder …]` | This session becomes the lead `<person>-<stream>-lead` over the folders, which no live lead may hold already. No folders: the rest of the repo. It writes `.colony/leads.toml`, the heartbeat and the status comment, and prints the env line. |
+| `colony whoami [--json]` | This session's name, kind (lead or helper), lead, person and stream, the middle of a lead name such as `ana-engine-lead`, from `$COLONY_SESSION`, `$COLONY_LEAD` and `$COLONY_PERSON`. A repo's own tools read `--json`. |
 | `colony who` | Every live lead and helper, across people and computers: name, person, computer, account, folders, and each account's 5-hour and weekly room with reset times. A status older than 15 minutes counts as gone. |
 | `colony setup [--print]` | Runs setup in this terminal, as `colony` does the first time. `--print` prints the setup prompt instead, for a session already open to follow. |
 | `colony skill-install [--config-dir <dir>]` | Copies the `colony-setup` skill into a Claude settings folder, `$CLAUDE_CONFIG_DIR` or `~/.claude` by default, so a session in any repo can set Colony up. |
@@ -86,7 +87,7 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 | `colony suppressions [--update]` | Counts lint and type suppressions in each file against `.colony/suppressions.json`, and fails when a count grows. `# noqa` counts in any case, and stylesheets count `@ts-ignore`, `@ts-expect-error` and skipped tests too. `--update` lowers the record, and the first run writes it. |
 | `colony hooks install` | Merges the wait guard and the two posting hooks into `.claude/settings.json`, keeping the hooks already there. |
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
-| `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. |
+| `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. A line either hook can't post waits in `~/.colony/<project>/outbox.json` until the next hook or wait posts it. |
 
 ## Flags
 

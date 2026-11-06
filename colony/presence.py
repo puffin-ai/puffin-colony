@@ -305,8 +305,42 @@ def who(config: dict, args) -> int:
     return 0
 
 
+def identity(config: dict, args) -> dict[str, str]:
+    """This session as its environment names it: its name ($COLONY_SESSION), kind (lead or helper), lead, person, and
+    stream, the middle of a lead name such as ana-engine-lead, empty for a lead from before lead names. A repo's own
+    tools read it, such as a check that compares with the stream's branch. No session gives empty values."""
+    from colony import wait
+
+    me = os.environ.get(cli.SESSION_ENV, "").lower()
+    if not me:
+        return {"session": "", "kind": "", "lead": "", "person": "", "stream": ""}
+    lead = wait.lead_name(config, args) if me == cli.LEAD else (os.environ.get(LEAD_ENV, "").lower() or cli.LEAD)
+    try:
+        person = cli.person_of(config, args).lower()
+    except cli.ColonyError:
+        person = lead.split("-", 1)[0] if lead.endswith(f"-{cli.LEAD}") else ""
+    middle = lead.removesuffix(f"-{cli.LEAD}")
+    stream = middle.split("-", 1)[1] if lead.endswith(f"-{cli.LEAD}") and "-" in middle else ""
+    return {"session": me, "kind": "lead" if me == cli.LEAD else "helper", "lead": lead, "person": person,
+            "stream": stream}
+
+
+def whoami(config: dict, args) -> int:
+    """`colony whoami [--json]`: this session's name, kind, lead, person and stream, one `key: value` line each, or
+    one JSON object."""
+    found = identity(config, args)
+    if not found["session"]:
+        raise cli.ColonyError(f"{cli.SESSION_ENV} is not set: this is not a {cli.DISPLAY} session")
+    print(json.dumps(found) if args.json else "\n".join(f"{key}: {value or '-'}" for key, value in found.items()))
+    return 0
+
+
 def add_commands(sub) -> None:
-    """cli.py's route to this module: `who`."""
+    """cli.py's route to this module: `who` and `whoami`."""
     p = sub.add_parser("who", help="every live lead and helper, across people and computers, with folders and room")
     p.add_argument("--person", help="whose session this is")
     p.set_defaults(run=who)
+    p = sub.add_parser("whoami", help="this session's name, kind, lead, person and stream, for a repo's own tools")
+    p.add_argument("--person", help="whose session this is, when $COLONY_PERSON is not set")
+    p.add_argument("--json", action="store_true", help="print one JSON object")
+    p.set_defaults(run=whoami)

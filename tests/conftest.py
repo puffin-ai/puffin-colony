@@ -17,3 +17,10 @@ def outside_claude_code(monkeypatch):
     """The suite may run inside a Claude Code session, whose $CLAUDECODE would make plain `colony` take the
     in-session path. A test that wants that path sets it."""
     monkeypatch.delenv("CLAUDECODE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def with_the_retry_watchdog(monkeypatch):
+    """Every Colony session runs with CLAUDE_CODE_RETRY_WATCHDOG=1, so the prompt hook's once-a-day note stays out of
+    a test that doesn't ask for it, wherever the suite runs."""
+    monkeypatch.setenv("CLAUDE_CODE_RETRY_WATCHDOG", "1")

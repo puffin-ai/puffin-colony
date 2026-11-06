@@ -6,9 +6,15 @@ there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), two t
 issue, `asking` when a builder waits on a permission pop-up and `stopped` when a turn ends on an error, and the prompt
 hook, `unread`, which shows a session the lines addressed to it that it hasn't read, when it starts and before each
 prompt. Every mode installs all five.
+
+A hook's line that can't post, because gh fails, waits in the outbox, ~/.colony/<project>/outbox.json, and the next
+hook run or wait poll on the computer posts it, oldest first (flush_outbox), so it is never lost. The prompt hook also
+says, at most once a day, when the session runs without CLAUDE_CODE_RETRY_WATCHDOG, which Colony sets for its
+sessions so a usage limit or a dropped connection never ends a turn for good.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import platform
@@ -17,6 +23,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -30,6 +37,9 @@ ERROR_CODE = re.compile(r"[a-z_]{1,40}")
 UNREAD_EVERY = 30  # with no wait running, the prompt hook reads GitHub itself at most once per 30 seconds
 WAIT_FRESH = 60  # a wait whose last poll is under a minute old is running, and the prompt hook leaves GitHub to it
 HOOK_TIMEOUT = 20  # seconds Claude Code gives the prompt hook before it goes on without it
+OUTBOX = "outbox"  # ~/.colony/<project>/outbox.json: the hooks' lines that failed to post, oldest first
+WATCHDOG_ENV = "CLAUDE_CODE_RETRY_WATCHDOG"
+WATCHDOG_EVERY = 24 * 3600  # the prompt hook says a session runs without the watchdog at most once a day
 # The starter skills shipped in skills/ beside the role skills, which setup offers.
 STARTER_SKILLS = ("diagnosing-bugs", "tdd", "code-review", "resolving-merge-conflicts", "retro", "implement-spec",
                   "prototype", "grill-me", "writing-for-agents", "git-guardrails")
@@ -274,15 +284,111 @@ def hook_event() -> dict:
     return event if isinstance(event, dict) else {}
 
 
+def outbox_path(config: dict) -> Path:
+    """The outbox: ~/.colony/<project>/outbox.json."""
+    from colony import wait
+
+    return wait.state_path(config["project"]["name"], OUTBOX)
+
+
+@contextmanager
+def outbox_lock(config: dict, block: bool = True):
+    """Hold the outbox's file lock, and yield whether it is held: a flush that finds another one running skips."""
+    path = outbox_path(config).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX if block else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def read_outbox(config: dict) -> list[dict]:
+    """The outbox's lines, each `{to, line, at}`, oldest first; an unreadable entry is left out."""
+    from colony import wait
+
+    items = wait.read_json(outbox_path(config), [])
+    return [item for item in items if isinstance(item, dict) and item.get("to") and item.get("line")] \
+        if isinstance(items, list) else []
+
+
+def write_outbox(config: dict, items: list[dict]) -> None:
+    """Write the outbox whole, or remove it when it is empty."""
+    from colony import wait
+
+    if items:
+        wait.write_json(outbox_path(config), items)
+    else:
+        outbox_path(config).unlink(missing_ok=True)
+
+
+# What a post that GitHub or gh refused raises: its line waits in the outbox. Any other ColonyError, such as a line
+# that holds a secret, would fail again, so its line is never kept.
+POST_FAILURES = (OSError, ValueError, KeyError, subprocess.SubprocessError)
+
+
+def flush_outbox(config: dict) -> int:
+    """Post the outbox's lines, oldest first, and return how many posted. The first that fails again stays, with every
+    later one, for the next hook run or wait poll. It never raises, and skips while another flush runs."""
+    from colony import transport, wait
+
+    try:
+        if not outbox_path(config).exists():
+            return 0
+        with outbox_lock(config, block=False) as held:
+            if not held:
+                return 0
+            items, sent = read_outbox(config), 0
+            for item in items:
+                try:
+                    transport.send(config, item["to"], item["line"])
+                except (wait.GhError, *POST_FAILURES) as e:
+                    print(f"{cli.NAME}: {len(items) - sent} lines wait in the outbox, {outbox_path(config)}: {e}",
+                          file=sys.stderr)
+                    break
+                except cli.ColonyError as e:
+                    print(f"{cli.NAME}: an outbox line can never post, and is dropped: {e}", file=sys.stderr)
+                sent += 1
+            write_outbox(config, items[sent:])
+            return sent
+    except (OSError, ValueError, KeyError) as e:
+        print(f"{cli.NAME}: the outbox was not read: {e}", file=sys.stderr)
+        return 0
+
+
+def keep_in_outbox(config: dict, to: str, line: str) -> None:
+    """Add a line to the end of the outbox."""
+    with outbox_lock(config):
+        write_outbox(config, [*read_outbox(config), {"to": to, "line": line, "at": time.time()}])
+
+
 def post(config: dict, to: str, sentence: str, sender: str) -> int:
     """Post `for <to>: <sentence> (from <sender>)` on the coordination issue, where the lead's wait reads it, through
-    transport.send."""
-    from colony import transport
+    transport.send, after the outbox's older lines. A line gh can't post, or one behind lines still waiting, goes to
+    the end of the outbox."""
+    from colony import transport, wait
 
     line = f"for {to}: {sentence} (from {sender})"
+    flush_outbox(config)
     try:
+        if read_outbox(config):
+            raise wait.GhError("older lines still wait to post")
         number = transport.send(config, to, line)
-    except (cli.ColonyError, OSError, ValueError, KeyError) as e:
+    except (wait.GhError, *POST_FAILURES) as e:
+        try:
+            keep_in_outbox(config, to, line)
+        except OSError as kept:
+            print(f"{cli.NAME} hooks: the line was not posted: {e}, nor kept: {kept}", file=sys.stderr)
+            return 1
+        print(f"{cli.NAME} hooks: the line was not posted: {e}. It waits in {outbox_path(config)}, and the next hook "
+              f"or wait posts it.", file=sys.stderr)
+        return 1
+    except cli.ColonyError as e:
         print(f"{cli.NAME} hooks: the line was not posted: {e}", file=sys.stderr)
         return 1
     print(f"#{number} {line}")
@@ -350,6 +456,8 @@ def read_unread(config: dict, args, me: str) -> list[dict]:
     running = now - float(state.get("polled_at") or 0) < WAIT_FRESH
     if not running and now - float(state.get("hook_polled_at") or 0) >= UNREAD_EVERY:
         state["hook_polled_at"] = now  # before the call, so a hanging network is tried again only after the interval
+        save_state(path, state)
+        flush_outbox(config)  # a running wait flushes it at each poll
         state.setdefault("since", (datetime.now(timezone.utc) - wait.LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
         state.setdefault("pending", [])
         try:
@@ -376,6 +484,23 @@ def read_unread(config: dict, args, me: str) -> list[dict]:
     return entries
 
 
+def watchdog_note(config: dict, me: str, now: float | None = None) -> str:
+    """The line that says this session runs without CLAUDE_CODE_RETRY_WATCHDOG, at most once a day per session, else
+    an empty string."""
+    from colony import wait
+
+    if os.environ.get(WATCHDOG_ENV, "").strip() not in ("", "0", "false"):
+        return ""
+    now = time.time() if now is None else now
+    path = wait.state_path(config["project"]["name"], f"{wait.state_name(me)}-watchdog")
+    last = wait.read_json(path, 0)
+    if isinstance(last, (int, float)) and now - last < WATCHDOG_EVERY:
+        return ""
+    wait.write_json(path, now)
+    return (f"{me} runs without {WATCHDOG_ENV}=1, so a usage limit or a dropped connection can end a turn for good: "
+            f"reopen it through `{cli.NAME}`, which sets it (this note shows once a day).")
+
+
 def unread(config: dict, args) -> int:
     """`colony hooks unread`, the UserPromptSubmit and SessionStart hook: print the lines addressed to this session that
     it hasn't read, then empty the unread cache they came from.
@@ -390,6 +515,13 @@ def unread(config: dict, args) -> int:
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         return 0
+    try:
+        note = watchdog_note(config, me)
+    except (OSError, ValueError, KeyError) as e:
+        note = ""
+        print(f"{cli.NAME} hooks unread: {e}", file=sys.stderr)
+    if note:
+        print(note)
     try:
         entries = read_unread(config, args, me)
     except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
