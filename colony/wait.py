@@ -654,7 +654,8 @@ def post(config: dict, args) -> int:
     lead signs as `<person>-lead`, and a builder's `lead` means its own person's lead.
 
     A line has a kind (tidy.check_kind): a helper sends done, question:, blocked: or urgent:, and the lead sends its
-    helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text."""
+    helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text. A helper's `done`
+    also moves its card to In review on the board (in_review)."""
     from colony import tidy, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
@@ -683,7 +684,22 @@ def post(config: dict, args) -> int:
     tidy.check_kind(me == cli.LEAD, to, sentence)
     number = transport.send(config, to, line, card=None if on_board else card)
     print(f"#{number} {line}")
+    if me != cli.LEAD and card is not None and DONE.match(sentence):
+        in_review(config, card)
     return 0
+
+
+def in_review(config: dict, card: int) -> None:
+    """Move a card a helper just posted `done` on to In review, which stamps its Last update, so the lead's stale
+    check never raises a finished card. The line is already out, so a board that fails says so on stderr alone."""
+    if not config.get("features", {}).get("board", True):
+        return
+    from colony import board
+
+    try:
+        board.set_fields(config, card, [("Status", "In review")])
+    except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        print(f"{cli.NAME} post: the line went out, and #{card} stays as it was on the board: {e}", file=sys.stderr)
 
 
 def card_number(value: str) -> int:
