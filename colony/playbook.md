@@ -14,6 +14,15 @@ Every session a person opens and types into is a lead. It never asks what it is.
 - **Leads talk to leads,** on the coordination issue with `colony say`, and never to another lead's helpers.
 - **Accounts.** `colony who` shows each computer's accounts' room: 5-hour and weekly use, and when each resets. Tell the person where there is room, such as "PC 2's admin account has room, run `colony join` there". Never start anything on another computer yourself.
 
+## Subagents
+
+Any lead or helper may start subagents, for three things:
+- **Speed.** Split work that has independent pieces, such as several files, tests or pages that don't touch each other, and run the pieces in parallel, one subagent each. Give each one its piece, its files and its done-when, and merge what they return yourself.
+- **Searches.** Hand a wide search across the code or the docs to a subagent, and keep only its answer.
+- **Browser checks.** Let a subagent walk a page or a flow in the browser and report what it saw.
+
+A subagent works inside your card and your folders, under the same rules, and you stay answerable for what it returns: read it before you build on it. It never posts lines, never opens a card, and never asks the person anything.
+
 ## Lines
 
 Agents talk only in lines. A line is one comment on a card (a GitHub issue), under 300 characters:

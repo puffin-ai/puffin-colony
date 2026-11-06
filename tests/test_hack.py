@@ -414,3 +414,11 @@ def test_the_docs_say_board_unread_prints_every_new_post_and_marks_yours():
                 "you `, for you`. |") in text, doc
         assert "Prints the posts addressed to you that you haven't seen" not in text, doc
         assert "Prints the posts for you that you haven't seen" not in text, doc
+
+
+def test_the_playbook_says_subagents_are_for_speed_searches_and_browser_checks():
+    section = playbook_section("Subagents")
+    for use in ("**Speed.**", "in parallel", "**Searches.**", "**Browser checks.**"):
+        assert use in section, use
+    builder = (PACKAGE / "skills" / "colony-builder" / "SKILL.md").read_text()
+    assert "start no subagents" not in builder and "Subagents section" in builder
