@@ -153,9 +153,9 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
 2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
-3. Run `{fast_check}`, and fix what it reports.
-4. Write a test for a bug fix or for new logic. A style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
-5. Commit, run `git push origin <name>/<n>`, and post one line on the card: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.
+3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
+4. Run `{fast_check}` once, when the change and its tests are done, and fix what it reports; run it again only after a fix.
+5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
