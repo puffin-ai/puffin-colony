@@ -2,7 +2,8 @@
 
 `colony release` opens one pull request from `[project] base` into `[project] release`, whose body lists each batch
 pull request merged into the base since the last release: each one whose merge commit the release branch lacks. It
-never merges that pull request, because a person does.
+never merges that pull request, because a person does. Before it opens one, it posts one `colony say @all` line
+naming each other lead whose batch the release carries, and the body lists those batches too.
 
 `colony release --after`, once a person has merged it, merges the release branch back into the base in Colony's
 merge worktree (merge.merge_back), then watches the run of `[project] deploy_workflow` on the release branch's head
@@ -15,9 +16,10 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 
-from colony import batch, cli, merge, wait
+from colony import batch, board, cli, merge, wait
 
 CLOSES = re.compile(r"\bCloses #(\d+)")  # how a batch pull request names its cards (batch.pr_body)
 LISTED = 200  # merged pull requests into the base read at most, newest first
@@ -57,18 +59,63 @@ def unreleased(config: dict, root, release: str) -> list[dict]:
     return sorted(batches, key=lambda pr: pr["number"])
 
 
-def body(config: dict, base: str, release: str, batches: list[dict]) -> str:
-    """The release pull request's body: the batches it carries, and what happens after a person merges it."""
+def leads(config: dict, batches: list[dict]) -> None:
+    """Name each batch's lead in its "leads": the board's Lead field of the cards it closes, else `@<author>`. A
+    board that can't be read leaves every batch on its author, with a note."""
+    found = {}
+    if config.get("features", {}).get("board", True) and not wait.hack(config):
+        try:
+            on_board = board.find_board(config)
+            found = {item["number"]: board.field_value(item, "Lead").lower()
+                     for item in (board.items(on_board) if on_board else [])}
+        except cli.ColonyError as e:
+            print(f"{cli.NAME}: the board was not read, so each batch goes by its author: {e}", file=sys.stderr)
+    for pr in batches:
+        pr["leads"] = sorted({found[n] for n in pr["cards"] if found.get(n)}) or [f"@{pr['author'].lower()}"]
+
+
+def others(config: dict, batches: list[dict], me: str, mine: frozenset[str]) -> list[dict]:
+    """The batches another lead ran: none of their leads is this lead, or this lead's person's login."""
+    return [pr for pr in batches if not any(lead in (me, *(f"@{login}" for login in mine)) for lead in pr["leads"])]
+
+
+def warning(base: str, release: str, theirs: list[dict], me: str) -> str:
+    """The @all line naming the other leads' batches, with their leads while that fits in one line."""
+    for named in (True, False):
+        listed = ", ".join(f"#{pr['number']}" + (f" ({', '.join(pr['leads'])})" if named else "") for pr in theirs)
+        sentence = (f"releasing {base} into {release} now, which carries your batches {listed}: tell me at once if "
+                    "one must wait")
+        line = wait.compose(f"@{wait.ALL}", sentence, me)
+        if len(line) < wait.MAX_LINE:
+            break
+    return wait.checked(line, sentence)
+
+
+def warn(config: dict, line: str) -> None:
+    """Post the line on the coordination issue, or the board in hack mode, as `colony say` does."""
+    from colony import tidy, transport
+
+    transport.check_transport(config)
+    if not wait.hack(config):
+        tidy.keep_short(config, wait.coordination_issue(config["project"]["repo"], config["project"]["name"]))
+    transport.send(config, f"@{wait.ALL}", line)
+
+
+def body(config: dict, base: str, release: str, batches: list[dict], theirs: list[dict]) -> str:
+    """The release pull request's body: the batches it carries, the other leads' among them, and what happens after a
+    person merges it."""
     none = f"- No batch pull request: the commits came to {base} another way."
     listed = [f"- #{pr['number']} {pr['title']}" for pr in batches] or [none]
-    return "\n".join(["## Batches in this release", *listed, "",
+    other = ["## Other leads' batches", *(f"- #{pr['number']}, from {', '.join(pr['leads'])}" for pr in theirs),
+             ""] if theirs else []
+    return "\n".join(["## Batches in this release", *listed, "", *other,
                       f"A person merges this pull request. Then `{cli.NAME} release --after` merges {release} back "
                       f"into {base} and watches the deploy.", "", batch.trailer(config), ""])
 
 
-def open_release(config: dict, root, base: str, release: str) -> str:
-    """Open the release pull request from the base into the release branch, or return the one already open; None
-    when the release branch already holds the base."""
+def open_release(config: dict, root, base: str, release: str, me: str, mine: frozenset[str]) -> str:
+    """Open the release pull request from the base into the release branch, after the @all line when it carries
+    another lead's batch, or return the one already open; None when the release branch already holds the base."""
     repo = config["project"]["repo"]
     found = json.loads(wait.gh("pr", "list", "--repo", repo, "--head", base, "--base", release, "--state", "open",
                                "--json", "url") or "[]")
@@ -77,11 +124,15 @@ def open_release(config: dict, root, base: str, release: str) -> str:
     if merge._behind(root, f"origin/{base}", f"origin/{release}"):
         return None
     batches = unreleased(config, root, release)
+    leads(config, batches)
+    theirs = others(config, batches, me, mine)
+    if theirs:
+        warn(config, warning(base, release, theirs, me))
     title = f"{config['project']['name']}: release {base} into {release}"
     if batches:
         title += " (" + ", ".join(f"#{pr['number']}" for pr in batches) + ")"
     return wait.gh("pr", "create", "--repo", repo, "--base", release, "--head", base, "--title", title, "--body",
-                   body(config, base, release, batches)).strip()
+                   body(config, base, release, batches, theirs)).strip()
 
 
 def released(config: dict, base: str, release: str) -> None:
@@ -145,6 +196,7 @@ def plan(config: dict, base: str, release: str, after: bool) -> str:
         pr = ["gh", "pr", "create", "--repo", repo, "--base", release, "--head", base]
         return "\n".join([f"{cli.NAME} release: dry run, nothing runs.", "  $ git fetch origin",
                           f"  list the batch pull requests merged into {base} whose merge commit {release} lacks",
+                          "  post one @all line naming the other leads whose batches it carries, if any",
                           "  $ " + shlex.join(pr)])
     workflow = config["project"].get("deploy_workflow") or ""
     return "\n".join([f"{cli.NAME} release --after: dry run, nothing runs.", "  $ git fetch origin",
@@ -168,7 +220,8 @@ def run(config: dict, args) -> int:
     if not merge._exists(root, f"origin/{release}"):
         raise cli.ColonyError(f"origin has no branch {release}")
     if not args.after:
-        url = open_release(config, root, base, release)
+        mine = wait.person_logins(config, cli.person_of(config, args))
+        url = open_release(config, root, base, release, wait.lead_name(config, args), mine)
         print(f"release pull request: {url}" if url else f"{release} already holds {base}: nothing to release")
         return 0
     released(config, base, release)
