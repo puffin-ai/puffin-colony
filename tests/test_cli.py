@@ -2,6 +2,7 @@
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -52,8 +53,10 @@ def no_settings(out: str) -> str:
 
 
 def builder_prompt(name):
-    """A builder's first prompt as the dry run quotes it."""
-    return f"'Read .colony/playbook.md, Builder section. You are {name}. Start the wait.'"
+    """A builder's first prompt as the dry run quotes it, with the line that renames the session to its name."""
+    return shlex.quote(f"Read .colony/playbook.md, Builder section. You are {name}. Start the wait. "
+                       f"Rename this session in the app's sidebar to {name}, with the app's own rename tool when you "
+                       "have one; when you have none, skip this quietly.")
 
 
 def write_usage(folder: Path, used: float, resets_in: timedelta) -> None:
@@ -671,3 +674,4 @@ def test_account_reaches_the_lead_from_the_command_line(home, host, capsys):
     (host / ".colony" / "colony.toml").write_text(CONFIG + '[accounts.admin]\nconfig_dir = "~/admin"\nperson = "ana"\n')
     assert cli.main(["--dry-run", "--person", "ana", "--account", "admin"]) == 0
     assert "dry run: demo-lead on account admin" in capsys.readouterr().out
+

@@ -37,6 +37,8 @@ SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
 LEAD = "lead"
 LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
+RENAME = ("Rename this session in the app's sidebar to {name}, with the app's own rename tool when you have one; "
+          "when you have none, skip this quietly.")
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 RESEARCHER, SPEC, TESTER = "researcher", "spec", "tester"  # the sessions `colony research`, `spec` and `tester` open
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
@@ -526,6 +528,8 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     """
     from colony.wait import LEAD_ENV
 
+    if session != LEAD:  # a lead learns its name when it claims it, and renames itself then
+        prompt = f"{prompt} {rename_line(session)}"
     person = person_of(config, args)
     account, config_dir, why = choose_account_why(config, args)
     title = f"{config['project']['name']}-{session}"
@@ -708,6 +712,11 @@ def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str
     return name, token
 
 
+def rename_line(name: str) -> str:
+    """The line that tells a session to take its role name in the app's sidebar, such as builder-7."""
+    return RENAME.replace("{name}", name)
+
+
 def lead_env(config: dict, args, name: str, token: str) -> str:
     """The env line a claimed lead starts every colony command with."""
     from colony import wait
@@ -723,6 +732,7 @@ def claim(config: dict, args) -> int:
 
     name, token = claim_lead(config, args, args.stream, args.folders)
     print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
+    print(rename_line(name))
     print(f"Start every {NAME} command with `{lead_env(config, args, name, token)}`, and start `{NAME} wait` in the "
           "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
           f"{DIR}/{presence.LEADS_FILE} with your next change.")
@@ -778,6 +788,7 @@ def here(args) -> int:
     if not leads:
         name, token = claim_lead(config, args, "main", [])
         print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
+        print(rename_line(name))
         print(f"Next: start every {NAME} command with `{lead_env(config, args, name, token)}`, start `{NAME} wait` in "
               "the background within 2 minutes, load the colony-lead skill, and ask the person what they want.")
         return 0
@@ -1264,6 +1275,7 @@ def join(config: dict, args) -> int:
             print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
         env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
         print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
+        print(rename_line(name))
         print(f"Next: start every {NAME} command with `{env}`, start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
               f"{section(config, 'Builder')} section. Never ask the person anything: your lead gives you cards.")
