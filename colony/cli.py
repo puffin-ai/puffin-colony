@@ -978,7 +978,13 @@ def builder_prompt(name: str, config: dict) -> str:
 
 
 def open_builder(config: dict, args) -> int:
-    """Open a builder on this computer in a new cmux workspace (the lead runs this)."""
+    """Open a builder on this computer in a new cmux workspace (the lead runs this). A named lead's wait then expects
+    its status comment (wait.expect_status)."""
+    from colony import wait
+
+    lead = os.environ.get(wait.LEAD_ENV, "").lower()
+    if lead and not args.dry_run:
+        wait.expect_status(config["project"]["name"], lead, args.name)
     return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
 
 
@@ -1234,6 +1240,8 @@ def join(config: dict, args) -> int:
     if missing and not args.dry_run:
         return 1
     print(f"Joining {args.lead_name} as {name}.")
+    if not args.dry_run:
+        wait.expect_status(config["project"]["name"], args.lead_name, name)
     return launch(config, args, name, "builder", builder_prompt(name, config))
 
 
