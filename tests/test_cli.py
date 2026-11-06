@@ -319,6 +319,17 @@ def test_lead_dry_run_with_cmux_opens_a_workspace_and_runs_nothing(home, config,
     assert not cmux_log.exists() or cmux_log.read_text().split() == ["workspace", "list"]  # only the probe ran
 
 
+def test_lead_opens_cmux_from_the_app_when_it_is_not_on_path(home, config, capsys, monkeypatch):
+    app = home / "cmux.app" / "bin"
+    app.mkdir(parents=True)
+    cmux_log = make_stub(app, "cmux")
+    monkeypatch.setattr(cli, "CMUX_APP", app / "cmux")
+    make_stub(home / "bin", "claude")
+    code, out = run_lead(config, capsys, dry_run=False)
+    assert code == 0 and "in a new cmux workspace" in out
+    assert cmux_log.read_text().splitlines()[:3] == ["new-workspace", "--name", "demo-lead"]
+
+
 def test_here_forces_this_terminal_when_cmux_is_on_path(home, config, capsys):
     cmux_log = make_stub(home / "bin", "cmux")
     _, out = run_lead(config, capsys, here=True)
@@ -469,6 +480,8 @@ def test_a_builder_name_refuses_the_lead_and_odd_names(name, capsys):
 def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, config):
     (host / ".colony" / "colony.toml").write_text(CONFIG.replace('"~/first"', '"~/.claude"'))
     claude_log = make_stub(home / "bin", "claude")
+    # A cmux that refuses the probe, so a cmux app on the machine running the suite is not used.
+    make_stub(home / "bin", "cmux", code=1)
     run = run_colony(home, "--person", "ana", "--dry-run", cwd=host)
     assert run.returncode == 0, run.stderr
     assert "command: env -u CLAUDE_CONFIG_DIR claude --remote-control demo-lead" in run.stdout
