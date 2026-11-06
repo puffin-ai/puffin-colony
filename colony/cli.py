@@ -474,12 +474,24 @@ def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: st
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
 
+# Where the cmux app keeps its command when the app's installer left it off PATH, as on Burak's Mac.
+CMUX_APP = Path("/Applications/cmux.app/Contents/Resources/bin/cmux")
+
+
+def cmux_command() -> str | None:
+    """The cmux command: the one on PATH, else the one inside the cmux app, else None."""
+    if shutil.which("cmux") is not None:
+        return "cmux"
+    return str(CMUX_APP) if os.access(CMUX_APP, os.X_OK) else None
+
+
 def cmux_usable() -> bool:
-    """Whether cmux is on PATH and takes commands from this process, which it does only inside cmux."""
-    if shutil.which("cmux") is None:
+    """Whether cmux is found and takes commands from this process, which it does only inside cmux."""
+    cmux = cmux_command()
+    if cmux is None:
         return False
     try:
-        return subprocess.run(["cmux", "workspace", "list"], capture_output=True, timeout=10).returncode == 0
+        return subprocess.run([cmux, "workspace", "list"], capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -529,7 +541,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
     if mode == "cmux":
         command = argv if keep_key else ["env", "-u", "ANTHROPIC_API_KEY", *argv]
-        cmd = ["cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
+        cmd = [cmux_command() or "cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
         cmd += [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
         return subprocess.run(cmd).returncode
     if mode == "background":
@@ -1084,7 +1096,7 @@ def view_commands(config: dict) -> list[list[str]]:
         attach = ["claude", "attach", agent["id"]]
         if not is_default_dir(agent["config_dir"]):
             attach = ["env", f"CLAUDE_CONFIG_DIR={agent['config_dir']}", *attach]
-        commands.append(["cmux", "new-workspace", "--name", agent["name"], "--cwd", agent.get("cwd") or str(repo_root()),
+        commands.append([cmux_command() or "cmux", "new-workspace", "--name", agent["name"], "--cwd", agent.get("cwd") or str(repo_root()),
                          "--command", shlex.join(attach)])
     return commands
 
