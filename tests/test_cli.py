@@ -391,6 +391,7 @@ def test_join_opens_the_builder_once_nothing_is_missing(home, host, config, caps
     assert args[:3] == ["new-workspace", "--name", "demo-builder-1"]
     assert "COLONY_SESSION=builder-1" in args and "COLONY_PERSON=ana" in args
     assert "COLONY_LEAD=ana-main-lead" in args  # a helper belongs to one lead
+    assert set(json.loads((home / ".colony" / "demo" / "ana-main-lead-opened.json").read_text())) == {"builder-1"}
 
 
 def test_open_dry_run_opens_the_builder_in_cmux(home, config, capsys):
@@ -407,6 +408,17 @@ def test_open_without_cmux_or_a_terminal_opens_a_background_session(home, config
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
     cli.open_builder(config, builder_args("builder-1"))
     assert "in a background session" in capsys.readouterr().out
+
+
+def test_open_from_a_named_lead_expects_the_helpers_status_and_a_dry_run_does_not(home, host, config, monkeypatch):
+    make_stub(home / "bin", "claude")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setenv("COLONY_LEAD", "ana-main-lead")
+    opened = home / ".colony" / "demo" / "ana-main-lead-opened.json"
+    cli.open_builder(config, builder_args("builder-1"))
+    assert not opened.exists()
+    cli.open_builder(config, builder_args("builder-1", dry_run=False))
+    assert set(json.loads(opened.read_text())) == {"builder-1"}
 
 
 def test_a_background_session_runs_claude_with_bg_and_its_name(home, host, config, monkeypatch):

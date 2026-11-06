@@ -3,6 +3,7 @@ clock, so a 10-minute digest runs in a moment."""
 import json
 import subprocess
 import sys
+import time
 import types
 from argparse import Namespace
 from datetime import datetime, timedelta, timezone
@@ -489,3 +490,41 @@ def test_the_real_cycles_stale_check_never_stops_the_leads_wait_on_a_missing_boa
     captured = capsys.readouterr()
     assert captured.out == "#7 for lead: urgent: main is red (from builder-2)\n"
     assert (err in captured.err) if err else captured.err == ""
+
+
+# A helper opened with open or join that posts no status comment
+
+
+def status_comment(id, name, updated):
+    """A helper's status comment on the coordination issue, naming its lead."""
+    from colony import presence
+
+    body = presence.body(presence.Status(name, "helper", lead="ana-main-lead"))
+    return comment(id, body, updated=updated, issue=5)
+
+
+def test_a_helper_with_no_status_comment_after_5_minutes_is_raised_once(gh):
+    opened_at = datetime(2026, 11, 5, 10, 0, tzinfo=timezone.utc).timestamp()
+    wait.expect_status("demo", "ana-main-lead", "builder-1", now=opened_at)
+    wait.expect_status("demo", "ana-main-lead", "builder-2", now=opened_at)
+    check, state = wait.silent_check("demo", "ana-main-lead"), {}
+    assert check(state, now=opened_at + 299) == []
+    # builder-2's status from before it was opened doesn't count; builder-1's after it does.
+    wait.learn_helpers(state, [status_comment(1, "builder-1", "2026-11-05T10:01:00Z"),
+                               status_comment(2, "builder-2", "2026-11-05T09:30:00Z")])
+    assert check(state, now=opened_at + 360) == [
+        "urgent: builder-2 was opened 6 minutes ago and has posted no status comment; look at its window, or open it "
+        "again"]
+    assert check(state, now=opened_at + 900) == []
+
+
+def test_the_named_leads_wait_returns_at_once_on_a_silent_helper(gh, capsys, monkeypatch):
+    from colony import presence
+
+    monkeypatch.setenv("COLONY_LEAD", "ana-main-lead")
+    monkeypatch.setattr(presence, "keeper", lambda *args, **kwargs: lambda: None)
+    wait.expect_status("demo", "ana-main-lead", "builder-3", now=time.time() - 400)
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and clock.naps == []
+    assert out == ("urgent: builder-3 was opened 6 minutes ago and has posted no status comment; look at its "
+                   "window, or open it again\n")
