@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import cli, guards, wait
 
 PACKAGE = Path(str(resources.files("colony")))
@@ -204,7 +205,7 @@ def test_the_prompt_hooks_command_passes_the_lines_on_and_never_blocks_the_promp
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "colony"
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(repo), cli.SESSION_ENV: "lead"}
+    env = {"PATH": stub_path(bin_dir), "CLAUDE_PROJECT_DIR": str(repo), cli.SESSION_ENV: "lead"}
     for script, out in (('echo "#7 a line for you"', "#7 a line for you\n"),
                         ("echo 'colony: .colony/colony.toml is missing' >&2; exit 2", "")):
         stub.write_text(f"#!/bin/sh\n[ \"$*\" = 'hooks unread' ] || exit 9\n{script}\n")

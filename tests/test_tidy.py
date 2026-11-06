@@ -155,7 +155,7 @@ def test_idea_appends_a_dated_line_to_colony_future_work_without_a_vault(gh, rep
     page = (repo / ".colony" / "future-work.md").read_text()
     assert page.endswith("## Ideas\n\n- 2026-11-05: a dark mode for the calendar\n- 2026-11-05: export to iCal\n")
     assert gh.calls() == []  # an idea is never an issue
-    assert ".colony/future-work.md: - 2026-11-05: export to iCal" in capsys.readouterr().out
+    assert f"{Path('.colony', 'future-work.md')}: - 2026-11-05: export to iCal" in capsys.readouterr().out
 
 
 def test_an_idea_goes_into_the_vaults_register_inside_its_ideas_section(tmp_path):

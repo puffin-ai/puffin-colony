@@ -92,14 +92,14 @@ def config(tmp_path):
 name = "demo"
 repo = "example/demo"
 base = "main"
-worktrees = "{tmp_path / 'wt'}"
+worktrees = "{(tmp_path / 'wt').as_posix()}"
 checks = "true"
 web_checks = "true"
 backend_paths = ["api/"]
 generated = ["gen/*"]
 regen = "true"
 [accounts.one]
-config_dir = "{tmp_path / 'account'}"
+config_dir = "{(tmp_path / 'account').as_posix()}"
 person = "pat"
 [roles]
 {roles}
@@ -380,7 +380,7 @@ def hack_config(tmp_path):
     """A hack mode colony.toml, with its board issue, #12."""
     roles = "\n".join(f'{role} = {{ model = "m-{role}", effort = "low" }}' for role in cli.ROLES)
     path = tmp_path / "hack.toml"
-    path.write_text(HACK_TOML.format(wt=tmp_path / "wt", account=tmp_path / "account", roles=roles))
+    path.write_text(HACK_TOML.format(wt=(tmp_path / "wt").as_posix(), account=(tmp_path / "account").as_posix(), roles=roles))
     return cli.load_config(path)
 
 

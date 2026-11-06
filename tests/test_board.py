@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import stub_path
 from colony import board, cli
 
 GH_STUB = """#!{python}
@@ -65,7 +66,7 @@ def gh(tmp_path, monkeypatch):
     stub = bin_dir / "gh"
     stub.write_text(GH_STUB.replace("{python}", sys.executable))
     stub.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(bin_dir))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(board, "utcnow", lambda: NOW)
     return Gh(bin_dir)

@@ -3,6 +3,7 @@ cards on a fake clock, and the retro prompt. gh is the stand-in from test_board.
 import argparse
 import json
 import os
+import shlex
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -549,9 +550,9 @@ def test_the_retro_prompt_is_filled_in_for_the_batch():
     prompt = cycle.retro_prompt(config, "2026-11-05", Path("/r/reports"), Path("/w/demo-retro"),
                                 "demo/retro-2026-11-05", Path("/w/demo-retro/retro.md"), "Assisted-by: x")
     assert "{" not in prompt and "}" not in prompt
-    for text in ("Batch 2026-11-05", "/r/reports", "/w/demo-retro, on branch demo/retro-2026-11-05",
+    for text in ("Batch 2026-11-05", str(Path("/r/reports")), f"{Path('/w/demo-retro')}, on branch demo/retro-2026-11-05",
                  "`.colony/rules/*.md`, `CLAUDE.md`", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
-                 "Write /w/demo-retro/retro.md", "`lessons: N`", "rule line plus a check", "decision",
+                 f"Write {Path('/w/demo-retro/retro.md')}", "`lessons: N`", "rule line plus a check", "decision",
                  "never as a note alone"):
         assert text in prompt, text
 
@@ -566,7 +567,7 @@ def test_retro_dry_run_finds_the_reports_and_prints_the_plan_and_prompt(repo, tm
     args = parse("retro", "--name", "b1", "--dry-run")
     assert args.run(config, args) == 0
     out = capsys.readouterr().out
-    assert f"--no-track -b demo/retro-b1 {tmp_path / 'trees' / 'demo-retro-b1'} origin/dev" in out
+    assert f"--no-track -b demo/retro-b1 {shlex.quote(str(tmp_path / 'trees' / 'demo-retro-b1'))} origin/dev" in out
     assert f"its round reports are in {reports}" in out.replace(str(reports.resolve()), str(reports))
     assert "--add-dir" in out and "--- retro prompt" in out
 

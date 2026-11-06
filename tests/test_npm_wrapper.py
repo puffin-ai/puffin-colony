@@ -1,6 +1,7 @@
 """Tests for the npm wrapper, npm/bin/colony.js: it passes the arguments on, tries uvx first and python3 second, and
 says how to install uv when neither works. Each stub records its arguments, and PATH holds the stubs alone."""
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -16,6 +17,8 @@ printf '\\n' >> "{log}"
 """
 
 pytestmark = pytest.mark.skipif(NODE is None, reason="node is not installed")
+SH_STUBS = pytest.mark.skipif(os.name == "nt", reason="the stand-in uvx and python3 are sh scripts, which node "
+                              "starts only on macOS and Linux")
 
 
 def stub(bin_dir: Path, name: str, body: str = "exit 0") -> None:
@@ -40,6 +43,7 @@ def bin_dir(tmp_path):
     return tmp_path / "bin"
 
 
+@SH_STUBS
 def test_uvx_runs_first_with_every_argument_as_given(tmp_path, bin_dir):
     stub(bin_dir, "uvx", "exit 3")
     stub(bin_dir, "python3")
@@ -48,6 +52,7 @@ def test_uvx_runs_first_with_every_argument_as_given(tmp_path, bin_dir):
     assert calls(tmp_path) == [["uvx", "puffin-colony", "open", "builder-2", "a task with  spaces", "--dry-run"]]
 
 
+@SH_STUBS
 def test_python3_runs_when_uvx_is_missing_and_colony_is_installed(tmp_path, bin_dir):
     stub(bin_dir, "python3")
     run = wrapper(tmp_path, "hi", "--person", "ana")
@@ -56,6 +61,7 @@ def test_python3_runs_when_uvx_is_missing_and_colony_is_installed(tmp_path, bin_
                                ["python3", "-m", "colony", "hi", "--person", "ana"]]
 
 
+@SH_STUBS
 def test_neither_way_prints_one_line_on_installing_uv(tmp_path, bin_dir):
     stub(bin_dir, "python3", 'case "$1" in -c) exit 1;; esac')  # python3 without the colony package
     run = wrapper(tmp_path, "hi")

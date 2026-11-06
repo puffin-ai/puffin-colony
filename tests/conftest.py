@@ -1,10 +1,39 @@
 """Shared test setup: each test runs as if from a terminal, with the first-run skill install off, so no test writes
-to the real Claude settings folder."""
+to the real Claude settings folder.
+
+On Windows, one more fixture installs tests/winshim.py, which lets the suite's POSIX habits work unchanged; macOS
+and Linux never define it."""
+import os
+import shutil
+import sys
+from pathlib import Path
+
 import pytest
 
-from colony import cli
+from colony import cli, portable
 
 REAL_FIRST_RUN = cli.first_run
+
+
+def system_path() -> list[str]:
+    """The folders of the system's own tools, with no real gh, claude or cmux: /usr/bin and /bin on POSIX. On Windows,
+    git's folder, the folder of Git's coreutils that a stub script calls, and Windows' own."""
+    if not portable.WINDOWS:
+        return ["/usr/bin", "/bin"]
+    folders = [str(Path(git).parent) for git in [shutil.which("git")] if git]
+    bash = portable.git_bash()
+    if bash:
+        folders.append(str(Path(bash).parent.parent / "usr" / "bin"))
+    root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return [*folders, str(Path(root) / "System32"), root]
+
+
+SYSTEM_PATH = system_path()
+
+
+def stub_path(*folders) -> str:
+    """A PATH with the stub folders first, then the system's own tools: `<folders>:/usr/bin:/bin` on POSIX."""
+    return os.pathsep.join([*map(str, folders), *SYSTEM_PATH])
 
 
 @pytest.fixture(autouse=True)
@@ -30,3 +59,16 @@ def with_the_retry_watchdog(monkeypatch):
 def no_usage_refresh(monkeypatch):
     """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")
+
+
+if portable.WINDOWS:
+    if not sys.flags.utf8_mode:
+        pytest.exit("On Windows, run the suite in Python's UTF-8 mode, the mode Colony relaunches itself in there: "
+                    "uv run --with pytest python -X utf8 -m pytest tests", returncode=4)
+    import winshim
+
+    winshim.prepare_session()
+
+    @pytest.fixture(autouse=True)
+    def windows_runs_posix_stubs(monkeypatch):
+        winshim.install(monkeypatch.setattr)

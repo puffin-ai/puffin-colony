@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from conftest import stub_path
 from colony import board, cli, cycle, transport, wait
 
 GH_STUB = """#!{python}
@@ -61,7 +62,7 @@ class Gh:
         """Queue the next answers to `gh api -i` (kind poll) or to another call, such as issue-list, in order."""
         for text in texts:
             self.count += 1
-            (self.bin / f"{kind}-{self.count:03}.txt").write_text(text)
+            (self.bin / f"{kind}-{self.count:03}.txt").write_text(text, newline="")  # as written, \r\n too
 
     def calls(self) -> list[list[str]]:
         """Each call's arguments."""
@@ -82,7 +83,7 @@ def gh(tmp_path, monkeypatch):
     (bin_dir / "gh").write_text(GH_STUB.replace("{python}", sys.executable))
     (bin_dir / "gh").chmod(0o755)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("PATH", stub_path(bin_dir))
     monkeypatch.setenv("COLONY_PERSON", "ana")
     monkeypatch.setitem(sys.modules, "colony.cycle", None)
     return Gh(bin_dir)
@@ -191,7 +192,7 @@ def test_the_command_needs_a_session_name(gh, tmp_path):
     (host / ".colony").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(host)], check=True)
     (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
-    env = {"HOME": str(tmp_path), "PATH": f"{gh.bin}:/usr/bin:/bin"}
+    env = {"HOME": str(tmp_path), "PATH": stub_path(gh.bin)}
     run = subprocess.run([sys.executable, "-m", "colony", "wait"], capture_output=True, text=True, cwd=host, env=env)
     assert run.returncode == 2
     assert "set COLONY_SESSION to this session's name" in run.stderr
@@ -375,7 +376,7 @@ def test_say_posts_a_line_for_another_lead_on_the_coordination_issue(gh, tmp_pat
     (host / ".colony").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(host)], check=True)
     (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
-    env = {"HOME": str(tmp_path), "PATH": f"{gh.bin}:/usr/bin:/bin", "COLONY_SESSION": "lead", "COLONY_PERSON": "Ana"}
+    env = {"HOME": str(tmp_path), "PATH": stub_path(gh.bin), "COLONY_SESSION": "lead", "COLONY_PERSON": "Ana"}
     run = subprocess.run([sys.executable, "-m", "colony", "say", "sam-lead", "can you  review #12\nbefore noon?"],
                          capture_output=True, text=True, cwd=host, env=env)
     line = "for sam-lead: can you review #12 before noon? (from ana-lead)"
