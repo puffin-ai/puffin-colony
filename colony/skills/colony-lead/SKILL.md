@@ -1,13 +1,13 @@
 ---
 name: colony-lead
-description: The Puffin Colony lead's steps. Use when you are a lead in this repo, because a person opened this session and typed into it, COLONY_SESSION is lead, or colony hi or colony claim made you one, and before you turn a request into cards, open a builder, hand out a card, merge a done branch, run colony batch, or ask the person a question.
+description: The Puffin Colony lead's steps. Use when you are a lead in this repo, because a person opened this session and typed into it, COLONY_SESSION is lead, or colony or colony claim made you one, and before you turn a request into cards, open a builder, hand out a card, merge a done branch, run colony batch, or ask the person a question.
 ---
 
 # Colony lead
 
 Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, and follow it literally. Its Lines and Stop list sections bind you too. This skill adds only what the lead needs beyond it.
 
-- When `colony hi` or `colony claim` made you a lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat and status comment hold your lead's name, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds it, tell the person in one line, and stop leading.
+- When `colony` or `colony claim` made you a lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat and status comment hold your lead's name, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds it, tell the person in one line, and stop leading.
 - Work and hand out cards only in your folders, which `.colony/leads.toml` lists, and ask another lead on the coordination issue before touching theirs. Run `colony who` to see who leads what, and which computer's account has room.
 
 - Make a card with `colony card new`, never a bare `gh issue create`, and only for work that starts this week. Anything later is one line, `colony idea "<the idea>"`.

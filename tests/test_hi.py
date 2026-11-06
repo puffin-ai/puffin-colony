@@ -1,4 +1,4 @@
-"""Tests for the roles rule: every session a person opens is a lead (`colony hi`, `colony claim`), helpers belong to
+"""Tests for the roles rule: every session a person types into is a lead (plain `colony` inside it, `colony claim`), helpers belong to
 one lead (`colony join`, `colony take`), presence across computers (status comments, `colony who`), the leads'
 heartbeats, and the accounts' usage, resets and drain."""
 import argparse
@@ -108,18 +108,40 @@ def lead(name="ana-engine-lead", folders=(), computer="PC-2", at=None, person="a
                            at=time.time() if at is None else at)
 
 
-def hi(capsys) -> str:
-    assert cli.main(["hi"]) == 0
+def hi(capsys, monkeypatch=None) -> str:
+    """Plain `colony` inside a Claude Code session."""
+    import os
+    os.environ["CLAUDECODE"] = "1"
+    try:
+        assert cli.main([]) == 0
+    finally:
+        del os.environ["CLAUDECODE"]
     return capsys.readouterr().out
 
 
 # A session a person opens is a lead
 
 
-def test_hi_in_a_repo_with_no_config_runs_setup_in_this_session(host, capsys):
+def test_colony_in_a_session_with_no_config_runs_setup_in_that_session(host, capsys):
     out = hi(capsys)
-    assert "not set up in this repo, since .colony/colony.toml is missing" in out
-    assert "Load the colony-setup skill, or run `colony setup --print`" in out
+    assert "not set up in this repo, since .colony/colony.toml is missing. Set it up in this session" in out
+    assert "You are setting up Puffin Colony in this repository." in out  # the setup prompt itself, to follow here
+
+
+def test_colony_in_a_terminal_opens_setup_or_a_lead_session_instead(host, capsys, monkeypatch):
+    opened = []
+    monkeypatch.setattr(cli, "setup", lambda args: opened.append("setup") or 0)
+    monkeypatch.setattr(cli, "lead", lambda config, args: opened.append("lead") or 0)
+    assert cli.main([]) == 0
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG)
+    assert cli.main([]) == 0
+    assert opened == ["setup", "lead"]
+
+
+def test_colony_hi_is_no_longer_a_command():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["hi"])
 
 
 def test_setup_print_prints_the_filled_setup_prompt(host, capsys):
@@ -130,7 +152,7 @@ def test_setup_print_prints_the_filled_setup_prompt(host, capsys):
 
 def test_the_pointer_line_setup_writes_sends_a_plain_hi_to_colony_hi():
     prompt = cli.fill_names(cli.package_file("prompts", "setup.md"))
-    assert prompt.count("run `colony hi` first and do what it prints.") == 2
+    assert prompt.count("run `colony` first and do what it prints.") == 2
 
 
 def test_a_new_chat_with_no_lead_alive_becomes_the_main_lead_without_a_question(home, config, github, capsys,
@@ -178,6 +200,11 @@ def test_a_stale_status_counts_as_gone(home, config, github, capsys):
     assert "Gone, no status in 15 minutes: ana-engine-lead" in capsys.readouterr().out
 
 
+def test_a_lead_session_colony_opened_claims_its_name_when_it_runs_colony(home, config, github, capsys, monkeypatch):
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    assert "this session leads ana-main-lead" in hi(capsys)
+
+
 def test_a_session_colony_opened_stays_a_helper_and_never_asks(home, config, capsys, monkeypatch):
     monkeypatch.setenv(cli.SESSION_ENV, "builder-3")
     out = hi(capsys)
@@ -188,7 +215,7 @@ def test_a_session_colony_opened_stays_a_helper_and_never_asks(home, config, cap
 
 def test_colony_opens_a_lead_whose_first_prompt_runs_colony_hi(home, config, capsys):
     assert cli.lead(config, argparse.Namespace(person="ana", here=True, dry_run=True)) == 0
-    assert "'Run `colony hi` and do what it prints" in capsys.readouterr().out
+    assert "'Run `colony` and do what it prints" in capsys.readouterr().out
 
 
 # Helpers belong to one lead
@@ -206,6 +233,7 @@ def test_join_with_one_lead_joins_it_under_the_next_free_name(home, config, gith
     join(config, in_session=True)
     out = capsys.readouterr().out
     assert "This session is builder-2, a helper of ana-engine-lead" in out
+    assert presence.parse(github.comments[-1]["body"]).name == "builder-2"  # it claimed the name at once
     assert "COLONY_SESSION=builder-2 COLONY_LEAD=ana-engine-lead COLONY_PERSON=ana" in out
     assert "Never ask the person anything" in out
 
@@ -219,6 +247,15 @@ def test_join_asks_once_which_lead_when_there_are_two(home, config, github, caps
     join(config, in_session=True)
     assert len(asked) == 1 and "1. ana-engine-lead: apps/api/" in asked[0] and "2. ana-web-lead: apps/web/" in asked[0]
     assert "a helper of ana-web-lead" in capsys.readouterr().out
+
+
+def test_a_pasted_join_inside_a_session_connects_with_no_further_step(home, config, github, capsys, monkeypatch):
+    github.add(lead(folders=["apps/api/"]))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    join(config, lead="ana-engine-lead", dry_run=False)  # no --in-session: being in a session is enough
+    out = capsys.readouterr().out
+    assert "This session is builder-1, a helper of ana-engine-lead" in out and "Opening" not in out
+    assert presence.parse(github.comments[-1]["body"]).lead == "ana-engine-lead"
 
 
 def test_join_lead_skips_the_question(home, config, github, capsys, monkeypatch):

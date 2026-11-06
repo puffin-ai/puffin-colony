@@ -22,9 +22,9 @@ wait then drops those lines (`listed` names the ones it put there), so the sessi
 
 The lead's heartbeat: the lead's wait writes ~/.colony/<project>/lead.heartbeat at each poll, every 15 seconds, holding
 its session name, account, token and time. A heartbeat under HEARTBEAT_FRESH old means a lead is alive, so a session
-the person opens offers to build or help (`colony hi`). The heartbeat is also the lock: `beat` writes it only when it is
+the person opens beside it claims another lead name (`colony`). The heartbeat is also the lock: `beat` writes it only when it is
 missing, stale, or holds the writer's own token, under a file lock, so two sessions never both hold the lead. A lead's
-token is $COLONY_LEAD_TOKEN, which `colony` and `colony hi` set when they claim the lead.
+token is $COLONY_LEAD_TOKEN, which `colony` and `colony claim` print when they claim a lead.
 """
 from __future__ import annotations
 

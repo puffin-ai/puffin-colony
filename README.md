@@ -37,7 +37,7 @@ cd your-repo && colony
 
 The first `colony` reads your repo, asks a few questions, each with a default, and opens one setup PR. Merge it, run `colony` again, and tell your lead what you want. Add `--dry-run` to see a plan without running anything.
 
-Or just open Claude Code in the repo and say hi. After setup, the line it adds to `CLAUDE.md` runs `colony hi`: your session becomes the lead when none runs, and offers to build or help when one does. Before setup, run `colony skill-install` once, and a session in any repo can set Colony up when you ask.
+Or just open Claude Code in the repo and say hi. After setup, the line it adds to `CLAUDE.md` runs `colony` inside your session, which makes that session a lead: over the whole repo when no lead is alive, or over the folders you name when one is. Type `join` instead to make the session a helper of your lead. Before setup, run `colony skill-install` once, and a session in any repo can set Colony up when you ask.
 
 ## A hackathon in 60 seconds
 

@@ -47,7 +47,7 @@ Then show one yes-or-no list, each item with its default in brackets and what it
 - `knowledge` [yes]: the knowledge vault, typed pages with Obsidian-style `[[links]]` for what the team decides, builds and finds out, at `knowledge/`. When step 1 found a docs folder, the default is to adopt it in place: keep every file in it, add the vault's folders and readmes beside them, and change no page already there. The person may answer with another folder instead.
 - `hooks` [yes]: the wait guard, which refuses a foreground sleep, poll loop or watch, two hooks that post a line for the lead when a builder waits on a permission pop-up or stops on an error, and the prompt hook, which shows a session the lines for it that it hasn't read, when it starts and before each prompt, merged into `.claude/settings.json`.
 - `board` [yes]: a GitHub Project board for the cards, owned by `<owner>`, with the five fields Status, Lead, Helper, Size and Last update. When the login lacks the project scope, say in the same item that the person first runs `gh auth refresh -s project`, which opens the browser to grant it, and that every computer that runs a builder needs the same scope.
-- `pointer` [yes]: two lines in `CLAUDE.md`, `@{dir}/core.md` at its top, which loads {display}'s core in every session, and `` This repo runs {display}: read {dir}/playbook.md. When the person opens a session without a task, run `{name} hi` first and do what it prints. `` at its end. The second line lets a session the person opens with a plain hi find its place: the lead when none runs, else a builder or a helper.
+- `pointer` [yes]: two lines in `CLAUDE.md`, `@{dir}/core.md` at its top, which loads {display}'s core in every session, and `` This repo runs {display}: read {dir}/playbook.md. When the person opens a session without a task, run `{name}` first and do what it prints. `` at its end. The second line lets a session the person opens with a plain hi find its place: the lead when none runs, else a builder or a helper.
 
 An item marked `ask` has no default, so ask the person to answer it. A yes to an item that installs or downloads something is the person's yes to that install.
 
@@ -125,7 +125,7 @@ On a yes to `knowledge`. Its templates are in `{package}/knowledge/`: `templates
 
 ## 8. Load the core, and add the pointer
 
-On a yes to `pointer`, add `@{dir}/core.md` at the top of `CLAUDE.md` and `` This repo runs {display}: read {dir}/playbook.md. When the person opens a session without a task, run `{name} hi` first and do what it prints. `` at its end. When only `AGENTS.md` exists, add both lines to `AGENTS.md` instead, and create `CLAUDE.md` with the one line `@AGENTS.md`. When neither exists, create `CLAUDE.md` with the two lines. Keep every line already there. On a no, skip both.
+On a yes to `pointer`, add `@{dir}/core.md` at the top of `CLAUDE.md` and `` This repo runs {display}: read {dir}/playbook.md. When the person opens a session without a task, run `{name}` first and do what it prints. `` at its end. When only `AGENTS.md` exists, add both lines to `AGENTS.md` instead, and create `CLAUDE.md` with the one line `@AGENTS.md`. When neither exists, create `CLAUDE.md` with the two lines. Keep every line already there. On a no, skip both.
 
 ## 9. Open the pull request
 

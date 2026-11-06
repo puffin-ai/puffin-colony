@@ -1,8 +1,8 @@
 """Puffin Colony's command line: one command for a repo's whole software life cycle.
 
 `colony` alone runs setup the first time (the repo has no .colony/colony.toml) and opens the lead every time after.
-`colony hi` tells a session opened without a task which case it is in: no setup yet, a lead running (offer to build
-or help), or none (claim the lead through its heartbeat, wait.beat).
+Inside a Claude Code session ($CLAUDECODE), plain `colony` makes that session the lead instead of opening one (here):
+a session a person types into is a lead, and never asks what it is.
 `colony join <name>` opens a builder on another computer. The lead and the builders use `open`, `wait`, `batch`
 and `status`, and the lead opens a researcher or the spec agent with `research` and `spec`. In hack mode,
 `colony merge <branch>` lands a branch after the fast check (merge.py). The cycle's commands (cycle.py, board.py),
@@ -34,7 +34,7 @@ DIR = f".{NAME}"  # the folder a host repo keeps Colony's files in: the config, 
 CONFIG_NAME = f"{NAME}.toml"
 SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
 LEAD = "lead"
-LEAD_PROMPT = "Run `colony hi` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
+LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
@@ -382,7 +382,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
     `claude attach`. A dry run prints the command, the env names (never their values) and where it would
-    open, and runs nothing. A lead's session claims its own name with `colony hi` or `colony claim`. Every other
+    open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
     session is a helper of one lead: the lead `colony join` picked, else the lead that runs the command ($COLONY_LEAD).
     """
     from colony.wait import LEAD_ENV
@@ -587,25 +587,31 @@ def claim(config: dict, args) -> int:
     return 0
 
 
-def hi(args) -> int:
-    """`colony hi`: what a session the person opened does first. Every such session is a lead, and never asks.
+def in_claude_code() -> bool:
+    """Whether this process runs inside a Claude Code session, which sets $CLAUDECODE for its commands."""
+    return bool(os.environ.get("CLAUDECODE"))
 
-    No .colony/colony.toml: set Colony up in this session. A session Colony opened ($COLONY_SESSION set) keeps its
-    role for good. Otherwise `colony who` shows the live leads: with none, this session claims `<person>-main-lead`
-    over the whole repo; with some, it names them and their folders, and asks the person only what's theirs, then
-    claims those folders with `colony claim`. A first message of "join" or "join <lead>" makes it a helper instead,
-    through `colony join --in-session`."""
-    from colony import presence
+
+def here(args) -> int:
+    """Plain `colony` inside a Claude Code session: that session becomes the lead, with no new session. It never asks
+    what it is.
+
+    No .colony/colony.toml: it prints the setup prompt for this session to follow. A helper Colony opened
+    ($COLONY_SESSION set to a builder's name) stays a helper. Otherwise `colony who` shows the live leads: with none,
+    this session claims `<person>-main-lead` over the whole repo; with some, it names them and their folders, and asks
+    the person only what's theirs, then claims those folders with `colony claim`. A first message of "join" or
+    "join <lead>" makes it a helper instead, through `colony join`."""
+    from colony import presence, wait
 
     if not config_path().exists():
-        print(f"{DISPLAY}: not set up in this repo, since {DIR}/{CONFIG_NAME} is missing.")
-        print(f"Next: set it up in this session. Load the {SETUP_SKILL} skill, or run `{NAME} setup --print` and follow "
-              "the prompt it prints, asking the person its questions here.")
+        print(f"{DISPLAY}: not set up in this repo, since {DIR}/{CONFIG_NAME} is missing. Set it up in this session: "
+              "follow the setup prompt below, asking the person its questions here.\n")
+        print(fill_names(package_file("prompts", "setup.md")))
         return 0
     config = load_config()
     print(f"{DISPLAY}: set up here, project {config['project']['name']}, {mode(config)} mode.")
     me = os.environ.get(SESSION_ENV, "").lower()
-    if me:
+    if me and not (me == LEAD and not wait.named()):
         role = section(config, "Lead" if me == LEAD else "Builder")
         kind = "a lead" if me == LEAD else "a helper, for good: it never asks the person anything"
         print(f"This session is {me}, which {NAME} opened, and is {kind}. Follow the {role} section of "
@@ -615,10 +621,10 @@ def hi(args) -> int:
         person = person_of(config, args)
     except ColonyError:
         people = sorted({a["person"] for a in config["accounts"].values()} - {"any"})
-        print(f"Next: ask the person which of {', '.join(people)} they are, then run `{NAME} hi --person <them>`.")
+        print(f"Next: ask the person which of {', '.join(people)} they are, then run `{NAME} --person <them>`.")
         return 0
-    print('A session a person opens is a lead. (When their first message was "join" or "join <lead>", run '
-          f"`{NAME} join [<lead>] --in-session` instead, and be that lead's helper.)")
+    print('A session a person types into is a lead. (When their first message was "join" or "join <lead>", run '
+          f"`{NAME} join [<lead>]` instead, and be that lead's helper.)")
     alive, _, note = presence.everyone(config)
     if note:
         print(note)
@@ -911,8 +917,9 @@ def free_helper(config: dict, alive: list) -> str:
 
 def join(config: dict, args) -> int:
     """`colony join [<lead>]`: lend this computer to one of the person's leads, as a helper under the next free
-    builder name, after saying what this computer still lacks. With --in-session, the session that ran it becomes the
-    helper on the app's own account, instead of a new session opening."""
+    builder name, after saying what this computer still lacks. Inside a Claude Code session ($CLAUDECODE), or with
+    --in-session, the session that ran it becomes the helper on its own account, instead of a new session opening:
+    it claims the name with its status comment at once, so the lead sees it and gives it a card."""
     from colony import presence, wait
 
     alive, _, note = presence.everyone(config)
@@ -920,12 +927,19 @@ def join(config: dict, args) -> int:
         print(note, file=sys.stderr)
     args.lead_name = pick_lead(config, args, alive)
     name = free_helper(config, alive)
-    if getattr(args, "in_session", False):
+    if getattr(args, "in_session", False) or in_claude_code():
+        state: dict = {}
+        try:
+            status = presence.mine(config, args, name, "helper", args.lead_name)
+            presence.keep(config, status, state)
+            wait.write_json(wait.state_path(config["project"]["name"], f"{name}-status"), state)
+        except (ColonyError, OSError, ValueError, KeyError) as e:
+            print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
         env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
         print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
-        print(f"Next: start every {NAME} command with `{env}`, load the colony-builder skill, read "
-              f"{DIR}/playbook.md, {section(config, 'Builder')} section, and start `{NAME} wait` in the background. "
-              "Never ask the person anything: your lead gives you cards.")
+        print(f"Next: start every {NAME} command with `{env}`, start `{NAME} wait` in the background now, which tells "
+              f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
+              f"{section(config, 'Builder')} section. Never ask the person anything: your lead gives you cards.")
         return 0
     missing = join_missing(config, args)
     for item in missing:
@@ -1109,11 +1123,6 @@ def build_parser() -> argparse.ArgumentParser:
     for module in (cycle, board, vault, guards, presence, tidy):
         module.add_commands(sub)
 
-    p = sub.add_parser("hi", help="for a session opened without a task: set up, claim the lead when none runs, or "
-                                  "offer to build or help")
-    p.add_argument("--person", help="whose session this is")
-    p.set_defaults(run=hi)
-
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")
     p.add_argument("--print", action="store_true", help="print the setup prompt, and run nothing")
@@ -1138,9 +1147,11 @@ def main(argv=None) -> int:
     """Parse the command line and run one command: setup when the repo has no .colony/colony.toml, else the one asked."""
     args = build_parser().parse_args(argv)
     try:
+        if args.command is None and in_claude_code():
+            return here(args)
         if args.command is None and not config_path().exists():
             return setup(args)
-        if args.command in ("tools", "hi", "setup", "skill-install"):  # each runs before colony.toml exists
+        if args.command in ("tools", "setup", "skill-install"):  # each runs before colony.toml exists
             return args.run(args)
         config = load_config()
         feature = FEATURES.get(args.command)

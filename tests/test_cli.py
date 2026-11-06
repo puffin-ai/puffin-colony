@@ -38,7 +38,7 @@ provider_dollars = 0
 """
 ENV_NAMES = ("COLONY_SESSION COLONY_PERSON CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
              "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-LEAD_PROMPT = "'Run `colony hi` and do what it prints, then read .colony/playbook.md, Lead section, and start.'"
+LEAD_PROMPT = "'Run `colony` and do what it prints, then read .colony/playbook.md, Lead section, and start.'"
 
 
 SETTINGS_FLAG = re.compile(r" --settings '[^']*'")
@@ -435,7 +435,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 COMMANDS = ("join", "open", "claim", "take", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "who", "tidy", "idea",
-            "card", "hi", "setup", "skill-install", "tools")
+            "card", "setup", "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):
