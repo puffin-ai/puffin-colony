@@ -56,6 +56,8 @@ logins = []                        # GitHub logins of the people; a line they po
 # [people.ana]
 # accounts = ["ana-team", "ana"]
 # last_resort = ["shared"]
+# quiet_lead = true               # the lead acts on notifications silently, and writes to ana only to converse or
+                                   # when ana must act; false by default, which keeps the person posted on progress
 
 [knowledge]
 vault = "knowledge"                # the knowledge vault's folder at the top of the repo

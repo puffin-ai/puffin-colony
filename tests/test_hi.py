@@ -168,6 +168,16 @@ def test_a_new_chat_with_no_lead_alive_becomes_the_main_lead_without_a_question(
     assert presence.parse(github.comments[0]["body"]).name == "ana-main-lead"  # its status comment
 
 
+def test_a_quiet_lead_person_hears_only_conversation_and_what_they_must_act_on(home, host, config, github, capsys):
+    (host / ".colony" / "colony.toml").write_text(CONFIG + "\n[people.ana]\nquiet_lead = true\n")
+    assert "ana wants a quiet lead ([people.ana] quiet_lead = true): act on notifications silently" in hi(capsys)
+
+
+def test_a_lead_keeps_the_person_posted_by_default(home, config, github, capsys):
+    assert not cli.quiet_lead(config, "ana")
+    assert "quiet lead" not in hi(capsys)
+
+
 def test_a_new_chat_beside_a_live_lead_is_a_lead_too_and_asks_only_whats_mine(home, config, github, capsys):
     github.add(lead(folders=["apps/api/"]))
     out = hi(capsys)
