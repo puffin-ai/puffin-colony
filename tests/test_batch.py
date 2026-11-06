@@ -427,3 +427,13 @@ def test_no_cards_is_the_demo_review_only_in_hack_mode_with_review(repo, config,
     args.review = False
     with pytest.raises(SystemExit, match="--review alone reviews the demo build"):
         batch.Batch.from_args(hack_config, args)
+
+
+def test_a_round_after_a_passing_walk_walks_only_when_a_screen_file_changes():
+    settings = {"walk": True, "walk_paths": ["web/"]}
+    passed = [{"walk": "pass"}]
+    assert batch.should_walk(settings, [], ["web/lib/words.ts"])
+    assert not batch.should_walk(settings, passed, ["web/lib/words.ts", "api/app.py"])
+    assert batch.should_walk(settings, passed, ["web/lib/words.ts", "web/panel.tsx"])
+    assert batch.should_walk(settings, [{"walk": "fail"}], ["api/app.py"])
+    assert not batch.should_walk({"walk": False}, [], ["web/panel.tsx"])
