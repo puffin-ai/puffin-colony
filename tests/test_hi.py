@@ -673,3 +673,17 @@ def test_a_pasted_image_lands_on_the_cards_branch_for_every_helper(home, host, c
     assert not (home / "trees" / "demo-image-12").exists()  # the throwaway worktree is gone
     with pytest.raises(cli.ColonyError, match="is not an image file"):
         cli.image(config, argparse.Namespace(card=12, file=str(home / "notes.txt")))
+
+
+def test_a_named_leads_card_line_reaches_its_own_helper(home, monkeypatch, capsys):
+    posted = []
+    monkeypatch.setattr("colony.transport.send", lambda config, to, line, card=None: posted.append(line) or card)
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-engine-lead")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    config = {"project": {"repo": "acme/demo", "name": "demo"}}
+    wait.post(config, argparse.Namespace(card=12, to="builder-1", sentence="start: this card", urgent=False))
+    assert posted == ["for builder-1: start: this card (from ana-engine-lead)"]
+    monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
+    helper = wait.builder_session(config, "builder-1")
+    assert wait.taken(posted[0], helper, "12")  # the helper takes it

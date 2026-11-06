@@ -662,7 +662,8 @@ def post(config: dict, args) -> int:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
     transport.check_transport(config)
     on_board, card = hack(config), getattr(args, "card", None)
-    sender = lead_name(config, args) if on_board and me == cli.LEAD else me
+    # a named lead signs with its name, which its helpers take lines from; so does every lead on the hack board
+    sender = lead_name(config, args) if me == cli.LEAD and (on_board or named()) else me
     to, sentence = args.to.lower(), " ".join(args.sentence.split())
     if to.startswith("@"):
         own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
