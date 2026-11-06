@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
@@ -177,6 +178,67 @@ def test_pick_account_prefers_the_folders_this_computer_has(home):
     config = accounts(home, "ana", "ana")
     (home / "b").mkdir()
     assert cli.pick_account(config, "ana")[0] == "b"
+
+
+def usage_stub(home: Path) -> Path:
+    """Put a fake claude on PATH that logs `<its CLAUDE_CONFIG_DIR or default>|<its arguments>`, one run a line."""
+    bin_dir = home / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = bin_dir / "claude.log"
+    stub = bin_dir / "claude"
+    stub.write_text(f'#!/bin/sh\necho "${{CLAUDE_CONFIG_DIR:-default}}|$*" >> "{log}"\n')
+    stub.chmod(0o755)
+    return log
+
+
+def sign_in(folder: Path, fetched_ago: float | None = None) -> None:
+    """Save a Claude Code login in an account folder, with a usage reading fetched that many seconds ago."""
+    folder.mkdir(parents=True, exist_ok=True)
+    state: dict = {"oauthAccount": {"emailAddress": "a@example.com"}}
+    if fetched_ago is not None:
+        state["cachedUsageUtilization"] = {"fetchedAtMs": (time.time() - fetched_ago) * 1000, "utilization": {}}
+    (folder / ".claude.json").write_text(json.dumps(state))
+
+
+def test_refresh_usage_fetches_only_signed_in_folders_with_a_stale_or_missing_reading(home, monkeypatch):
+    monkeypatch.delenv(cli.NO_REFRESH_ENV)
+    monkeypatch.setattr(cli, "_fetched", {})
+    log = usage_stub(home)
+    sign_in(home / "stale", fetched_ago=cli.USAGE_STALE + 60)
+    sign_in(home / "missing")
+    sign_in(home / "fresh", fetched_ago=30)
+    (home / "out").mkdir()  # no login
+    cli.refresh_usage([str(home / name) for name in ("stale", "missing", "fresh", "out", "gone")])
+    assert sorted(log.read_text().splitlines()) == [f"{home / 'missing'}|-p /usage", f"{home / 'stale'}|-p /usage"]
+
+
+def test_refresh_usage_runs_the_default_folder_without_a_settings_folder(home, monkeypatch):
+    monkeypatch.delenv(cli.NO_REFRESH_ENV)
+    monkeypatch.setattr(cli, "_fetched", {})
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "other"))
+    log = usage_stub(home)
+    (home / ".claude").mkdir()
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "a@example.com"}}))
+    cli.refresh_usage([str(home / ".claude")])
+    assert log.read_text().splitlines() == ["default|-p /usage"]
+
+
+def test_refresh_usage_fetches_a_folder_once_per_stale_window(home, monkeypatch):
+    """A plan whose /usage saves no windows keeps a stale reading, so the same process waits before asking again."""
+    monkeypatch.delenv(cli.NO_REFRESH_ENV)
+    monkeypatch.setattr(cli, "_fetched", {})
+    log = usage_stub(home)
+    sign_in(home / "a")
+    cli.refresh_usage([str(home / "a")])
+    cli.refresh_usage([str(home / "a")])
+    assert len(log.read_text().splitlines()) == 1
+
+
+def test_refresh_usage_is_off_when_its_env_is_set(home):
+    log = usage_stub(home)
+    sign_in(home / "a")
+    cli.refresh_usage([str(home / "a")])
+    assert not log.exists()
 
 
 def test_pick_account_refuses_an_unknown_person(home):
