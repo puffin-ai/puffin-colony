@@ -558,3 +558,59 @@ def test_skill_install_copies_the_setup_skill_into_a_settings_folder(home, capsy
     assert cli.main(["skill-install", "--config-dir", str(folder)]) == 0
     copied = folder / "skills" / "colony-setup" / "SKILL.md"
     assert copied.read_text() == (PACKAGE / "skills" / "colony-setup" / "SKILL.md").read_text()
+
+
+# Opening helpers: ask every time, with the last answer as the default; colony view
+
+
+def helpers(config, count=2, **flags):
+    args = argparse.Namespace(count=count, open=False, paste=False, person="ana", account=None, dry_run=True)
+    vars(args).update(flags)
+    return cli.helpers(config, args)
+
+
+def test_the_lead_asks_open_or_paste_every_time_with_the_last_answer_as_the_default(home, config, github, capsys,
+                                                                                   monkeypatch):
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    helpers(config)
+    out = capsys.readouterr().out
+    assert '"I need 2 helpers. Open them myself on main, or you paste?" [Open them] [I\'ll paste]' in out
+    helpers(config, paste=True)
+    out = capsys.readouterr().out
+    assert out.count("  colony join ana-main-lead\n") == 2
+    assert "helpers_answer" in (config_path := cli.local_path()).read_text() and config_path.exists()
+    assert "local.toml" in (cli.local_path().parent / ".gitignore").read_text()
+    helpers(config)  # asked again, now with the last answer first
+    assert "[I'll paste] [Open them]" in capsys.readouterr().out
+
+
+def test_open_them_opens_each_helper_for_this_lead_under_free_names(home, config, github, capsys, monkeypatch):
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    monkeypatch.setattr(cli, "cmux_usable", lambda: False)
+    helpers(config, open=True)
+    out = capsys.readouterr().out
+    assert "demo-builder-1" in out and "demo-builder-2" in out
+    assert "paste this into any cmux terminal: colony view" in out
+    assert 'helpers_answer = "open"' in cli.local_path().read_text()
+
+
+def test_colony_view_builds_one_cmux_command_per_running_session(home, config, capsys, monkeypatch):
+    (home / ".claude-admin").mkdir()
+    (home / ".claude").mkdir()
+    listed = {str(home / ".claude-admin"): [{"id": "aa11", "name": "demo-lead", "cwd": "/r"},
+                                             {"id": "bb22", "name": "demo-builder-1", "cwd": "/r"},
+                                             {"id": "cc33", "name": "other-project-lead", "cwd": "/x"}],
+              str(home / ".claude"): [{"id": "dd44", "name": "demo-builder-2", "cwd": "/r"}]}
+
+    def run(argv, **kwargs):
+        folder = kwargs["env"].get("CLAUDE_CONFIG_DIR", str(home / ".claude"))
+        return subprocess.CompletedProcess(argv, 0, json.dumps(listed[folder]), "")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    commands = cli.view_commands(config)
+    assert [c[3] for c in commands] == ["demo-builder-2", "demo-lead", "demo-builder-1"] or \
+        sorted(c[3] for c in commands) == ["demo-builder-1", "demo-builder-2", "demo-lead"]
+    assert len(commands) == 3  # one per running Colony session, none for another project
+    admin = next(c for c in commands if c[3] == "demo-lead")
+    assert admin[-1] == f"env CLAUDE_CONFIG_DIR={home / '.claude-admin'} claude attach aa11"
+    default = next(c for c in commands if c[3] == "demo-builder-2")
+    assert default[-1] == "claude attach dd44"  # the default folder stays unset, or the login is lost

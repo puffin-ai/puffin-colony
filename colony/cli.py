@@ -877,6 +877,126 @@ def open_builder(config: dict, args) -> int:
     return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
 
 
+LOCAL = "local.toml"  # this computer's own answers, such as the last helpers answer; git-ignored
+OPEN, PASTE = "open", "paste"
+
+
+def local_path() -> Path:
+    return repo_root() / DIR / LOCAL
+
+
+def read_local() -> dict:
+    """.colony/local.toml, or {} when there is none."""
+    try:
+        return tomllib.loads(local_path().read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def write_local(values: dict) -> None:
+    """Write .colony/local.toml, and make sure git ignores it."""
+    path = local_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{key} = {json.dumps(value)}\n" for key, value in sorted(values.items())))
+    ignore = path.parent / ".gitignore"
+    lines = ignore.read_text().splitlines() if ignore.exists() else []
+    if LOCAL not in lines:
+        ignore.write_text("\n".join([*lines, LOCAL]) + "\n")
+
+
+def helpers(config: dict, args) -> int:
+    """`colony helpers <n>`: the lead needs n helpers. With no answer, it prints the one question the lead asks the
+    person every time, with the last answer as the default: open them myself, or you paste? `--open` opens them on
+    this computer: cmux windows when the lead runs in a terminal or cmux, else background sessions, with `colony view`
+    to see them in cmux. `--paste` prints one `colony join <lead>` per helper, for any computer. Either answer becomes
+    the next default, in .colony/local.toml."""
+    from colony import presence, wait
+
+    lead = wait.lead_name(config, args)
+    last = read_local().get("helpers_answer", OPEN)
+    answer = OPEN if args.open else PASTE if args.paste else None
+    if answer is None:
+        account, _, why = choose_account_why(config, args)
+        first, second = ("Open them", "I'll paste") if last == OPEN else ("I'll paste", "Open them")
+        print(f"Ask the person, with [{first}] as the default: \"I need {args.count} helper"
+              f"{'s' if args.count != 1 else ''}. Open them myself on {account}, or you paste?\" "
+              f"[{first}] [{second}]. Then run `{NAME} helpers {args.count} --{'open' if first == 'Open them' else 'paste'}`"
+              f", or the other answer. ({why})")
+        return 0
+    write_local({**read_local(), "helpers_answer": answer})
+    alive, _, _ = presence.everyone(config)
+    if answer == PASTE:
+        print(f"Paste this on any computer, in a cmux terminal or typed into an app session there; each connects to "
+              f"{lead} by itself:")
+        for _ in range(args.count):
+            print(f"  {NAME} join {lead}")
+        return 0
+    taken: set[str] = set()
+    for _ in range(args.count):
+        name = free_helper(config, [*alive, *(presence.Status(n, "helper") for n in taken)])
+        taken.add(name)
+        code = launch(config, argparse.Namespace(**{**vars(args), "name": name, "here": False}), name, "builder",
+                      builder_prompt(name, config))
+        if code:
+            return code
+    if not cmux_usable():
+        print(f"They run in the background. To see them in cmux, paste this into any cmux terminal: {NAME} view")
+    return 0
+
+
+def running_sessions(config: dict) -> list[dict]:
+    """Every running Colony session on this computer, as `claude agents --json` lists it per account folder: the ones
+    whose name starts `<project>-`, each with its account's folder."""
+    found = []
+    for folder in dict.fromkeys(a["config_dir"] for a in config["accounts"].values()):
+        if not Path(folder).expanduser().is_dir():
+            continue
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CONFIG_DIR"}
+        if not is_default_dir(folder):
+            env["CLAUDE_CONFIG_DIR"] = folder
+        try:
+            run = subprocess.run(["claude", "agents", "--json"], capture_output=True, text=True, env=env, timeout=30)
+            listed = json.loads(run.stdout) if run.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+        for agent in listed if isinstance(listed, list) else []:
+            if isinstance(agent, dict) and agent.get("id") and str(agent.get("name", "")).startswith(
+                    f"{config['project']['name']}-"):
+                found.append({**agent, "config_dir": folder})
+    return found
+
+
+def view_commands(config: dict) -> list[list[str]]:
+    """One cmux command per running Colony session: a workspace that attaches to it on its own account."""
+    commands = []
+    for agent in running_sessions(config):
+        attach = ["claude", "attach", agent["id"]]
+        if not is_default_dir(agent["config_dir"]):
+            attach = ["env", f"CLAUDE_CONFIG_DIR={agent['config_dir']}", *attach]
+        commands.append(["cmux", "new-workspace", "--name", agent["name"], "--cwd", agent.get("cwd") or str(repo_root()),
+                         "--command", shlex.join(attach)])
+    return commands
+
+
+def view(config: dict, args) -> int:
+    """`colony view`: open a cmux workspace for every running Colony session on this computer, attached to it, so
+    background sessions show in cmux. Outside cmux it prints the commands instead."""
+    commands = view_commands(config)
+    if not commands:
+        print(f"No {DISPLAY} session runs on this computer.")
+        return 0
+    if args.dry_run or not cmux_usable():
+        if not args.dry_run:
+            print("cmux doesn't take commands from here: run `colony view` in a cmux terminal, or these:")
+        for command in commands:
+            print(shlex.join(command))
+        return 0
+    for command in commands:
+        subprocess.run(command)
+    print(f"Opened {len(commands)} workspace{'s' if len(commands) != 1 else ''} in cmux.")
+    return 0
+
+
 def brief(name: str) -> tuple[str, str]:
     """A role's brief and where it came from: the repo's own {dir}/prompts/<name>.md, which setup copies with the
     project's values in, else the package's prompts/<name>.md."""
@@ -1132,6 +1252,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
     p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
     p.set_defaults(run=open_builder)
+    p = sub.add_parser("helpers", help="the lead needs n helpers: ask open-or-paste with the last answer as the "
+                                       "default, then --open them here or --paste join lines")
+    p.add_argument("count", type=int, help="how many helpers")
+    answer = p.add_mutually_exclusive_group()
+    answer.add_argument("--open", action="store_true", help="open them on this computer")
+    answer.add_argument("--paste", action="store_true", help="print one `colony join <lead>` per helper to paste")
+    p.add_argument("--person", help="whose accounts to use")
+    p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
+    p.add_argument("--dry-run", action="store_true", help="print the commands and the env names, and run nothing")
+    p.set_defaults(run=helpers)
+    p = sub.add_parser("view", help="open a cmux workspace for every running Colony session on this computer")
+    p.add_argument("--dry-run", action="store_true", help="print the cmux commands, and run nothing")
+    p.set_defaults(run=view)
     p = sub.add_parser("claim", help="this session becomes the lead <person>-<stream>-lead over folders no live lead "
                                      "holds")
     p.add_argument("stream", help="a short name for this lead's stream of work, such as engine")
