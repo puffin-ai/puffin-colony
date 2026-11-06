@@ -10,7 +10,9 @@ stale-card lines for the lead's wait.
   Claude Code transcripts.
 - `colony retro` runs one agent on a batch's reports that writes each lesson as a rule line and a check, or a
   decision, into a pull request.
-- `stale_lines(config, now)` is the lead's wait's board check.
+- `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update.
+
+`needs` and `handover` check their issue's comment count before they post, and rotate a full one (tidy.keep_short).
 
 Optional settings live in `[cycle]` in colony.toml: `stale_hours`, `tiny_code_lines`, `tiny_docs_lines`,
 `feature_code_lines`, `docs` (the documentation folders), `feature_folders`, and `risk`, a table of extra path
@@ -31,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from colony import board, cli, wait
+from colony import board, cli, tidy, wait
 
 TINY, SMALL, FEATURE = "TINY", "SMALL", "FEATURE"
 TINY_CODE_LINES, TINY_DOCS_LINES, FEATURE_CODE_LINES = 100, 300, 400
@@ -365,12 +367,13 @@ def needs_title(person: str) -> str:
 
 
 def find_issue(repo: str, title: str, body: str) -> int:
-    """The number of the repo's open issue with this exact title, made with `body` when there is none."""
+    """The number of the repo's open issue with this exact title, the newest when a rotation left two open for a
+    moment, made with `body` when there is none. Nothing remembers the number, so a rotated issue is never used."""
     listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{title}" in:title',
                                 "--json", "number,title", "--limit", "50") or "[]")
     numbers = sorted(issue["number"] for issue in listed if issue.get("title", "").lower() == title.lower())
     if numbers:
-        return numbers[0]
+        return numbers[-1]
     url = wait.gh("issue", "create", "--repo", repo, "--title", title, "--body", body)
     return int(url.strip().rstrip("/").rsplit("/", 1)[-1])
 
@@ -403,7 +406,7 @@ def needs(config: dict, args) -> int:
     body = (f"The decisions only {person_title(person)} makes, one line each with the lead's default. The lead keeps "
             "working on the default. Answer with a comment `for <the lead's name>: <your answer>`, and your answer "
             "wins.")
-    number = find_issue(repo, needs_title(person), body)
+    number = tidy.keep_short(config, find_issue(repo, needs_title(person), body))
     wait.gh("issue", "comment", str(number), "--repo", repo, "--body", line)
     print(f"#{number} {line}")
     return 0
@@ -439,6 +442,7 @@ def handover(config: dict, args) -> int:
     missing = [flag for flag, value in parts.items() if not (value or "").strip()]
     if missing:
         raise cli.ColonyError(f"handover needs {', '.join(missing)}: write `none` for an empty one")
+    number = tidy.keep_short(config, number)
     body = handover_text(lead, args.decisions.strip(), args.open.strip(), args.next.strip(), board.utcnow())
     url = wait.gh("issue", "comment", str(number), "--repo", repo, "--body", body).strip()
     print(body)
@@ -452,6 +456,7 @@ def handover(config: dict, args) -> int:
 PREDICTED = re.compile(r"\bpredicted:\s*(?P<size>[SML])\s*,\s*(?P<minutes>\d+(?:\.\d+)?)\s*min\w*"
                        r"(?:\s*,\s*(?P<tokens>\d+(?:\.\d+)?)\s*(?P<unit>[KM])\b)?", re.I)
 TOKEN_UNITS = {"K": 1_000, "M": 1_000_000}
+START_LINE = re.compile(r"start:?\s+this card\b", re.I)  # the lead's `start: this card`, or the older `start this card`
 ACTIVE_GAP = timedelta(minutes=2)
 FIRST_PROMPTS = 3
 NONE = "-"
@@ -521,7 +526,7 @@ def card_window(card: dict) -> Window:
                               found[2].lower()))
     head = (card.get("title") or "").partition(":")
     titled = head[0].strip().lower() if head[1] and cli.SESSION_NAME.fullmatch(head[0].strip().lower()) else ""
-    starts = [(at, to) for at, to, _, sentence in lines if "start this card" in sentence]
+    starts = [(at, to) for at, to, _, sentence in lines if START_LINE.search(sentence)]
     builder = titled or (starts[0][1] if starts else "")
     start = next((at for at, to in starts if to == builder), None)
     if start is None:
@@ -782,7 +787,8 @@ def retro(config: dict, args) -> int:
 
 def stale_lines(config: dict, now) -> list[str]:
     """The `stale:` lines for the lead's wait: one per card In progress whose Last update is older than
-    [cycle] stale_hours (2.5 by default), unless its State is usage limit.
+    [cycle] stale_hours (2.5 by default). The board has no State, so a helper waiting on a usage limit is stale too:
+    the lead looks at its session and finds out.
 
     `now` is an aware datetime, or a Unix time. Each card is reported once until its Last update changes, through
     a state file in ~/.colony/<project>/. Call it at most every STALE_CHECK_MINUTES. It returns [] when the repo has
@@ -799,10 +805,8 @@ def stale_lines(config: dict, now) -> list[str]:
     reported = reported if isinstance(reported, dict) else {}
     lines = []
     for item in board.items(found):
-        values = item["fields"]
-        status, state = values.get(board.squash("Status"), ""), values.get(board.squash("State"), "")
-        last = values.get(board.squash(board.LAST_UPDATE), "")
-        if board.squash(status) != board.squash("In progress") or board.squash(state) == board.squash("usage limit"):
+        last = board.field_value(item, board.LAST_UPDATE)
+        if board.squash(board.field_value(item, "Status")) != board.squash("In progress"):
             continue
         if item["state"] and item["state"] != "OPEN":
             continue
@@ -811,9 +815,8 @@ def stale_lines(config: dict, now) -> list[str]:
         if updated is None or now - updated <= after or key in reported:
             continue
         reported[key] = now.isoformat()
-        who = values.get(board.squash("Builder")) or "its builder"
-        lines.append(f"#{item['number']} stale: {who} shows no update since {last}, and its State is not usage limit; "
-                     "check its session")
+        who = board.field_value(item, "Helper") or "its helper"
+        lines.append(f"#{item['number']} stale: {who} shows no update since {last}; check its session")
     reported = {key: at for key, at in reported.items() if now - moment(at) <= KEEP_REPORTED}
     wait.write_json(path, reported)
     return lines

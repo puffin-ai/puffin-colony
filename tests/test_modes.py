@@ -437,12 +437,12 @@ def test_in_hack_mode_every_line_goes_to_the_board_with_its_prefix(tmp_path, gh,
     config = load(tmp_path, HACK)
     monkeypatch.setenv(cli.PERSON_ENV, "ana")
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
-    assert wait.post(config, Namespace(card=None, to="builder-1", sentence="start the login form", urgent=False)) == 0
+    assert wait.post(config, Namespace(card=None, to="builder-1", sentence="start: the login form", urgent=False)) == 0
     assert wait.say(config, Namespace(person=None, to="@bo", sentence="can /api/login return the name?")) == 0
     assert wait.say(config, Namespace(person=None, to="bo-lead", sentence="I merge in 5 minutes")) == 0
     monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
     assert wait.post(config, Namespace(card=41, to="lead", sentence="done, pushed", urgent=False)) == 0
-    lines = ["for builder-1: start the login form (from ana-lead)", "@bo can /api/login return the name? (from ana-lead)",
+    lines = ["for builder-1: start: the login form (from ana-lead)", "@bo can /api/login return the name? (from ana-lead)",
              "for bo-lead: I merge in 5 minutes (from ana-lead)", "for ana-lead: done, pushed (#41) (from builder-1)"]
     assert capsys.readouterr().out.splitlines() == [f"#12 {line}" for line in lines]
     assert gh.comments() == [("12", f"[Ana's Claude] {line}") for line in lines]
@@ -454,7 +454,7 @@ def test_hack_mode_needs_the_board_number(tmp_path, gh, monkeypatch):
     monkeypatch.setenv(cli.PERSON_ENV, "ana")
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
     with pytest.raises(cli.ColonyError, match=r"set \[messages\] board to its number"):
-        wait.post(config, Namespace(card=None, to="builder-1", sentence="start", urgent=False))
+        wait.post(config, Namespace(card=None, to="builder-1", sentence="start: the login form", urgent=False))
     assert gh.calls() == []
 
 

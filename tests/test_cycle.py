@@ -368,13 +368,11 @@ def test_stats_reads_the_cards_given_on_the_command_line(gh, capsys, monkeypatch
 
 
 def items_answer(*cards):
-    """The board's items query answer: (number, status, state, last update, builder) per card."""
+    """The board's items query answer: (number, status, last update, helper) per card, on the five-field board."""
     nodes = []
-    for number, status, state, last, builder in cards:
+    for number, status, last, helper in cards:
         values = [{"name": status, "field": {"name": "Status"}}, {"text": last, "field": {"name": "Last update"}},
-                  {"text": builder, "field": {"name": "Builder"}}]
-        if state:
-            values.append({"name": state, "field": {"name": "State"}})
+                  {"text": helper, "field": {"name": "Helper"}}, {"text": "serdar-lead", "field": {"name": "Lead"}}]
         nodes.append({"id": f"I{number}", "content": {"number": number, "url": f"u/{number}", "state": "OPEN"},
                       "fieldValues": {"nodes": values}})
     return {"data": {"node": {"items": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": nodes}}}}
@@ -385,26 +383,32 @@ NOW = datetime(2026, 11, 5, 13, 0, tzinfo=timezone.utc)
 
 def test_a_card_in_progress_with_no_update_for_2_5_hours_is_stale_once(gh):  # noqa: F811
     gh.answer("project list", LISTED)
-    gh.answer("items(first", items_answer((12, "In progress", "working", "2026-11-05 10:29 UTC", "builder-2"),
-                                          (13, "In progress", "working", "2026-11-05 10:31 UTC", "builder-3"),
-                                          (14, "In progress", "usage limit", "2026-11-05 06:00 UTC", "builder-4"),
-                                          (15, "Done", "", "2026-11-05 06:00 UTC", "builder-5"),
-                                          (16, "In progress", "", "", "builder-6")))
+    gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 10:29 UTC", "builder-2"),
+                                          (13, "In progress", "2026-11-05 10:31 UTC", "builder-3"),
+                                          (15, "Done", "2026-11-05 06:00 UTC", "builder-5"),
+                                          (16, "In progress", "", "builder-6")))
     assert cycle.stale_lines(CONFIG, NOW) == [
-        "#12 stale: builder-2 shows no update since 2026-11-05 10:29 UTC, and its State is not usage limit; "
-        "check its session"]
+        "#12 stale: builder-2 shows no update since 2026-11-05 10:29 UTC; check its session"]
     assert cycle.stale_lines(CONFIG, NOW.timestamp() + 60) == []  # reported once, and a Unix time works too
     later = cycle.stale_lines(CONFIG, NOW + timedelta(minutes=5))
     assert [line.split(" ")[0] for line in later] == ["#13"]
 
 
+def test_the_board_has_no_state_so_a_helper_on_a_usage_limit_is_stale_too(gh):  # noqa: F811
+    # The five-field board dropped State, and with it the usage-limit exemption: the lead looks at the session.
+    gh.answer("project list", LISTED)
+    gh.answer("items(first", items_answer((14, "In progress", "2026-11-05 06:00 UTC", "builder-4")))
+    assert cycle.stale_lines(CONFIG, NOW) == [
+        "#14 stale: builder-4 shows no update since 2026-11-05 06:00 UTC; check its session"]
+
+
 def test_a_stale_card_is_reported_again_after_its_last_update_changes(gh):  # noqa: F811
     gh.answer("project list", LISTED)
-    gh.answer("items(first", items_answer((12, "In progress", "waiting", "2026-11-05 08:00 UTC", "")), once=True)
-    gh.answer("items(first", items_answer((12, "In progress", "waiting", "2026-11-05 09:00 UTC", "")))
+    gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 08:00 UTC", "")), once=True)
+    gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 09:00 UTC", "")))
     assert len(cycle.stale_lines(CONFIG, NOW)) == 1
-    assert cycle.stale_lines(CONFIG, NOW) == ["#12 stale: its builder shows no update since 2026-11-05 09:00 UTC, "
-                                              "and its State is not usage limit; check its session"]
+    assert cycle.stale_lines(CONFIG, NOW) == ["#12 stale: its helper shows no update since 2026-11-05 09:00 UTC; "
+                                              "check its session"]
 
 
 def test_no_board_means_no_stale_lines_and_a_broken_board_is_an_error(gh):  # noqa: F811
@@ -417,7 +421,7 @@ def test_no_board_means_no_stale_lines_and_a_broken_board_is_an_error(gh):  # no
 
 def test_the_stale_hours_come_from_the_config(gh):  # noqa: F811
     gh.answer("project list", LISTED)
-    gh.answer("items(first", items_answer((12, "In progress", "working", "2026-11-05 12:00 UTC", "builder-2")))
+    gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 12:00 UTC", "builder-2")))
     assert cycle.stale_lines({**CONFIG, "cycle": {"stale_hours": 0.5}}, NOW) != []
 
 

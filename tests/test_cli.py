@@ -421,8 +421,8 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
 COMMANDS = ("join", "open", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "tier", "needs",
-            "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "hi", "setup", "skill-install",
-            "tools")
+            "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "tidy", "idea", "card", "hi",
+            "setup", "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

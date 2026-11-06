@@ -243,12 +243,31 @@ def gh(*args: str) -> str:
     return run.stdout
 
 
-def coordination_issue(repo: str, project: str) -> int:
-    """The number of the repo's `Colony: coordination` issue: remembered, else found by title, else created."""
+def coordination_issue(repo: str, project: str, moved: int | None = None) -> int:
+    """The number of the repo's open `Colony: coordination` issue: remembered, else found by title (the newest), else
+    created. The issue rotates at its comment limit (tidy.rotate), so a number remembered over 10 minutes ago is
+    checked again, and dropped once its issue is closed. `moved` remembers the issue a rotation just opened."""
     path = state_path(project, f"{cli.LEAD}-coordination")
+    checked = path.with_name(f"{cli.LEAD}-coordination-checked.json")
+    if moved is not None:
+        write_json(path, moved)
+        write_json(checked, time.time())
+        return moved
     known = read_json(path, None)
     if isinstance(known, int):
-        return known
+        at = read_json(checked, None)
+        if not isinstance(at, (int, float)):  # remembered before rotations: start its 10 minutes now
+            write_json(checked, time.time())
+            return known
+        if time.time() - at < 600:
+            return known
+        try:
+            state = gh("api", f"repos/{repo}/issues/{known}", "--jq", ".state").strip()
+        except GhError:
+            return known  # GitHub can't say now: keep the number, and ask again next time
+        if state == "open":
+            write_json(checked, time.time())
+            return known
     listed = json.loads(gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{COORDINATION}" in:title',
                            "--json", "number,title", "--limit", "50") or "[]")
     numbers = sorted(issue["number"] for issue in listed if issue.get("title") == COORDINATION)
@@ -256,8 +275,9 @@ def coordination_issue(repo: str, project: str) -> int:
         body = f'Leads post lines for each other here: `{cli.NAME} say <lead-name> "<sentence>"`.'
         url = gh("issue", "create", "--repo", repo, "--title", COORDINATION, "--body", body)
         numbers = [int(url.strip().rstrip("/").rsplit("/", 1)[-1])]
-    write_json(path, numbers[0])
-    return numbers[0]
+    write_json(path, numbers[-1])
+    write_json(checked, time.time())
+    return numbers[-1]
 
 
 def unread_entry(repo: str, comment: dict, card: str, line: str) -> dict:
@@ -523,8 +543,9 @@ def checked(line: str, sentence: str) -> str:
 
 def say(config: dict, args) -> int:
     """`colony say <lead-name|@login|@all> "<sentence>"`: post a line for another lead, or for a person's lead, on the
-    coordination issue, or on the board in hack mode (transport.send)."""
-    from colony import transport
+    coordination issue, or on the board in hack mode (transport.send). Lead-to-lead talk is free text under MAX_LINE
+    characters. Before it posts on the coordination issue, the issue rotates when it is full (tidy.keep_short)."""
+    from colony import tidy, transport
 
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
@@ -535,6 +556,8 @@ def say(config: dict, args) -> int:
     elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as burak-lead, or @login (you are {me})")
     line = checked(compose(to, sentence, me), sentence)
+    if not hack(config):
+        tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
     number = transport.send(config, to, line)
     print(f"#{number} {line}")
     return 0
@@ -546,8 +569,11 @@ def post(config: dict, args) -> int:
     `<to>` may be `@<login>`, for that person's lead, or `@all`.
 
     In hack mode the line goes to the board, so the card is optional and named after the sentence as `(#<card>)`, the
-    lead signs as `<person>-lead`, and a builder's `lead` means its own person's lead."""
-    from colony import transport
+    lead signs as `<person>-lead`, and a builder's `lead` means its own person's lead.
+
+    A line has a kind (tidy.check_kind): a helper sends done, question:, blocked: or urgent:, and the lead sends its
+    helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text."""
+    from colony import tidy, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
@@ -571,6 +597,7 @@ def post(config: dict, args) -> int:
         sentence = f"urgent: {sentence}"
     about = f" (#{card})" if on_board and card is not None and sentence else ""
     line = checked(compose(to, sentence + about, sender), sentence)
+    tidy.check_kind(me == cli.LEAD, to, sentence)
     number = transport.send(config, to, line, card=None if on_board else card)
     print(f"#{number} {line}")
     return 0

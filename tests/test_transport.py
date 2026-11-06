@@ -161,11 +161,14 @@ def test_say_sends_an_urgent_line_for_another_lead_through_the_relay(world, monk
     (world.home / ".colony" / "demo").mkdir(parents=True)
     (world.home / ".colony" / "demo" / "lead-coordination.json").write_text("5")
     monkeypatch.setenv("COLONY_SESSION", "lead")
+    world.answer("gh", out=json.dumps({"state": "open", "title": "Colony: coordination", "comments": 12}))
     assert wait.say(RELAY, Namespace(person=None, to="burak-lead", sentence="urgent: I merge dev in 10 minutes")) == 0
     line = "for burak-lead: urgent: I merge dev in 10 minutes (from serdar-lead)"
     assert capsys.readouterr().out == f"#5 {line}\n"
     assert world.calls(PROBE) == [["relay", "send", "--socket", world.core, "--to", "burak-lead", "--body", f"#5 {line}"]]
-    assert world.calls("gh") == [["issue", "comment", "5", "--repo", "acme/demo", "--body", f"{line}\n{transport.MARK}"]]
+    # say first reads the issue's comment count, in one call, to rotate it at its limit (tidy.keep_short)
+    assert world.calls("gh") == [["api", "repos/acme/demo/issues/5"],
+                                 ["issue", "comment", "5", "--repo", "acme/demo", "--body", f"{line}\n{transport.MARK}"]]
 
 
 @pytest.mark.parametrize("to, line, card, waiting, at_once", [
@@ -251,7 +254,7 @@ def test_a_line_never_carries_a_secret(world, monkeypatch, line, why):
     ("builder-2", "lead", "blocked: the test database won't start", False,
      "for lead: blocked: the test database won't start (from builder-2)", True),
     ("builder-2", "Lead", "main is  red", True, "for lead: urgent: main is red (from builder-2)", True),
-    ("lead", "builder-2", "start this card", False, "for builder-2: start this card (from lead)", True),
+    ("lead", "builder-2", "start: this card", False, "for builder-2: start: this card (from lead)", True),
     ("builder-2", "lead", "done, builder-2/41 pushed, 12 passed", False,
      "for lead: done, builder-2/41 pushed, 12 passed (from builder-2)", False),  # waits for the lead's digest
 ])
@@ -272,12 +275,12 @@ def test_post_is_a_command_on_the_command_line(world, tmp_path):
     subprocess.run(["git", "init", "-q", str(host)], check=True)
     (host / ".colony" / "colony.toml").write_text(Path(str(resources.files("colony") / "colony.toml.example")).read_text())
     env = {"HOME": str(tmp_path), "PATH": f"{world.bin}:/usr/bin:/bin", "COLONY_SESSION": "lead"}
-    run = subprocess.run([sys.executable, "-m", "colony", "post", "#41", "builder-2", "start this card"],
+    run = subprocess.run([sys.executable, "-m", "colony", "post", "#41", "builder-2", "start: this card"],
                          capture_output=True, text=True, cwd=host, env=env)
     assert run.returncode == 0, run.stderr
-    assert run.stdout == "#41 for builder-2: start this card (from lead)\n"
+    assert run.stdout == "#41 for builder-2: start: this card (from lead)\n"
     assert world.calls("gh") == [["issue", "comment", "41", "--repo", "owner/myapp",
-                                  "--body", "for builder-2: start this card (from lead)"]]
+                                  "--body", "for builder-2: start: this card (from lead)"]]
     bad = subprocess.run([sys.executable, "-m", "colony", "post", "the next one", "lead", "hi"],
                          capture_output=True, text=True, cwd=host, env=env)
     assert bad.returncode == 2 and "is not a card number" in bad.stderr
