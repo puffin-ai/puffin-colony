@@ -15,10 +15,10 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
-prefer_account = ""                # optional: an account sessions and batches open on whenever it has room
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
-# --account, else prefer_account while it is under 90% of its 5-hour window, else the person's account with the most room.
+# --account, else the first of its person's [people.<person>] accounts with room (the soonest weekly reset first),
+# else an account of theirs with no reading, else a last_resort account.
 [accounts.main]
 config_dir = "~/.claude"
 person = "you"
@@ -48,6 +48,11 @@ lead_digest_minutes = 10           # the lead reads gathered lines this often; u
 
 [people]
 logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once
+
+# Each person's accounts in the order to use them, and the ones used only when none of those has room:
+# [people.ana]
+# accounts = ["ana-team", "ana"]
+# last_resort = ["shared"]
 
 [knowledge]
 vault = "knowledge"                # the knowledge vault's folder at the top of the repo

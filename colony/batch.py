@@ -390,8 +390,8 @@ def _root(config: dict, args=None) -> Path:
 
 
 def _account(config: dict, args) -> tuple[str, str]:
-    """Pick the agents' account as (name, config_dir), as cli.choose_account does: --account, else
-    `[project] prefer_account` while it has room, else the person's account with the most room.
+    """Pick the agents' account as (name, config_dir), as cli.choose_account does: --account, else the person's
+    accounts with room, the soonest weekly reset first, then their last-resort accounts.
 
     The person is --person, else the session's COLONY_PERSON, else cli.default_person.
     """

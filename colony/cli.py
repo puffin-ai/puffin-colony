@@ -41,7 +41,11 @@ RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `c
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
 # Roles a colony.toml may leave out: each one missing takes the builder's settings.
 BUILDER_LIKE = (RESEARCHER, SPEC)
-FULL = 90.0  # an account whose saved 5-hour usage is at or past this percent has no room for prefer_account
+FULL = 90.0  # an account at or past this percent of a window has no room, for has_room
+FIVE_HOUR_OUT = 95.0  # at or past this 5-hour use, an account is out of room
+FIVE_HOUR_NEAR = 80.0  # at or past this 5-hour use with its reset over FAR_RESET away, it is skipped too
+FAR_RESET_HOURS = 1.0
+WEEK_OUT = 95.0  # at or past this weekly use, no weekly room is left
 REQUIRED = {
     "project": ("name", "repo", "base", "worktrees", "checks"),
     "gate": ("rubric", "max_rounds", "walk"),
@@ -139,9 +143,12 @@ def load_config(path=None) -> dict:
                 raise ColonyError(f"{path}: [accounts.{name}] needs {key!r}")
         account["config_dir"] = os.path.expanduser(account["config_dir"])
     project = config["project"]
-    if project.get("prefer_account") and project["prefer_account"] not in config["accounts"]:
-        raise ColonyError(f"{path}: [project] prefer_account names {project['prefer_account']!r}, which no "
-                          "[accounts.<name>] table holds")
+    for person, table in config.get("people", {}).items():
+        if isinstance(table, dict):
+            for name in [*table.get("accounts", []), *table.get("last_resort", [])]:
+                if name not in config["accounts"]:
+                    raise ColonyError(f"{path}: [people.{person}] names the account {name!r}, which no "
+                                      "[accounts.<name>] table holds")
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = os.path.expanduser(project[key])
@@ -231,49 +238,92 @@ def room_text(name: str, config_dir: str) -> str:
     return f"{name}: {', '.join(parts)}"
 
 
-def pick_account(config: dict, person: str) -> tuple[str, str]:
-    """The person's account for a new session, as (name, config_dir): `[project] prefer_account` when it is the
-    person's and has room, else the person's account with the most room on this computer.
+def person_accounts(config: dict, person: str) -> tuple[list[str], list[str]]:
+    """The person's accounts in their order, and their last-resort accounts: `[people.<person>] accounts` and
+    `last_resort`, else every account whose person is theirs or `any`, in the file's order."""
+    table = config.get("people", {}).get(person)
+    if isinstance(table, dict) and table.get("accounts"):
+        return list(table["accounts"]), list(table.get("last_resort", []))
+    return [name for name, a in config["accounts"].items() if a["person"] in (person, "any")], []
 
-    Accounts whose person is `any` count for everyone, and folders this computer has come first. Known accounts
-    with room rank first, then accounts with no reading, then full ones. Among those with room, the most room wins,
-    the earlier account on a tie. With `[project] drain = true`, or `prefer_account`, the account whose weekly window
-    resets soonest wins instead, so usage that is about to expire is spent first.
-    """
-    mine = [(name, a["config_dir"]) for name, a in config["accounts"].items() if a["person"] in (person, "any")]
-    if not mine:
-        raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
-    project = config.get("project", {})
-    preferred = project.get("prefer_account")
-    for name, folder in mine:
-        if name == preferred and has_room(folder):
-            return name, folder
-    mine = [(name, folder) for name, folder in mine if Path(folder).is_dir()] or mine
-    drain = bool(project.get("drain")) or bool(preferred)
+
+def in_hours(when: datetime | None, now: datetime) -> str:
+    """How far off a reset is, such as `20 h` or `35 min`."""
+    if when is None:
+        return "an unknown time"
+    seconds = max(0.0, (when - now).total_seconds())
+    return f"{int(seconds // 3600)} h" if seconds >= 3600 else f"{int(seconds // 60)} min"
+
+
+def judge(name: str, folder: str, now: datetime) -> tuple[int, tuple, str]:
+    """One account's standing for the pick, as (tier, rank, why): tier 0 has room, 1 has no saved reading, 2 is out
+    of room or near it with a reset far off, 3 has no folder on this computer. Within tier 0 the rank puts the
+    soonest weekly reset first, "use it or lose it", counting resets in the same hour as a tie, then the most 5-hour
+    room."""
     far = datetime.max.replace(tzinfo=timezone.utc)
+    if not Path(folder).expanduser().is_dir():
+        return 3, (), f"{name}: its folder is not on this computer"
+    windows = usage(folder, now)
+    if not windows:
+        return 1, (), f"{name}: no saved reading, so its room is unknown"
+    five_used, five_reset = windows.get("five_hour", (0.0, None))
+    week_used, week_reset = windows.get("seven_day", (0.0, None))
+    five = f"5h {five_used:g}% used, resets in {in_hours(five_reset, now)}"
+    if five_used >= FIVE_HOUR_OUT:
+        return 2, (), f"{name}: out of 5-hour room ({five})"
+    if five_used >= FIVE_HOUR_NEAR and five_reset and (five_reset - now).total_seconds() > FAR_RESET_HOURS * 3600:
+        return 2, (), f"{name}: near its 5-hour limit with the reset far off ({five})"
+    if week_used >= WEEK_OUT:
+        return 2, (), f"{name}: no weekly room left (weekly {week_used:g}% used, resets in {in_hours(week_reset, now)})"
+    why = f"{name}: weekly resets in {in_hours(week_reset, now)}, {100 - week_used:g}% left; {five}"
+    hour = int((week_reset or far).timestamp() // 3600)  # resets within the same hour tie
+    return 0, (hour, five_used), why
 
-    def rank(item):
-        i, (_, folder) = item
-        used = fullest(folder)
-        if used is None:
-            return (1, 0, far, i)
-        if used >= FULL:
-            return (2, used, far, i)
-        week = usage(folder).get("seven_day", (0.0, None))[1] or far
-        return (0, 0, week, i) if drain else (0, used, far, i)
 
-    return mine[min(enumerate(mine), key=rank)[0]]
+def pick(config: dict, person: str, now: datetime | None = None) -> tuple[str, str, str]:
+    """The person's account for a new session, as (name, config_dir, why).
+
+    The person's accounts, in their order (person_accounts), are judged on this computer (judge). An account with
+    room wins, the soonest weekly reset first, then the most 5-hour room, then the person's order. Next comes an
+    account with no reading, in order. A last-resort account counts only when none of those has room. When every
+    account is out of room, the first in order is named, and why says so.
+    """
+    now = now or datetime.now(timezone.utc)
+    order, last = person_accounts(config, person)
+    if not order and not last:
+        raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
+    for names in (order, last):
+        judged = [(judge(name, config["accounts"][name]["config_dir"], now), i, name) for i, name in enumerate(names)]
+        for tier in (0, 1):
+            ranked = sorted((rank, i, name, why) for (t, rank, why), i, name in judged if t == tier)
+            if ranked:
+                _, _, name, why = ranked[0]
+                return name, config["accounts"][name]["config_dir"], why + (" (last resort)" if names is last else "")
+    name = (order or last)[0]
+    whys = "; ".join(judge(n, config["accounts"][n]["config_dir"], now)[2] for n in order + last)
+    return name, config["accounts"][name]["config_dir"], f"every account is out of room, so {name}, the first: {whys}"
+
+
+def pick_account(config: dict, person: str) -> tuple[str, str]:
+    """The person's account for a new session, as (name, config_dir) (pick)."""
+    name, folder, _ = pick(config, person)
+    return name, folder
 
 
 def choose_account(config: dict, args) -> tuple[str, str]:
-    """The account a session or batch runs on, as (name, config_dir): --account when given, else pick_account for
-    the session's person."""
+    """The account a session or batch runs on, as (name, config_dir): --account when given, else the pick for the
+    session's person (pick)."""
+    return choose_account_why(config, args)[:2]
+
+
+def choose_account_why(config: dict, args) -> tuple[str, str, str]:
+    """choose_account with why it was chosen, which a session prints as it opens."""
     name = getattr(args, "account", None)
     if name:
         if name not in config["accounts"]:
             raise ColonyError(f"--account {name!r} is not in {CONFIG_NAME}: choose from {', '.join(config['accounts'])}")
-        return name, config["accounts"][name]["config_dir"]
-    return pick_account(config, person_of(config, args))
+        return name, config["accounts"][name]["config_dir"], f"{name}: named with --account"
+    return pick(config, person_of(config, args))
 
 
 def git_user() -> set[str]:
@@ -286,14 +336,25 @@ def git_user() -> set[str]:
     return found
 
 
+def gh_login() -> str:
+    """The signed-in gh user's login, lowercased, or an empty string when gh can't say."""
+    return _out(["gh", "api", "user", "--jq", ".login"]).lower()
+
+
 def default_person(config: dict) -> str:
-    """The one person colony.toml names, else the one the git user matches, else an error asking for --person."""
+    """The one person colony.toml names, else the one the git user matches, else the one the gh login maps to through
+    `[people.<person>] login`, else an error asking for --person."""
     people = sorted({a["person"] for a in config["accounts"].values()} - {"any"})
     if len(people) == 1:
         return people[0]
     matches = [p for p in people if p.lower() in git_user()]
     if len(matches) == 1:
         return matches[0]
+    login = gh_login()
+    tables = {person: table for person, table in config.get("people", {}).items() if isinstance(table, dict)}
+    mapped = [p for p in people if login and login in (str(tables.get(p, {}).get("login", "")).lower(), p.lower())]
+    if len(mapped) == 1:
+        return mapped[0]
     raise ColonyError(f"say whose session this is: --person {' or '.join(people)}")
 
 
@@ -388,7 +449,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     from colony.wait import LEAD_ENV
 
     person = person_of(config, args)
-    account, config_dir = choose_account(config, args)
+    account, config_dir, why = choose_account_why(config, args)
     title = f"{config['project']['name']}-{session}"
     lead = "" if session == LEAD else (getattr(args, "lead_name", "") or os.environ.get(LEAD_ENV, ""))
     env = session_env(person, session, config_dir, lead)
@@ -401,10 +462,11 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
         print("command:", shlex.join(argv))
         print("env:", " ".join(env))
         print(f"dry run: {title} on account {account}, in {where}")
+        print(f"why: {why}")
         return 0
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
-    print(f"Opening {title} on account {account}, in {where}.", flush=True)
+    print(f"Opening {title} on account {account}, in {where}. Why: {why}.", flush=True)
     # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
     # subscription, so a session drops it unless colony.toml says to use it.
     keep_key = config.get("budget", {}).get("use_api_key", False)
@@ -1037,8 +1099,8 @@ def builder_name(value: str) -> str:
     return value
 
 
-ACCOUNT_HELP = ("the account to open on, instead of the pick ([project] prefer_account while it has room, else the "
-                "one with the most room)")
+ACCOUNT_HELP = ("the account to open on, instead of the pick: [people.<person>] accounts with room, the soonest weekly "
+                "reset first, then last_resort")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1103,7 +1165,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="from_branch", metavar="BRANCH", help="build on this branch instead of origin/<base>")
     p.add_argument("--person", help="whose accounts the agents use")
     p.add_argument("--account", metavar="NAME", help="the account the agents run on, instead of the pick "
-                                                     "([project] prefer_account, else the one with the most room)")
+                                                     "([people.<person>] accounts by room, soonest weekly reset first)")
     p.add_argument("--review", action="store_true",
                    help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")

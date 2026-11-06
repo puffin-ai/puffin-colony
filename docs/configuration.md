@@ -16,7 +16,6 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it, except `colony merge` in Hack with `[gate] merge_after_fast_check = true`. |
 | `preset` | no | `"lean"` | The rules setup copied: `lean`, `puffin` or `own`. A record for you; the commands don't read it. |
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
-| `prefer_account` | no | `"ana-team"` | The `[accounts.<name>]` table new sessions and batches use first, while its folder is on this computer and its saved 5-hour usage is under 90%. It must name a table in the file. |
 | `worktrees` | yes | `"~/worktrees"` | Where batches, fixers and the retro make their worktrees. Pick a folder outside the clone. |
 | `fast_check` | no | `"npm test"` | A builder's quick check after each change. Setup writes it into the playbook. |
 | `checks` | yes | `"npm run lint && npm run typecheck && npm test"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. |
@@ -49,7 +48,7 @@ config_dir = "~/.claude"
 person = "ben"
 ```
 
-**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the file names, else the one whose name matches your git user. When `[project] prefer_account` is one of that person's accounts and has room, it wins. Otherwise, among that person's accounts and the `any` ones, folders this computer has come first. The lowest saved 5-hour usage wins, and the earlier table wins a tie. With no saved usage, the first one wins.
+**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one whose weekly window resets soonest goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing.
 
 Most teams list one account per person. Spreading one person's work across several seats may conflict with [Anthropic's terms](https://www.anthropic.com/legal), so check them before you list more than one for yourself.
 

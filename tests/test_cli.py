@@ -512,7 +512,7 @@ def test_the_example_config_holds_the_new_tables(home):
     config = cli.load_config(PACKAGE / "colony.toml.example")
     assert config["roles"]["researcher"]["model"] and config["roles"]["spec"]["effort"]
     assert "transport" not in config["messages"]  # every line goes by GitHub
-    assert "board" in config and config["project"]["prefer_account"] == ""
+    assert "board" in config and "prefer_account" not in config["project"]
     knowledge = config["knowledge"]
     assert knowledge["vault"] == "knowledge"
     assert {name: knowledge[name] for name in vault.CHECKS} == vault.CHECKS  # each check, with its default mode
@@ -528,34 +528,16 @@ def test_every_shipped_rule_fits_the_example_configs_rule_budgets(home):
         assert len(path.read_text()) <= budget, f"{path.relative_to(PACKAGE)} runs past its budget of {budget}"
 
 
-def test_prefer_account_wins_while_it_has_room(home):
-    config = accounts(home, "ana", "ana", "any")
-    config["project"] = {"prefer_account": "c"}
-    write_usage(home / "a", 5, timedelta(hours=2))
-    write_usage(home / "b", 40, timedelta(hours=2))
-    write_usage(home / "c", 60, timedelta(hours=2))
-    assert cli.pick_account(config, "ana") == ("c", str(home / "c"))  # not the most room, but preferred
-    write_usage(home / "c", 90, timedelta(hours=2))
-    assert cli.pick_account(config, "ana")[0] == "a"  # full: the most room wins again
-    write_usage(home / "c", 95, timedelta(hours=-1))
-    assert cli.pick_account(config, "ana")[0] == "c"  # its window reset
-
-
-def test_prefer_account_needs_its_folder_here_and_to_be_the_persons(home):
-    config = accounts(home, "ana", "bo")
-    (home / "a").mkdir()
-    config["project"] = {"prefer_account": "b"}
-    assert cli.pick_account(config, "ana")[0] == "a"  # bo's account never opens ana's session
-    config = accounts(home, "ana", "ana")
-    (home / "a").mkdir(exist_ok=True)
-    config["project"] = {"prefer_account": "b"}
-    assert cli.pick_account(config, "ana")[0] == "a"  # no folder b on this computer
-
-
-def test_prefer_account_must_name_an_account(host):
+def test_prefer_account_and_drain_are_gone_and_an_old_config_still_loads(host):
     (host / "colony.toml").write_text(CONFIG.replace('checks = "make check"', 'checks = "make check"\n'
-                                                                             'prefer_account = "admin"'))
-    with pytest.raises(cli.ColonyError, match="prefer_account names 'admin', which no"):
+                                                                             'prefer_account = "admin"\ndrain = true'))
+    config = cli.load_config(host / "colony.toml")  # the live config still has the line, so it must keep loading
+    assert cli.pick_account(config, "ana")[0] == "first"  # and the line no longer steers the pick
+
+
+def test_a_people_table_must_name_real_accounts(host):
+    (host / "colony.toml").write_text(CONFIG + '\n[people.ana]\naccounts = ["first", "ghost"]\n')
+    with pytest.raises(cli.ColonyError, match=r"\[people.ana\] names the account 'ghost'"):
         cli.load_config(host / "colony.toml")
 
 
@@ -569,7 +551,6 @@ def test_every_command_that_opens_a_session_or_a_batch_takes_account(argv):
 
 def test_account_overrides_the_pick_and_refuses_an_unknown_one(home, config, capsys):
     config["accounts"]["admin"] = {"config_dir": str(home / "admin"), "person": "bo"}
-    config["project"]["prefer_account"] = "first"
     code, out = run_lead(config, capsys, account="admin")
     assert code == 0 and "on account admin" in out
     assert "CLAUDE_CONFIG_DIR" in out.split("env:", 1)[1].splitlines()[0]

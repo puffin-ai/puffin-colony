@@ -310,12 +310,12 @@ def test_card_stats_that_cant_be_read_leave_a_line_in_the_pr_body(repo, config, 
     assert batch.card_stats(b) == "The card stats could not be read: gh issue view failed: HTTP 502."
 
 
-def test_the_agents_run_on_account_else_on_prefer_account_while_it_has_room(repo, config, tmp_path):
+def test_the_agents_run_on_account_else_on_the_persons_first_account_with_room(repo, config, tmp_path):
     config["accounts"]["admin"] = {"config_dir": str(tmp_path / "admin"), "person": "pat"}
     for folder in ("admin", "account"):
         (tmp_path / folder).mkdir()
     assert batch.Batch.from_args(config, batch_args(repo, "11=card/a")).account[0] == "one"
-    config["project"]["prefer_account"] = "admin"
+    config["people"] = {**config.get("people", {}), "pat": {"accounts": ["admin", "one"]}}
     assert batch.Batch.from_args(config, batch_args(repo, "11=card/a")).account == ("admin", str(tmp_path / "admin"))
     args = batch_args(repo, "11=card/a")
     args.account = "one"

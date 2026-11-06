@@ -1,6 +1,6 @@
 """Tests for the roles rule: every session a person types into is a lead (plain `colony` inside it, `colony claim`), helpers belong to
 one lead (`colony join`, `colony take`), presence across computers (status comments, `colony who`), the leads'
-heartbeats, and the accounts' usage, resets and drain."""
+heartbeats, and the accounts' usage, resets and order."""
 import argparse
 import json
 import multiprocessing
@@ -446,48 +446,100 @@ def test_a_heartbeat_that_fails_to_write_never_stops_the_wait(home, monkeypatch,
     assert "the heartbeat was not written: disk full" in capsys.readouterr().err
 
 
-# Accounts: 5-hour and weekly usage, resets, and drain
+# Accounts: each person's order, 5-hour and weekly use with their resets, and the last resort
 
 
-def usage(home: Path, folder: str, five=None, week=None, week_resets_in=timedelta(days=3)) -> str:
+def usage(home: Path, folder: str, five=None, week=None, week_resets_in=timedelta(days=3),
+          five_resets_in=timedelta(hours=2)) -> str:
     path = home / folder
     path.mkdir(exist_ok=True)
+    now = datetime.now(timezone.utc)
     windows = {}
-    later = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
     if five is not None:
-        windows["five_hour"] = {"utilization": five, "resets_at": later}
+        windows["five_hour"] = {"utilization": five, "resets_at": (now + five_resets_in).isoformat()}
     if week is not None:
-        windows["seven_day"] = {"utilization": week,
-                                "resets_at": (datetime.now(timezone.utc) + week_resets_in).isoformat()}
+        windows["seven_day"] = {"utilization": week, "resets_at": (now + week_resets_in).isoformat()}
     if windows:
         (path / ".claude.json").write_text(json.dumps({"cachedUsageUtilization": {"utilization": windows}}))
     return str(path)
 
 
-def accounts(home, *specs, **project):
-    return {"project": project, "accounts": {name: {"config_dir": usage(home, name, **kw), "person": "ana"}
-                                            for name, kw in specs}}
+def accounts(home, *specs, last=()):
+    """Serdar's shape: [people.ana] accounts in order, and last_resort."""
+    found = {name: {"config_dir": usage(home, name, **kw), "person": "ana"} for name, kw in [*specs, *last]}
+    order = [name for name, _ in specs]
+    return {"project": {}, "accounts": found,
+            "people": {"ana": {"accounts": order, "last_resort": [name for name, _ in last]}}}
 
 
-def test_the_weekly_window_counts_as_much_as_the_five_hour_one(home):
-    config = accounts(home, ("a", {"five": 10, "week": 95}), ("b", {"five": 50, "week": 20}))
-    assert cli.pick_account(config, "ana")[0] == "b"  # a's week is full
+def test_use_it_or_lose_it_the_soonest_weekly_reset_with_room_comes_first(home):
+    config = accounts(home, ("team", {"five": 5, "week": 10, "week_resets_in": timedelta(days=5)}),
+                      ("admin", {"five": 40, "week": 70, "week_resets_in": timedelta(hours=20)}),
+                      ("serdar", {"five": 0, "week": 0, "week_resets_in": timedelta(days=6)}))
+    name, _, why = cli.pick(config, "ana")
+    assert name == "admin" and why == "admin: weekly resets in 19 h, 30% left; 5h 40% used, resets in 1 h"
 
 
-def test_an_account_with_no_reading_ranks_after_known_room_and_before_full(home):
-    config = accounts(home, ("full", {"five": 95}), ("unknown", {}), ("room", {"five": 60}))
-    assert cli.pick_account(config, "ana")[0] == "room"
-    config = accounts(home, ("full", {"five": 95}), ("unknown", {}))
-    assert cli.pick_account(config, "ana")[0] == "unknown"
+def test_a_tie_on_the_weekly_reset_goes_to_the_most_five_hour_room(home):
+    same = timedelta(days=2)
+    config = accounts(home, ("team", {"five": 60, "week": 10, "week_resets_in": same}),
+                      ("admin", {"five": 20, "week": 10, "week_resets_in": same}))
+    assert cli.pick(config, "ana")[0] == "admin"
 
 
-def test_drain_spends_the_week_that_resets_soonest_first_until_90(home):
-    specs = (("roomy", {"five": 5, "week": 10, "week_resets_in": timedelta(days=6)}),
-             ("expiring", {"five": 40, "week": 70, "week_resets_in": timedelta(hours=20)}))
-    assert cli.pick_account(accounts(home, *specs), "ana")[0] == "roomy"
-    assert cli.pick_account(accounts(home, *specs, drain=True), "ana")[0] == "expiring"
-    full = (specs[0], ("expiring", {"five": 40, "week": 91, "week_resets_in": timedelta(hours=20)}))
-    assert cli.pick_account(accounts(home, *full, drain=True), "ana")[0] == "roomy"
+def test_out_of_five_hour_room_or_near_it_with_a_far_reset_is_skipped(home):
+    config = accounts(home, ("team", {"five": 97, "week": 10, "week_resets_in": timedelta(hours=1)}),
+                      ("admin", {"five": 85, "week": 10, "week_resets_in": timedelta(hours=2),
+                                 "five_resets_in": timedelta(hours=3)}),
+                      ("serdar", {"five": 50, "week": 10}))
+    assert cli.pick(config, "ana")[0] == "serdar"
+    near_reset = accounts(home, ("admin", {"five": 85, "week": 10, "five_resets_in": timedelta(minutes=20)}),
+                          ("serdar", {"five": 10, "week": 10, "week_resets_in": timedelta(days=6)}))
+    assert cli.pick(near_reset, "ana")[0] == "admin"  # near its limit, but the reset is minutes off
+
+
+def test_a_full_week_is_skipped(home):
+    config = accounts(home, ("team", {"five": 0, "week": 97, "week_resets_in": timedelta(hours=1)}),
+                      ("admin", {"five": 0, "week": 50}))
+    assert cli.pick(config, "ana")[0] == "admin"
+
+
+def test_an_account_with_no_reading_ranks_after_known_room_in_the_persons_order(home):
+    config = accounts(home, ("team", {}), ("admin", {"five": 60, "week": 50}))
+    assert cli.pick(config, "ana")[0] == "admin"
+    config = accounts(home, ("team", {}), ("admin", {"five": 99}))
+    name, _, why = cli.pick(config, "ana")
+    assert name == "team" and "no saved reading" in why
+
+
+def test_the_last_resort_is_used_only_when_no_other_account_has_room(home):
+    config = accounts(home, ("team", {"five": 99}), ("admin", {"five": 50, "week": 10}),
+                      last=[("engineering", {"five": 0, "week": 0, "week_resets_in": timedelta(hours=1)})])
+    assert cli.pick(config, "ana")[0] == "admin"  # engineering resets sooner, but it is the last resort
+    config = accounts(home, ("team", {"five": 99}), ("admin", {"week": 99}),
+                      last=[("engineering", {"five": 0, "week": 0})])
+    name, _, why = cli.pick(config, "ana")
+    assert name == "engineering" and why.endswith("(last resort)")
+
+
+def test_every_account_out_of_room_names_the_first_and_says_why(home):
+    config = accounts(home, ("team", {"five": 99}), ("admin", {"five": 98}))
+    name, _, why = cli.pick(config, "ana")
+    assert name == "team" and why.startswith("every account is out of room, so team, the first")
+
+
+def test_a_session_prints_why_its_account_was_picked(home, config, capsys):
+    usage(home, ".claude-admin", five=10, week=40, week_resets_in=timedelta(hours=30))
+    cli.lead(config, argparse.Namespace(person="ana", here=True, dry_run=True, account=None))
+    assert "why: admin: weekly resets in 29 h, 60% left; 5h 10% used" in capsys.readouterr().out
+
+
+def test_the_person_comes_from_the_gh_login_through_people(home, monkeypatch):
+    config = {"accounts": {"a": {"config_dir": "x", "person": "serdar"}, "b": {"config_dir": "y", "person": "burak"}},
+              "people": {"serdar": {"login": "JS-gh"}}}
+    monkeypatch.setattr(cli, "git_user", lambda: set())
+    monkeypatch.setattr(cli, "gh_login", lambda: "js-gh")
+    assert cli.default_person(config) == "serdar"
 
 
 def test_the_room_text_names_both_windows_and_their_resets(home):
