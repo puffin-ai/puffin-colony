@@ -38,10 +38,10 @@ LEAD = "lead"
 LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
-RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
+RESEARCHER, SPEC, TESTER = "researcher", "spec", "tester"  # the sessions `colony research`, `spec` and `tester` open
 ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
 # Roles a colony.toml may leave out: each one missing takes the builder's settings.
-BUILDER_LIKE = (RESEARCHER, SPEC)
+BUILDER_LIKE = (RESEARCHER, SPEC, TESTER)
 FULL = 90.0  # an account at or past this percent of a window has no room, for has_room
 FIVE_HOUR_OUT = 95.0  # at or past this 5-hour use, an account is out of room
 FIVE_HOUR_NEAR = 80.0  # at or past this 5-hour use with its reset over FAR_RESET away, it is skipped too
@@ -1130,8 +1130,9 @@ def brief(name: str) -> tuple[str, str]:
 
 
 def open_brief(config: dict, args, role: str, **values: str) -> int:
-    """Open a researcher or the spec agent on this computer, whose first prompt is its brief filled in: `{project}`,
-    `{knowledge}` (the vault folder, `[knowledge] vault`) and the request (`{question}` or `{feature}`)."""
+    """Open a researcher, the spec agent or a tester on this computer, whose first prompt is its brief filled in:
+    `{project}`, `{knowledge}` (the vault folder, `[knowledge] vault`) and the request (`{question}`, `{feature}` or
+    `{release}`)."""
     from colony import batch, vault
 
     for key, value in values.items():
@@ -1155,6 +1156,11 @@ def research(config: dict, args) -> int:
 def spec(config: dict, args) -> int:
     """`colony spec "<feature>"`: open the spec agent, which writes a FEATURE's requirements, design and tasks."""
     return open_brief(config, args, SPEC, feature=args.feature)
+
+
+def tester(config: dict, args) -> int:
+    """`colony tester "<release pull request>"`: open a tester, which checks a release's cards on the deployed app."""
+    return open_brief(config, args, TESTER, release=args.release)
 
 
 def origin_url() -> str:
@@ -1460,7 +1466,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     for command, run, field, text in (
             ("research", research, "question", "open a researcher on one question, answered with cited sources"),
-            ("spec", spec, "feature", "open the spec agent on a FEATURE: requirements, design and tasks")):
+            ("spec", spec, "feature", "open the spec agent on a FEATURE: requirements, design and tasks"),
+            ("tester", tester, "release", "open a tester after a release: it checks the release's cards on the deployed "
+                                          "app and files one findings issue")):
         p = sub.add_parser(command, help=text)
         p.add_argument(field, help=f"the {field}, in quotes")
         p.add_argument("--person", help="whose accounts to use")

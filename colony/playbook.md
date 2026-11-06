@@ -1,6 +1,6 @@
 # The colony playbook
 
-The lead, the builders, the spec agent and the researcher follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
+The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
 
 ## Leads and helpers
 
@@ -180,6 +180,15 @@ The researcher answers one outside question nobody here knows yet, with cited so
 2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.
+
+## Tester
+
+The tester checks a release on the deployed app, the way a person would use it, after the tests and the walk have passed. Its steps are in `.colony/prompts/tester.md`.
+
+1. Once `colony release --after` reports the deploy succeeded, open the tester as its own session with `colony tester "<the release pull request's link>"`. Its first prompt is `.colony/prompts/tester.md`, with the release on its `The release:` line, and it runs as the session `tester`, on the account `colony` picks.
+2. It reads the release's batches and their cards, and tests each card's done-when results on the deployed app. It changes no code.
+3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
+4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
 
 ## Hack
 

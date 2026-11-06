@@ -33,6 +33,7 @@ walker     = { model = "claude-opus-5-5", effort = "medium" }   # add agent = "<
 fixer      = { model = "claude-opus-5-5", effort = "medium" }
 researcher = { model = "claude-opus-5-5", effort = "high" }     # `colony research`; left out, it takes the builder's
 spec       = { model = "claude-opus-5-5", effort = "high" }     # `colony spec`; left out, it takes the builder's
+tester     = { model = "claude-opus-5-5", effort = "high" }     # `colony tester`; left out, it takes the builder's
 
 [gate]
 rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]   # the reviewer's checklist
