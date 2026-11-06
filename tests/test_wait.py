@@ -529,3 +529,34 @@ def test_the_named_leads_wait_returns_at_once_on_a_silent_helper(gh, capsys, mon
     assert code == 0 and clock.naps == []
     assert out == ("urgent: builder-3 was opened 6 minutes ago and has posted no status comment; look at its "
                    "window, or open it again\n")
+
+
+def test_a_named_helpers_line_for_lead_goes_to_its_own_lead_by_name(gh, capsys, monkeypatch):
+    monkeypatch.setenv(cli.SESSION_ENV, "builder-7")
+    monkeypatch.setenv(wait.LEAD_ENV, "serdar-ai-engine-lead")
+    assert wait.post(CONFIG, Namespace(card=1560, to="lead", sentence="blocked: no token", urgent=False)) == 0
+    line = "for serdar-ai-engine-lead: blocked: no token (from builder-7)"
+    assert ["issue", "comment", "1560", "--repo", "acme/demo", "--body", line] in gh.calls()
+
+
+def test_a_helpers_line_for_lead_reaches_its_own_lead_and_no_other():
+    line = "for lead: blocked: no token (from builder-7)"
+    main = wait.with_helpers(wait.Session(cli.LEAD, frozenset({cli.LEAD, "serdar-main-lead"})),
+                             {"helpers": {"builder-7": "serdar-ai-engine-lead"}})  # builder-7's status names its lead
+    assert main.others == frozenset({"builder-7"})
+    engine = wait.Session(cli.LEAD, frozenset({"serdar-ai-engine-lead"}), helpers=frozenset({"builder-7"}))
+    assert wait.taken(line, main, "1560") == []
+    assert wait.taken(line, engine, "1560") == [(line, True)]
+    assert wait.taken("for lead: blocked: x (from builder-1)", main, "1560")  # its own, or one it doesn't know
+
+
+def test_a_line_between_leads_waits_for_the_digest_unless_it_is_urgent(gh, monkeypatch, capsys):
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    for urgent in (False, True):
+        assert wait.say(CONFIG, Namespace(person=None, to="ana-web-lead", sentence="builder-7 waits on your API",
+                                          urgent=urgent)) == 0
+    calm, hurried = [call[-1] for call in gh.calls() if call[:2] == ["issue", "comment"]]
+    assert hurried == "for ana-web-lead: urgent: builder-7 waits on your API (from ana-main-lead)"
+    web = wait.Session(cli.LEAD, frozenset({"ana-web-lead"}))
+    assert wait.taken(calm, web, "5") == [(calm, False)] and wait.taken(hurried, web, "5") == [(hurried, True)]

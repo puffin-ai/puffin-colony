@@ -87,7 +87,8 @@ class Session:
     """Who waits: its name, the names it takes lines for and signs with, and for the lead, the people's logins, the
     cards the batch waits on, and its own person's logins, which an @<login> line names. The lead answers to `lead`
     on cards, and to `<person>-lead` on the coordination issue; in hack mode to `<person>-lead` alone. A builder takes
-    lines signed by one of `leads`. The lead's `helpers` are the helpers it takes redirected lines for."""
+    lines signed by one of `leads`. The lead's `helpers` are the helpers it takes redirected lines for, and `others`
+    the helpers whose status names another lead, whose `for lead:` lines it leaves to that lead."""
 
     name: str
     names: frozenset[str]
@@ -96,6 +97,7 @@ class Session:
     logins: frozenset[str] = frozenset()
     leads: frozenset[str] = frozenset({cli.LEAD})
     helpers: frozenset[str] = frozenset()
+    others: frozenset[str] = frozenset()
 
 
 def state_path(project: str, name: str) -> Path:
@@ -200,14 +202,22 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     The lead also takes a line for one of its `helpers` that it didn't sign, as `redirected: <line>`, by the same
     rules for when it can't wait: a person or another session writing to a helper directly reaches the lead too. A
     line signed `lead`, as a lead's card lines are, counts as the lead's own.
+
+    A helper's `for lead:` line belongs to that helper's own lead: a lead takes it when the helper is one of its
+    `helpers`, even when the lead answers to its name alone, and never when the helper is one of its `others`.
     """
     lines = []
     for raw in body.splitlines():
         line = MARKUP.sub("", raw)
         text = MARKUP.sub("", PREFIX.sub("", line))
         found = LINE.match(text)
+        signed = SIGNED.search(text)
+        sender = signed[1].lower() if signed else ""
+        to = found[1].lower() if found else ""
         redirected = False
-        if found and found[1].lower() in me.names:
+        if to == cli.LEAD and me.name == cli.LEAD and sender in me.others:
+            continue  # another lead's helper: the line is for that lead
+        if found and (to in me.names or (to == cli.LEAD and me.name == cli.LEAD and sender in me.helpers)):
             sentence = found[2]
         elif mentions(text) & (me.logins | {ALL} if me.name == cli.LEAD else {ALL}):
             sentence = LEADING_MENTIONS.sub("", text)
@@ -215,8 +225,6 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
             sentence, redirected = found[2], True
         else:
             continue
-        signed = SIGNED.search(text)
-        sender = signed[1].lower() if signed else ""
         if me.name != cli.LEAD:
             if sender in me.leads:
                 lines.append((line, True))
@@ -247,7 +255,7 @@ def with_helpers(me: Session, state: dict) -> Session:
     known = state.get("helpers") or {}
     mine = {name for name, lead in known.items() if lead in me.names}
     theirs = {name for name, lead in known.items() if lead not in me.names}
-    return replace(me, helpers=frozenset((me.helpers - theirs) | mine))
+    return replace(me, helpers=frozenset((me.helpers - theirs) | mine), others=frozenset(theirs))
 
 
 def local_helpers(project: str) -> frozenset[str]:
@@ -668,13 +676,16 @@ def checked(line: str, sentence: str) -> str:
 def say(config: dict, args) -> int:
     """`colony say <lead-name|@login|@all> "<sentence>"`: post a line for another lead, or for a person's lead, on the
     coordination issue, or on the board in hack mode (transport.send). Lead-to-lead talk is free text under MAX_LINE
-    characters. Before it posts on the coordination issue, the issue rotates when it is full (tidy.keep_short)."""
+    characters, and waits for the other lead's digest unless --urgent starts it with `urgent:`. Before it posts on
+    the coordination issue, the issue rotates when it is full (tidy.keep_short)."""
     from colony import tidy, transport
 
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
     transport.check_transport(config)
     me, to, sentence = lead_name(config, args), args.to.lower(), " ".join(args.sentence.split())
+    if sentence and getattr(args, "urgent", False) and not CANT_WAIT.match(sentence):
+        sentence = f"urgent: {sentence}"
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
     elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
@@ -712,8 +723,8 @@ def post(config: dict, args) -> int:
         own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
         check_mention(config, to, own, me)
     else:
-        if on_board and to == cli.LEAD:
-            to = lead_name(config, args)
+        if to == cli.LEAD and (on_board or (me != cli.LEAD and named())):
+            to = lead_name(config, args)  # a helper's `lead` is its own lead, by name, so no other lead takes it
         if not cli.SESSION_NAME.fullmatch(to) or to in (me, sender) or to.isdigit():
             raise cli.ColonyError(f"post needs another session's name, such as lead or builder-2, or @login "
                                   f"(you are {me})")
@@ -768,6 +779,8 @@ def add_commands(sub, wait_parser) -> None:
     p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
                                                    "lead, or @all")
     p.add_argument("sentence", help="one sentence")
+    p.add_argument("--urgent", action="store_true",
+                   help="start the sentence with urgent:, so the other lead gets it at once instead of in its digest")
     p.set_defaults(run=say)
     p = sub.add_parser("post", help="post a line for another session on a card (the board in hack mode), through "
                                     "the transport")

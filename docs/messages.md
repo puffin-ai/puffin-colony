@@ -110,7 +110,9 @@ The list stays until the lead changes it. At most every 10 minutes, the lead's w
 
 When several people each run a lead on the same repo, the leads talk on one shared issue, titled `Colony: coordination`. The first lead's wait finds it by title, or opens it. On that issue each lead is `<person>-lead`, such as `ana-lead` or `sam-lead`.
 
-The other lead's wait takes a `colony say` line under the same rules: in the digest, or at once with `urgent:`, `blocked:` or `question:`. Leads use it to ask each other things, hand work across, and warn before a merge to the shared base branch. Each lead still asks only its own person, and only what it can't decide. The same issue holds each lead's handover.
+The other lead's wait takes a `colony say` line under the same rules: in the digest, or at once with `urgent:`, `blocked:` or `question:`. `colony say --urgent` adds `urgent:`; a lead marks a line so only when work stops on it, such as a blocked helper or a question that holds a card.
+
+A helper's line for `lead` reaches its own lead only. A helper that carries its lead's name, `$COLONY_LEAD`, posts the line for that name, and a lead's wait leaves a `for lead:` line from another lead's helper, by that helper's status comment, to that lead. Leads use it to ask each other things, hand work across, and warn before a merge to the shared base branch. Each lead still asks only its own person, and only what it can't decide. The same issue holds each lead's handover.
 
 ## Hack: the board
 
