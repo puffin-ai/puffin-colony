@@ -34,7 +34,7 @@ DIR = f".{NAME}"  # the folder a host repo keeps Colony's files in: the config, 
 CONFIG_NAME = f"{NAME}.toml"
 SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
 LEAD = "lead"
-LEAD_PROMPT = "Read {dir}/playbook.md, {section} section, and start."
+LEAD_PROMPT = "Run `colony hi` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
 SESSION_NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 RESEARCHER, SPEC = "researcher", "spec"  # the sessions `colony research` and `colony spec` open, named as their roles
@@ -172,45 +172,97 @@ def signed_in(config_dir: str) -> bool:
     return bool(_state(config_dir).get("oauthAccount"))
 
 
-def five_hour_usage(config_dir: str) -> float | None:
-    """The account's saved 5-hour usage in percent, 0 once that window has reset, or None when none is saved.
+WINDOWS = {"five_hour": "5h", "seven_day": "week"}  # the usage windows Claude Code saves, and their short names
 
-    Claude Code saves it as `cachedUsageUtilization.utilization.five_hour`, holding
-    `utilization` (percent used) and `resets_at` (an ISO time).
+
+def usage(config_dir: str, now: datetime | None = None) -> dict[str, tuple[float, datetime | None]]:
+    """The account's saved usage per window, `five_hour` and `seven_day`, as (percent used, reset time), with a
+    window whose reset time has passed counted as 0. A window with no saved reading is left out.
+
+    Claude Code saves them as `cachedUsageUtilization.utilization.<window>`, each holding `utilization` (percent
+    used) and `resets_at` (an ISO time).
     """
+    now = now or datetime.now(timezone.utc)
     try:
-        window = _state(config_dir)["cachedUsageUtilization"]["utilization"]["five_hour"]
-        used = float(window["utilization"])
-        if window.get("resets_at") and datetime.fromisoformat(window["resets_at"]) <= datetime.now(timezone.utc):
-            return 0.0
-        return used
-    except (ValueError, KeyError, TypeError):
-        return None
+        saved = _state(config_dir)["cachedUsageUtilization"]["utilization"]
+    except (KeyError, TypeError):
+        return {}
+    found = {}
+    for window in WINDOWS:
+        try:
+            used = float(saved[window]["utilization"])
+            resets = datetime.fromisoformat(saved[window]["resets_at"]) if saved[window].get("resets_at") else None
+        except (KeyError, TypeError, ValueError):
+            continue
+        found[window] = (0.0, None) if resets is not None and resets <= now else (used, resets)
+    return found
+
+
+def five_hour_usage(config_dir: str) -> float | None:
+    """The account's saved 5-hour usage in percent, 0 once that window has reset, or None when none is saved."""
+    window = usage(config_dir).get("five_hour")
+    return None if window is None else window[0]
+
+
+def fullest(config_dir: str) -> float | None:
+    """The account's binding usage: its fuller window's percent, or None when it has no reading."""
+    windows = usage(config_dir)
+    return max(used for used, _ in windows.values()) if windows else None
 
 
 def has_room(config_dir: str) -> bool:
-    """Whether an account's folder is on this computer and its saved 5-hour usage, if any, is under FULL percent."""
-    used = five_hour_usage(config_dir)
+    """Whether an account's folder is on this computer and every saved window, if any, is under FULL percent."""
+    used = fullest(config_dir)
     return Path(config_dir).is_dir() and (used is None or used < FULL)
+
+
+def room_text(name: str, config_dir: str) -> str:
+    """One account's room for a status, such as `admin: 5h 40% (resets 23:50 UTC), week 63% (resets Sat 10:00 UTC)`,
+    or `admin: no reading`."""
+    windows = usage(config_dir)
+    if not windows:
+        return f"{name}: no reading"
+    parts = []
+    for window, short in WINDOWS.items():
+        if window in windows:
+            used, resets = windows[window]
+            when = f" (resets {resets.astimezone(timezone.utc):%a %H:%M} UTC)" if resets else ""
+            parts.append(f"{short} {used:g}%{when}")
+    return f"{name}: {', '.join(parts)}"
 
 
 def pick_account(config: dict, person: str) -> tuple[str, str]:
     """The person's account for a new session, as (name, config_dir): `[project] prefer_account` when it is the
     person's and has room, else the person's account with the most room on this computer.
 
-    Accounts whose person is `any` count for everyone, and folders this computer has come first. The lowest
-    saved 5-hour usage wins, the earlier account on a tie. When no account has a saved figure, the first one wins.
+    Accounts whose person is `any` count for everyone, and folders this computer has come first. Known accounts
+    with room rank first, then accounts with no reading, then full ones. Among those with room, the most room wins,
+    the earlier account on a tie. With `[project] drain = true`, or `prefer_account`, the account whose weekly window
+    resets soonest wins instead, so usage that is about to expire is spent first.
     """
     mine = [(name, a["config_dir"]) for name, a in config["accounts"].items() if a["person"] in (person, "any")]
     if not mine:
         raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
-    preferred = config.get("project", {}).get("prefer_account")
+    project = config.get("project", {})
+    preferred = project.get("prefer_account")
     for name, folder in mine:
         if name == preferred and has_room(folder):
             return name, folder
     mine = [(name, folder) for name, folder in mine if Path(folder).is_dir()] or mine
-    saved = [(used, i) for i, (_, folder) in enumerate(mine) if (used := five_hour_usage(folder)) is not None]
-    return mine[min(saved)[1]] if saved else mine[0]
+    drain = bool(project.get("drain")) or bool(preferred)
+    far = datetime.max.replace(tzinfo=timezone.utc)
+
+    def rank(item):
+        i, (_, folder) = item
+        used = fullest(folder)
+        if used is None:
+            return (1, 0, far, i)
+        if used >= FULL:
+            return (2, used, far, i)
+        week = usage(folder).get("seven_day", (0.0, None))[1] or far
+        return (0, 0, week, i) if drain else (0, used, far, i)
+
+    return mine[min(enumerate(mine), key=rank)[0]]
 
 
 def choose_account(config: dict, args) -> tuple[str, str]:
@@ -250,13 +302,15 @@ def person_of(config: dict, args) -> str:
     return getattr(args, "person", None) or os.environ.get(PERSON_ENV) or default_person(config)
 
 
-def session_env(person: str, session: str, config_dir: str) -> dict[str, str]:
-    """The environment variables a lead or builder starts with.
+def session_env(person: str, session: str, config_dir: str, lead: str = "") -> dict[str, str]:
+    """The environment variables a lead or builder starts with, with $COLONY_LEAD for a helper of a named lead.
 
     Claude Code ties a login to the CLAUDE_CONFIG_DIR value, so the default folder leaves it
     unset; naming `~/.claude` there would open a session that is not signed in.
     """
-    env = {SESSION_ENV: session, PERSON_ENV: person}
+    from colony.wait import LEAD_ENV
+
+    env = {SESSION_ENV: session, PERSON_ENV: person, **({LEAD_ENV: lead} if lead else {})}
     if not is_default_dir(config_dir):
         env["CLAUDE_CONFIG_DIR"] = config_dir
     env["CLAUDE_CODE_RETRY_WATCHDOG"] = "1"
@@ -328,12 +382,16 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
     `claude attach`. A dry run prints the command, the env names (never their values) and where it would
-    open, and runs nothing. A lead claims the heartbeat first (wait.beat), so a second lead never opens while one runs.
+    open, and runs nothing. A lead's session claims its own name with `colony hi` or `colony claim`. Every other
+    session is a helper of one lead: the lead `colony join` picked, else the lead that runs the command ($COLONY_LEAD).
     """
+    from colony.wait import LEAD_ENV
+
     person = person_of(config, args)
     account, config_dir = choose_account(config, args)
     title = f"{config['project']['name']}-{session}"
-    env = session_env(person, session, config_dir)
+    lead = "" if session == LEAD else (getattr(args, "lead_name", "") or os.environ.get(LEAD_ENV, ""))
+    env = session_env(person, session, config_dir, lead)
     argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env, masked=args.dry_run))
     root = str(repo_root())
     mode = where_to_open(args)
@@ -346,15 +404,6 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
         return 0
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
-    if session == LEAD:
-        from colony import wait
-
-        env[wait.TOKEN_ENV] = wait.new_token()
-        try:
-            wait.beat(config["project"]["name"], wait.lead_name(config, args), account, env[wait.TOKEN_ENV])
-        except wait.LeadTaken as e:
-            raise ColonyError(f"a lead is running here, so {NAME} opens no second one: {e}") from None
-        argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env))
     print(f"Opening {title} on account {account}, in {where}.", flush=True)
     # A set ANTHROPIC_API_KEY makes Claude Code bill that key instead of the account's
     # subscription, so a session drops it unless colony.toml says to use it.
@@ -461,39 +510,92 @@ def current_account(config: dict) -> str:
 
 
 def lead_line(config: dict) -> str:
-    """One line on this computer's lead: its name, account and heartbeat age, or that none is running."""
+    """This computer's leads, one line each with name, account and heartbeat age, or that none is running."""
     from colony import wait
 
-    held = wait.read_heartbeat(config["project"]["name"])
-    if held is None:
-        return "lead: none running on this computer (no heartbeat)"
-    age = ago(time.time() - held["at"])
-    if not wait.fresh(held):
-        return f"lead: none running on this computer ({held.get('session', 'the last lead')}'s heartbeat is {age} old)"
-    return f"lead: {held.get('session', 'unknown')} on account {held.get('account', 'unknown')}, heartbeat {age} ago"
+    folder = wait.state_path(config["project"]["name"], LEAD).parent
+    lines = []
+    for path in sorted(folder.glob("*.heartbeat")) if folder.is_dir() else []:
+        held = wait.read_json(path, None)
+        if not isinstance(held, dict) or not isinstance(held.get("at"), (int, float)):
+            continue
+        age, name = ago(time.time() - held["at"]), held.get("session", path.stem)
+        lines.append(f"lead: {name} on account {held.get('account', 'unknown')}, heartbeat {age} ago" if wait.fresh(held)
+                     else f"lead: none running as {name} on this computer (its heartbeat is {age} old)")
+    return "\n".join(lines) or "lead: none running on this computer (no heartbeat)"
 
 
-def free_builder(project: str) -> str:
-    """The first builder name, builder-1 up, with no wait that polled on this computer in the last 2 minutes."""
+def env_line(*pairs: tuple[str, str]) -> str:
+    """The env a session puts before every colony command, such as `COLONY_SESSION=lead COLONY_LEAD=…`."""
+    return " ".join(f"{key}={value}" for key, value in pairs if value)
+
+
+def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str, str]:
+    """Claim the lead `<person>-<stream>-lead` for this session: refuse a folder another live lead holds, and a name a
+    live session already leads; write its heartbeat, its folders in .colony/leads.toml and its status comment.
+    Returns (the lead's name, its token)."""
+    from colony import presence, wait
+
+    person = person_of(config, args)
+    name = presence.lead_of("", person, stream)
+    folders = [presence.folder(f) for f in folders]
+    alive, _, note = presence.everyone(config)
+    if note:
+        print(note, file=sys.stderr)
+    clash = [f"{mine} overlaps {held} of {lead}" for lead, theirs in presence.held_by_others(alive, name).items()
+             for mine in folders for held in theirs if presence.overlaps(mine, held)]
+    if clash:
+        raise ColonyError(f"another live lead holds those folders: {'; '.join(clash)}. Pick other folders")
+    if any(status.name == name for status in alive if status.kind == "lead" and status.computer != presence.computer()):
+        raise ColonyError(f"{name} is alive on another computer: pick another stream name")
+    token, account = wait.new_token(), current_account(config)
+    try:
+        wait.beat(config["project"]["name"], name, account, token, named=True)
+    except wait.LeadTaken as e:
+        raise ColonyError(f"{e}: pick another stream name") from None
+    leads = presence.registry()
+    leads[name] = {"person": person, "folders": folders}
+    presence.write_registry(leads)
+    state_path = wait.state_path(config["project"]["name"], f"{name}-status")
+    state: dict = {}
+    try:
+        presence.keep(config, presence.mine(config, args, name, "lead"), state)
+        wait.write_json(state_path, state)
+    except (ColonyError, OSError, ValueError, KeyError) as e:
+        print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
+    return name, token
+
+
+def lead_env(config: dict, args, name: str, token: str) -> str:
+    """The env line a claimed lead starts every colony command with."""
     from colony import wait
 
-    n = 1
-    while True:
-        state = wait.read_json(wait.state_path(project, f"builder-{n}"), {})
-        polled = state.get("polled_at") if isinstance(state, dict) else None
-        if not isinstance(polled, (int, float)) or time.time() - polled >= wait.HEARTBEAT_FRESH:
-            return f"builder-{n}"
-        n += 1
+    return env_line((SESSION_ENV, LEAD), (wait.LEAD_ENV, name), (PERSON_ENV, person_of(config, args)),
+                    (wait.TOKEN_ENV, token))
+
+
+def claim(config: dict, args) -> int:
+    """`colony claim <stream> [folder ...]`: this session becomes the lead `<person>-<stream>-lead` over the folders,
+    which no other live lead holds. No folders: the rest of the repo."""
+    from colony import presence
+
+    name, token = claim_lead(config, args, args.stream, args.folders)
+    print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
+    print(f"Start every {NAME} command with `{lead_env(config, args, name, token)}`, and start `{NAME} wait` in the "
+          "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
+          f"{DIR}/{presence.LEADS_FILE} with your next change.")
+    return 0
 
 
 def hi(args) -> int:
-    """`colony hi`: for a session opened without a task, say which case this repo is in and what to do.
+    """`colony hi`: what a session the person opened does first. Every such session is a lead, and never asks.
 
-    No .colony/colony.toml: set Colony up in this session. A session Colony opened ($COLONY_SESSION set) is a helper
-    for good, and is told its role. Otherwise the lead's heartbeat decides: fresh, and the session offers to be a
-    builder or to help; stale or missing, and the session claims the lead by writing the heartbeat (wait.beat), which
-    lapses in 2 minutes unless its `colony wait` keeps it."""
-    from colony import wait
+    No .colony/colony.toml: set Colony up in this session. A session Colony opened ($COLONY_SESSION set) keeps its
+    role for good. Otherwise `colony who` shows the live leads: with none, this session claims `<person>-main-lead`
+    over the whole repo; with some, it names them and their folders, and asks the person only what's theirs, then
+    claims those folders with `colony claim`. A first message of "join" or "join <lead>" makes it a helper instead,
+    through `colony join --in-session`."""
+    from colony import presence
 
     if not config_path().exists():
         print(f"{DISPLAY}: not set up in this repo, since {DIR}/{CONFIG_NAME} is missing.")
@@ -501,12 +603,13 @@ def hi(args) -> int:
               "the prompt it prints, asking the person its questions here.")
         return 0
     config = load_config()
-    project = config["project"]["name"]
-    print(f"{DISPLAY}: set up here, project {project}, {mode(config)} mode.")
+    print(f"{DISPLAY}: set up here, project {config['project']['name']}, {mode(config)} mode.")
     me = os.environ.get(SESSION_ENV, "").lower()
     if me:
         role = section(config, "Lead" if me == LEAD else "Builder")
-        print(f"This session is {me}, which {NAME} opened: follow the {role} section of {DIR}/playbook.md.")
+        kind = "a lead" if me == LEAD else "a helper, for good: it never asks the person anything"
+        print(f"This session is {me}, which {NAME} opened, and is {kind}. Follow the {role} section of "
+              f"{DIR}/playbook.md.")
         return 0
     try:
         person = person_of(config, args)
@@ -514,22 +617,27 @@ def hi(args) -> int:
         people = sorted({a["person"] for a in config["accounts"].values()} - {"any"})
         print(f"Next: ask the person which of {', '.join(people)} they are, then run `{NAME} hi --person <them>`.")
         return 0
-    account, token = current_account(config), wait.new_token()
-    try:
-        wait.beat(project, wait.lead_name(config, args), account, token)
-    except wait.LeadTaken:
-        builder = free_builder(project)
-        print(lead_line(config))
-        print(f"Next: offer to be a builder, or to help. As a builder: take the name {builder}, ask the person to tell "
-              f"their lead that {builder} waits for a card, load the colony-builder skill and follow it, and start "
-              f"every {NAME} command with `{SESSION_ENV}={builder} {PERSON_ENV}={person}`. To help: do what the person "
-              "asks, and leave the cards to the lead and its builders.")
+    print('A session a person opens is a lead. (When their first message was "join" or "join <lead>", run '
+          f"`{NAME} join [<lead>] --in-session` instead, and be that lead's helper.)")
+    alive, _, note = presence.everyone(config)
+    if note:
+        print(note)
+    leads = [status for status in alive if status.kind == "lead"]
+    if not leads:
+        name, token = claim_lead(config, args, "main", [])
+        print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
+        print(f"Next: start every {NAME} command with `{lead_env(config, args, name, token)}`, start `{NAME} wait` in "
+              "the background within 2 minutes, load the colony-lead skill, and ask the person what they want.")
         return 0
-    print(f"No lead was running on this computer, so this session claimed the lead, on account {account}.")
-    print(f"Next: tell the person you are their lead, then load the colony-lead skill and follow it. Start every {NAME} "
-          f"command with `{SESSION_ENV}={LEAD} {PERSON_ENV}={person} {wait.TOKEN_ENV}={token}`, and start "
-          f"`{NAME} wait` in the background within 2 minutes: it keeps the heartbeat that holds the lead. When the "
-          "person would rather you didn't lead, start no wait, and the claim lapses in 2 minutes.")
+    held = sorted({folder for status in leads for folder in status.folders})
+    print(f"Live leads ({len(leads)}), whose folders this lead avoids:")
+    for status in sorted(leads, key=lambda s: s.name):
+        print(f"- {status.name} ({status.person or 'unknown person'}, {status.computer or 'unknown computer'}): "
+              f"{', '.join(status.folders) or 'the rest of the repo'}")
+    print(f"Next: say who is leading what, in one line, and ask the person only \"What's mine?\". Then run "
+          f"`{NAME} claim <a short stream name> <folder> ...` for their answer"
+          + (f", avoiding {', '.join(held)}" if held else "")
+          + f". It names this lead {person.lower()}-<stream>-lead and prints the env line every command starts with.")
     return 0
 
 
@@ -747,7 +855,7 @@ def join_missing(config: dict, args) -> list[str]:
     """What this computer lacks to run a builder: a clone of the repo, claude and its login, or gh auth."""
     repo, missing = config["project"]["repo"], []
     if repo.lower() not in origin_url().lower():
-        missing.append(f"a clone of {repo}: run `gh repo clone {repo}`, then `{NAME} join {args.name}` inside it")
+        missing.append(f"a clone of {repo}: run `gh repo clone {repo}`, then `{NAME} join` inside it")
     if shutil.which("claude") is None:
         missing.append("claude: install Claude Code, then sign in with /login")
     else:
@@ -759,14 +867,116 @@ def join_missing(config: dict, args) -> list[str]:
     return missing
 
 
+def pick_lead(config: dict, args, alive: list) -> str:
+    """The lead a joining helper belongs to: `<lead>` when given, by its name or its stream, else the person's one live
+    lead, else, with several, the person's answer to one question naming each lead and its folders."""
+    person = person_of(config, args).lower()
+    mine = [s for s in alive if s.kind == "lead" and (s.person.lower() == person or s.name.startswith(f"{person}-"))]
+    wanted = (getattr(args, "lead", None) or "").lower()
+    if wanted:
+        for status in mine:
+            if status.name in (wanted, f"{person}-{wanted}-{LEAD}"):
+                return status.name
+        raise ColonyError(f"no live lead of yours is {wanted!r}: yours are {', '.join(s.name for s in mine) or 'none'}")
+    if not mine:
+        raise ColonyError(f"no live lead of {person}'s: open a session in the repo and say hi first, which makes a lead")
+    if len(mine) == 1:
+        return mine[0].name
+    choices = "\n".join(f"  {i}. {s.name}: {', '.join(s.folders) or 'the rest of the repo'}"
+                        for i, s in enumerate(mine, 1))
+    if not sys.stdin.isatty():
+        raise ColonyError(f"you have {len(mine)} live leads, so name one: `{NAME} join <lead>`\n{choices}")
+    answer = input(f"Which lead does this computer help?\n{choices}\nNumber or name: ").strip().lower()
+    for i, status in enumerate(mine, 1):
+        if answer in (str(i), status.name, status.name.removeprefix(f"{person}-").removesuffix(f"-{LEAD}")):
+            return status.name
+    raise ColonyError(f"{answer!r} is none of those leads")
+
+
+def free_helper(config: dict, alive: list) -> str:
+    """The next builder name no live helper anywhere, and no wait on this computer, uses: builder-1 up."""
+    from colony import wait
+
+    used = {s.name for s in alive if s.kind == "helper"}
+    n = 1
+    while True:
+        name = f"builder-{n}"
+        state = wait.read_json(wait.state_path(config["project"]["name"], name), {})
+        polled = state.get("polled_at") if isinstance(state, dict) else None
+        busy = isinstance(polled, (int, float)) and time.time() - polled < wait.HEARTBEAT_FRESH
+        if name not in used and not busy:
+            return name
+        n += 1
+
+
 def join(config: dict, args) -> int:
-    """Open a builder on another computer, after saying what that computer still lacks."""
+    """`colony join [<lead>]`: lend this computer to one of the person's leads, as a helper under the next free
+    builder name, after saying what this computer still lacks. With --in-session, the session that ran it becomes the
+    helper on the app's own account, instead of a new session opening."""
+    from colony import presence, wait
+
+    alive, _, note = presence.everyone(config)
+    if note:
+        print(note, file=sys.stderr)
+    args.lead_name = pick_lead(config, args, alive)
+    name = free_helper(config, alive)
+    if getattr(args, "in_session", False):
+        env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
+        print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
+        print(f"Next: start every {NAME} command with `{env}`, load the colony-builder skill, read "
+              f"{DIR}/playbook.md, {section(config, 'Builder')} section, and start `{NAME} wait` in the background. "
+              "Never ask the person anything: your lead gives you cards.")
+        return 0
     missing = join_missing(config, args)
     for item in missing:
         print("missing:", item)
     if missing and not args.dry_run:
         return 1
-    return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
+    print(f"Joining {args.lead_name} as {name}.")
+    return launch(config, args, name, "builder", builder_prompt(name, config))
+
+
+def card_folders(text: str) -> list[str]:
+    """The folders a card's body names on its `Folders:` line, such as `Folders: apps/web/, tools/`."""
+    from colony import presence
+
+    for line in text.splitlines():
+        found = re.match(r"^\W*folders?\W*:\s*(.+)$", line.strip(), re.I)
+        if found:
+            parts = re.split(r"[,\s]+", found[1].replace("`", " "))
+            return [presence.folder(part) for part in parts if part.strip(" ./")]
+    return []
+
+
+def take(config: dict, args) -> int:
+    """`colony take <n>`: a helper takes card n, which must sit in its lead's folders, and marks it In progress with
+    itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'."""
+    from colony import board, presence, wait
+
+    me = os.environ.get(SESSION_ENV, "").lower()
+    lead = os.environ.get(wait.LEAD_ENV, "").lower()
+    if not me or me == LEAD or not lead:
+        raise ColonyError(f"take is for a helper, with {SESSION_ENV} and {wait.LEAD_ENV} set")
+    card = json.loads(wait.gh("issue", "view", str(args.card), "--repo", config["project"]["repo"], "--json", "body"))
+    folders = card_folders(card.get("body") or "")
+    if not folders:
+        raise ColonyError(f"card #{args.card} names no folders: ask {lead} to add a `Folders:` line")
+    own = presence.claimed(lead)
+    if own:
+        outside = [f for f in folders if not any(f.startswith(mine) for mine in own)]
+        if outside:
+            raise ColonyError(f"card #{args.card} touches {', '.join(outside)}, outside {lead}'s folders "
+                              f"({', '.join(own)}): post `question:` to {lead}, and take no card outside them")
+    else:
+        alive, _, _ = presence.everyone(config)
+        held = [(f, g, other) for other, theirs in presence.held_by_others(alive, lead).items()
+                for f in folders for g in theirs if presence.overlaps(f, g)]
+        if held:
+            raise ColonyError(f"card #{args.card} touches {held[0][0]}, which {held[0][2]} holds: post `question:` to "
+                              f"{lead}, and take no card in another lead's folders")
+    board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
+    print(f"#{args.card} is yours, {me}: In progress.")
+    return 0
 
 
 def batch(config: dict, args) -> int:
@@ -820,7 +1030,7 @@ ACCOUNT_HELP = ("the account to open on, instead of the pick ([project] prefer_a
 def build_parser() -> argparse.ArgumentParser:
     """The command line: no command for setup or the lead, then the sessions (join, open, research, spec), the lines
     (wait, say, post), the gate (batch, status, merge), the cycle's, the board, check-docs, the guards', and tools."""
-    from colony import board, cycle, guards, vault
+    from colony import board, cycle, guards, presence, vault
     parser = argparse.ArgumentParser(prog=NAME, description=f"{DISPLAY}: run with no command to open your lead "
                                      f"(or to set up the repo, the first time).")
     parser.add_argument("--version", action="version", version=f"{DISPLAY} {__version__}")
@@ -831,16 +1041,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(run=lead)
     sub = parser.add_subparsers(dest="command", metavar="command")
 
-    for command, run, text in (("join", join, "open a builder on this computer (paste the line the lead prints)"),
-                               ("open", open_builder, "open a builder here in a new cmux workspace (the lead runs it)")):
-        p = sub.add_parser(command, help=text)
-        p.add_argument("name", type=builder_name, help="the builder's name, such as builder-2")
-        p.add_argument("--person", help="whose accounts to use")
-        p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
-        p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
-        if command == "join":
-            p.add_argument("--here", action="store_true", help="open in this terminal even when cmux is on PATH")
-        p.set_defaults(run=run)
+    p = sub.add_parser("join", help="lend this computer to one of your leads, as a helper under the next free name")
+    p.add_argument("lead", nargs="?", help="the lead, by name or stream, such as engine; asked once when you have several")
+    p.add_argument("--in-session", action="store_true",
+                   help="make the session that runs this the helper, on its own account, instead of opening one")
+    p.add_argument("--person", help="whose accounts to use")
+    p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
+    p.add_argument("--here", action="store_true", help="open in this terminal even when cmux is on PATH")
+    p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
+    p.set_defaults(run=join)
+    p = sub.add_parser("open", help="open a helper for the lead that runs it: in cmux, else in the background")
+    p.add_argument("name", type=builder_name, help="the builder's name, such as builder-2")
+    p.add_argument("--person", help="whose accounts to use")
+    p.add_argument("--account", metavar="NAME", help=ACCOUNT_HELP)
+    p.add_argument("--dry-run", action="store_true", help="print the command and the env names, and run nothing")
+    p.set_defaults(run=open_builder)
+    p = sub.add_parser("claim", help="this session becomes the lead <person>-<stream>-lead over folders no live lead "
+                                     "holds")
+    p.add_argument("stream", help="a short name for this lead's stream of work, such as engine")
+    p.add_argument("folders", nargs="*", metavar="folder", help="the folders it holds; none for the rest of the repo")
+    p.add_argument("--person", help="whose session this is")
+    p.set_defaults(run=claim)
+    p = sub.add_parser("take", help="a helper: take a card inside its lead's folders, and mark it In progress")
+    p.add_argument("card", type=int, help="the card's issue number")
+    p.set_defaults(run=take)
 
     for command, run, field, text in (
             ("research", research, "question", "open a researcher on one question, answered with cited sources"),
@@ -882,7 +1106,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
 
-    for module in (cycle, board, vault, guards):
+    for module in (cycle, board, vault, guards, presence):
         module.add_commands(sub)
 
     p = sub.add_parser("hi", help="for a session opened without a task: set up, claim the lead when none runs, or "

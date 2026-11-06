@@ -343,7 +343,7 @@ def read_unread(config: dict, args, me: str) -> list[dict]:
     """The unread cache's lines for the session `me`, taken out of its state file (see `unread`)."""
     from colony import wait
 
-    path = wait.state_path(config["project"]["name"], me)
+    path = wait.state_path(config["project"]["name"], wait.state_name(me))
     state = wait.read_json(path, {})
     state = state if isinstance(state, dict) else {}
     now = time.time()

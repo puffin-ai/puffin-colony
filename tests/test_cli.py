@@ -38,7 +38,7 @@ provider_dollars = 0
 """
 ENV_NAMES = ("COLONY_SESSION COLONY_PERSON CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
              "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-LEAD_PROMPT = "'Read .colony/playbook.md, Lead section, and start.'"
+LEAD_PROMPT = "'Run `colony hi` and do what it prints, then read .colony/playbook.md, Lead section, and start.'"
 
 
 SETTINGS_FLAG = re.compile(r" --settings '[^']*'")
@@ -280,16 +280,25 @@ def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, c
     assert not claude_log.exists()
 
 
+def live_lead(name="ana-main-lead"):
+    """A lead alive on this computer by its heartbeat, as `colony claim` leaves it."""
+    from colony import wait
+
+    wait.beat("demo", name, "first", "token0000000", named=True)
+
+
 def test_join_dry_run_says_what_is_missing_and_shows_the_builder(home, config, capsys):
     gh_log = make_stub(home / "bin", "gh", code=1)
-    assert cli.join(config, builder_args()) == 0
+    live_lead()
+    assert cli.join(config, builder_args(lead=None)) == 0
     out = capsys.readouterr().out
-    assert "missing: a clone of acme/demo: run `gh repo clone acme/demo`, then `colony join builder-2` inside it" in out
+    assert "missing: a clone of acme/demo: run `gh repo clone acme/demo`, then `colony join` inside it" in out
     assert "missing: claude: install Claude Code" in out
     assert "missing: gh auth: run `gh auth login`" in out
     assert gh_log.read_text().split() == ["auth", "status"]
-    assert f"command: claude --remote-control demo-builder-2 --model m --effort medium --permission-mode auto {builder_prompt('builder-2')}" in no_settings(out)
-    assert f"env: {ENV_NAMES}\n" in out
+    assert "Joining ana-main-lead as builder-1." in out
+    assert f"command: claude --remote-control demo-builder-1 --model m --effort medium --permission-mode auto {builder_prompt('builder-1')}" in no_settings(out)
+    assert f"env: {ENV_NAMES.replace('COLONY_PERSON', 'COLONY_PERSON COLONY_LEAD')}\n" in out
 
 
 def test_join_refuses_to_open_while_the_account_is_not_signed_in(home, host, config, capsys):
@@ -297,9 +306,11 @@ def test_join_refuses_to_open_while_the_account_is_not_signed_in(home, host, con
     make_stub(home / "bin", "gh")
     claude_log = make_stub(home / "bin", "claude")
     cmux_log = make_stub(home / "bin", "cmux")
-    assert cli.join(config, builder_args(dry_run=False)) == 1
+    live_lead()
+    assert cli.join(config, builder_args(lead=None, dry_run=False)) == 1
     out = capsys.readouterr().out
-    assert out.strip() == "missing: the claude login for account first: open claude on that account and run /login"
+    assert out.strip().splitlines()[-1] == \
+        "missing: the claude login for account first: open claude on that account and run /login"
     assert not claude_log.exists() and not cmux_log.exists()
 
 
@@ -310,12 +321,14 @@ def test_join_opens_the_builder_once_nothing_is_missing(home, host, config, caps
     cmux_log = make_stub(home / "bin", "cmux")
     (home / "first").mkdir()
     (home / "first" / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "ana@example.test"}}))
-    assert cli.join(config, builder_args(dry_run=False)) == 0
+    live_lead()
+    assert cli.join(config, builder_args(lead=None, dry_run=False)) == 0
     out = capsys.readouterr().out
-    assert "missing" not in out and "Opening demo-builder-2 on account first" in out
+    assert "missing" not in out and "Opening demo-builder-1 on account first" in out
     args = cmux_log.read_text().splitlines()
-    assert args[:3] == ["new-workspace", "--name", "demo-builder-2"]
-    assert "COLONY_SESSION=builder-2" in args and "COLONY_PERSON=ana" in args
+    assert args[:3] == ["new-workspace", "--name", "demo-builder-1"]
+    assert "COLONY_SESSION=builder-1" in args and "COLONY_PERSON=ana" in args
+    assert "COLONY_LEAD=ana-main-lead" in args  # a helper belongs to one lead
 
 
 def test_open_dry_run_opens_the_builder_in_cmux(home, config, capsys):
@@ -420,9 +433,9 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "tier", "needs",
-            "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "hi", "setup", "skill-install",
-            "tools")
+COMMANDS = ("join", "open", "claim", "take", "research", "spec", "wait", "say", "post", "batch", "status", "merge", "tier", "needs",
+            "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "who", "hi", "setup",
+            "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

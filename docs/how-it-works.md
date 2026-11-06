@@ -125,7 +125,7 @@ Each card has up to 3 done-when results, the folders it touches, and a predictio
 colony open builder-2
 ```
 
-`colony open` uses cmux when it can, and otherwise starts the builder as a background session you can follow in the Claude app. For more builders than one machine should run, the lead prints a `colony join <name>` line for you to paste on another computer. On first use there, `join` says what is missing: a clone of the repo, the `claude` login for the account it picked, or `gh auth`.
+`colony open` uses cmux when it can, and otherwise starts the builder as a background session you can follow in the Claude app. For more builders than one machine should run, the lead looks at `colony who` for a computer whose account has room, and asks you to run `colony join` there. It takes the next free builder name, and joins your one live lead, or asks once which one. On first use there, `join` says what is missing: a clone of the repo, the `claude` login for the account it picked, or `gh auth`.
 
 A builder's name is lowercase letters, digits, dots and dashes, such as `builder-2`, and it can't be `lead`. Each builder starts with:
 

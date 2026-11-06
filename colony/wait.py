@@ -69,6 +69,7 @@ AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
 
 
+LEAD_ENV = f"{cli.NAME.upper()}_LEAD"  # the lead's name a lead and its helpers carry, such as serdar-engine-lead
 HEARTBEAT_FRESH = 120  # a lead's heartbeat under 2 minutes old is alive; older, any session may take the lead
 TOKEN_ENV = f"{cli.NAME.upper()}_LEAD_TOKEN"  # which claim a lead's session holds, so its wait refreshes its own beat
 
@@ -118,14 +119,15 @@ class LeadTaken(cli.ColonyError):
     """Another session holds the lead: its heartbeat is fresh and carries another token."""
 
 
-def heartbeat_path(project: str) -> Path:
-    """The lead's heartbeat on this computer, ~/.colony/<project>/lead.heartbeat."""
-    return state_path(project, cli.LEAD).with_suffix(".heartbeat")
+def heartbeat_path(project: str, name: str = "") -> Path:
+    """A lead's heartbeat on this computer: ~/.colony/<project>/<lead name>.heartbeat for a named lead
+    ($COLONY_LEAD), and lead.heartbeat for a lead from before lead names."""
+    return state_path(project, name or cli.LEAD).with_suffix(".heartbeat")
 
 
-def read_heartbeat(project: str) -> dict | None:
-    """The lead's heartbeat, as {session, account, token, at}, or None when it is missing or unreadable."""
-    beat = read_json(heartbeat_path(project), None)
+def read_heartbeat(project: str, name: str = "") -> dict | None:
+    """A lead's heartbeat, as {session, account, token, at}, or None when it is missing or unreadable."""
+    beat = read_json(heartbeat_path(project, name), None)
     if not isinstance(beat, dict) or not isinstance(beat.get("at"), (int, float)):
         return None
     return beat
@@ -142,9 +144,9 @@ def new_token() -> str:
 
 
 @contextmanager
-def heartbeat_lock(project: str):
+def heartbeat_lock(project: str, name: str = ""):
     """Hold the heartbeat's file lock, so a read, check and write of the heartbeat is one step."""
-    path = heartbeat_path(project).with_suffix(".lock")
+    path = heartbeat_path(project, name).with_suffix(".lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
@@ -154,17 +156,19 @@ def heartbeat_lock(project: str):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def beat(project: str, session: str, account: str, token: str, now: float | None = None) -> dict:
-    """Write the lead's heartbeat and return it: claim it when it is missing or stale, refresh it when it holds
-    `token`. Raise LeadTaken when another token's heartbeat is fresh."""
+def beat(project: str, session: str, account: str, token: str, now: float | None = None, named: bool = False) -> dict:
+    """Write a lead's heartbeat and return it: claim it when it is missing or stale, refresh it when it holds
+    `token`. Raise LeadTaken when another token's heartbeat is fresh. A `named` lead ($COLONY_LEAD) keeps its own
+    heartbeat, <session>.heartbeat, so several leads live side by side; a lead from before names keeps lead.heartbeat."""
     now = time.time() if now is None else now
-    with heartbeat_lock(project):
-        held = read_heartbeat(project)
+    name = session if named else ""
+    with heartbeat_lock(project, name):
+        held = read_heartbeat(project, name)
         if fresh(held, now) and held.get("token", "") != token:
             raise LeadTaken(f"{held.get('session', 'a lead')} on account {held.get('account', 'unknown')} holds the "
                             f"lead: its heartbeat is {int(now - held['at'])} s old")
         mine = {"session": session, "account": account, "token": token, "at": now}
-        write_json(heartbeat_path(project), mine)
+        write_json(heartbeat_path(project, name), mine)
     return mine
 
 
@@ -345,14 +349,14 @@ def add_stale(state: dict, stale) -> None:
 
 
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         stale=None, heartbeat=None) -> int:
+         stale=None, heartbeat=None, status=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
     lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr."""
     clock = clock or CLOCK
-    path = state_path(project, me.name)
+    path = state_path(project, state_name(me.name))
     state = read_json(path, {})
     state.setdefault("since", (datetime.now(timezone.utc) - LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
     state.setdefault("pending", [])
@@ -373,6 +377,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         state["polled_at"] = time.time()
         if heartbeat is not None:
             keep_beat(heartbeat)
+        if status is not None:
+            status()  # edits the session's status comment, at most every 5 minutes, and never raises
         drop_shown(path, state, listed)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
@@ -389,9 +395,21 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
 
 
 def lead_name(config: dict, args) -> str:
-    """The lead's name on the coordination issue, `<person>-lead`, such as serdar-lead. In hack mode a person is
-    their GitHub login, so the lead is `<login>-lead`."""
-    return f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
+    """The lead's name: $COLONY_LEAD, such as serdar-engine-lead, which `colony claim` gives a lead and its helpers
+    carry. A lead from before lead names is `<person>-lead`, such as serdar-lead; in hack mode a person is their
+    GitHub login, so it is `<login>-lead`."""
+    return os.environ.get(LEAD_ENV, "").lower() or f"{cli.person_of(config, args).lower()}-{cli.LEAD}"
+
+
+def state_name(me: str) -> str:
+    """The name a session's state files go under: a named lead's own name, so leads on one computer keep apart, and
+    otherwise the session's name ($COLONY_SESSION)."""
+    return os.environ[LEAD_ENV].lower() if me == cli.LEAD and named() else me
+
+
+def named() -> bool:
+    """Whether this session carries a lead's name ($COLONY_LEAD): a lead from `colony claim`, or one of its helpers."""
+    return bool(os.environ.get(LEAD_ENV))
 
 
 def hack(config: dict) -> bool:
@@ -437,9 +455,11 @@ def lead_session(config: dict, name: str) -> Session:
     alone, since every person's lead reads the one board), with the people's logins, the cards the batch waits on,
     and its person's logins for @<login> lines."""
     people = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
-    cards = read_json(state_path(config["project"]["name"], f"{cli.LEAD}-waiting"), [])
+    cards = read_json(state_path(config["project"]["name"], f"{state_name(cli.LEAD)}-waiting"), [])
     person = name.removesuffix(f"-{cli.LEAD}") if name.endswith(f"-{cli.LEAD}") else ""
-    names = {name} if hack(config) else {cli.LEAD, name}
+    if named():  # serdar-engine-lead: the person is the first part, and its helpers address it by name alone
+        person = name.split("-", 1)[0]
+    names = {name} if hack(config) or named() else {cli.LEAD, name}
     logins = person_logins(config, person) if person else frozenset()
     return Session(cli.LEAD, frozenset(names), people, frozenset(str(card) for card in cards), logins)
 
@@ -447,7 +467,10 @@ def lead_session(config: dict, name: str) -> Session:
 def builder_session(config: dict, name: str, person: str = "") -> Session:
     """A builder as its wait sees it: answering to its name, and taking the lines its lead signed, `lead`, or in hack
     mode, where every person's builders read the one board, its person's `<person>-lead`."""
-    leads = {f"{person.lower()}-{cli.LEAD}"} if hack(config) and person else {cli.LEAD}
+    if named():
+        leads = {os.environ[LEAD_ENV].lower()}  # a helper belongs to one lead, and takes that lead's lines alone
+    else:
+        leads = {f"{person.lower()}-{cli.LEAD}"} if hack(config) and person else {cli.LEAD}
     return Session(name, frozenset({name}), leads=frozenset(leads))
 
 
@@ -472,11 +495,14 @@ def run(config: dict, args, clock=None) -> int:
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
+    from colony import presence
+
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
-        return wait(repo, project, session(config, args, me), clock=clock)
-    waiting_path = state_path(project, f"{cli.LEAD}-waiting")
+        status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
+        return wait(repo, project, session(config, args, me), clock=clock, status=status)
+    waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
     if not hack(config):
@@ -486,9 +512,10 @@ def run(config: dict, args, clock=None) -> int:
             print(f"{cli.NAME} wait: no coordination issue yet, the next wait tries again: {e}", file=sys.stderr)
     stale = stale_check(config) if config.get("features", {}).get("board", True) else None
     name, account, token = lead_name(config, args), cli.current_account(config), os.environ.get(TOKEN_ENV, "")
-    heartbeat = functools.partial(beat, project, name, account, token)
-    keep_beat(heartbeat)  # before any poll, so a second lead stops at once
-    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat)
+    heartbeat = functools.partial(beat, project, name, account, token, named=named())
+    keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
+    status = presence.keeper(config, args, name, "lead") if named() else None
+    return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:

@@ -74,11 +74,13 @@ A session's first wait reads the last hour, so a start line the lead posted whil
 
 The wait guard hook refuses a foreground sleep or poll loop, so an agent can't wait any other way. See [safety.md](safety.md#hooks).
 
-## The lead's heartbeat
+## Presence: heartbeats and status comments
 
-The lead's wait also writes `~/.colony/<project>/lead.heartbeat` at each poll, every 15 seconds. It holds the lead's name, such as `serdar-lead`, its account, a token, and the time. Under 2 minutes old, it means a lead is alive on this computer. Then a session you open yourself and greet gets an offer from `colony hi`: be a builder, or help you. When the heartbeat is older or missing, `colony hi` claims the lead for that session by writing the heartbeat. A session `colony` opened has `COLONY_SESSION` set, and keeps its role for good.
+Every session a person opens is a lead, named `<person>-<stream>-lead`, such as `serdar-engine-lead`, with its folders in `.colony/leads.toml`. Helpers belong to one lead, and carry its name in `$COLONY_LEAD`. See the playbook's Leads and helpers section.
 
-The heartbeat is also the lock. It is written under a file lock, and only when it is missing, stale, or holds the writer's own token, `$COLONY_LEAD_TOKEN`. So `colony` refuses to open a second lead, and a lead's wait that finds another lead's fresh heartbeat stops with that lead's name. `colony status` prints the lead's name, account and heartbeat age.
+- **On this computer,** a lead's wait writes `~/.colony/<project>/<lead>.heartbeat` at each poll, every 15 seconds, with its name, account, a token and the time. Under 2 minutes old, the lead is alive. The heartbeat is also the lock on that name: it is written under a file lock, and only when it is missing, stale, or holds the writer's own token, `$COLONY_LEAD_TOKEN`. A lead from before lead names keeps `lead.heartbeat`.
+- **Across computers,** each lead and helper keeps one status comment on the coordination issue, or the board in hack mode, edited in place every 5 minutes: name, person, computer, account, folders, and its accounts' 5-hour and weekly room. It never adds a second comment. A status older than 15 minutes counts as gone.
+- `colony who` lists every live lead and helper. `colony status` prints this computer's leads with their account and heartbeat age.
 
 ## The quiet lead
 

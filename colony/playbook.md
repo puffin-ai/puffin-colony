@@ -2,6 +2,17 @@
 
 The lead, the builders, the spec agent and the researcher follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
 
+## Leads and helpers
+
+Every session a person opens and types into is a lead. It never asks what it is. Every session `colony` opens is a helper, has `COLONY_SESSION` set, and stays a helper for good.
+
+- **A new session** runs `colony hi` first. With no lead alive, it leads `<person>-main-lead` over the whole repo. With leads alive, it names them and their folders in one line, asks the person only "What's mine?", and claims the answer with `colony claim <stream> <folder> ...`, avoiding their folders. A lead is named `<person>-<stream>-lead`, and its folders are in `.colony/leads.toml`. A lead with no folders holds the rest of the repo.
+- **"join":** a session whose first message is `join` or `join <lead>` runs `colony join [<lead>] --in-session` and becomes that lead's helper in the app, on the app's account.
+- **Presence.** Each lead and helper keeps one status comment on the coordination issue (the board in hack mode), which its `colony wait` edits in place every 5 minutes: its name, person, computer, account, folders and its accounts' room. `colony who` lists every live lead and helper across people and computers. A status older than 15 minutes counts as gone.
+- **Each helper belongs to one lead,** and works only in that lead's folders, so its context stays relevant. `colony open <name>` opens a helper for the lead that runs it. On another computer, `colony join [<lead>]` takes the next free builder name, and asks once which lead when the person has several. A helper takes a card with `colony take <n>`, which refuses a card outside its lead's folders. It may run cards back to back in its lead's area, and starts fresh only past about half of its context window.
+- **Leads talk to leads,** on the coordination issue with `colony say`, and never to another lead's helpers.
+- **Accounts.** `colony who` shows each computer's accounts' room: 5-hour and weekly use, and when each resets. Tell the person where there is room, such as "PC 2's admin account has room, run `colony join` there". Never start anything on another computer yourself.
+
 ## Lines
 
 Agents talk only in lines. A line is one comment on a card (a GitHub issue), under 300 characters:
@@ -82,12 +93,12 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 In hack mode, follow the Hack section instead.
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which tells every new session a lead runs, and which holds the lead for you. When it says another session holds the lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
+You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
 
 1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is a GitHub issue titled `<builder>: <what>`, with up to 3 done-when results, the folders it touches, and one prediction line, size S, M or L and minutes: `gh issue create --title "<builder>: <what>" --body "<task, done-when list, folders, and predicted: S, 20 min>"`. Then `colony board set <n> Status="To do" Tier=<tier>`. Give cards that touch the same folders to the same builder.
-2. Open builders as the cards need them. Up to `max_builders` (default 4) run on this machine: `colony open <name>`. For more, print `colony join <name>` and ask the person to paste it on another computer.
+2. Open helpers as the cards need them. Up to `max_builders` (default 4) run on this machine: `colony open <name>`. For more, look at `colony who` for a computer whose account has room, and ask the person to run `colony join` there.
 3. Hand a card out with a line on it, `colony post <n> <builder> "start this card"`, and `colony board set <n> Status="In progress" Builder=<builder> Branch=<builder>/<n> Account=<account>`.
 4. When a `done` line arrives, run `colony tier --head origin/<branch>` (see Tiers), set `Status="In review"`, and merge that builder's branch into the batch so far, so a conflict shows now:
    - First card of a batch: `git fetch origin && git worktree add --detach ../next-<batch> origin/{base}`. `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day.

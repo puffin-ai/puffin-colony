@@ -1,17 +1,20 @@
 # Commands
 
-You type `colony`, and `colony join <name>` when the lead asks. The agents and the hooks run the rest. Every command finds the repo with `git rev-parse --show-toplevel`, so it works from any folder in the clone. `colony <command> --help` prints its flags.
+You open a session and say hi, and run `colony join` on a computer you lend. The agents and the hooks run the rest. Every command finds the repo with `git rev-parse --show-toplevel`, so it works from any folder in the clone. `colony <command> --help` prints its flags.
 
 ## Sessions
 
 | Command | What it does |
 | --- | --- |
 | `colony` | Runs setup when the repo has no `.colony/colony.toml`, and opens your lead every time after. It opens no second lead while one's heartbeat is fresh. |
-| `colony hi` | For a session you opened without a task, which the line setup adds to `CLAUDE.md` runs: with no `.colony/colony.toml`, it says to set Colony up in that session. With no lead running, it claims the lead for that session. With a lead running, it offers a builder's name, or help. A session `colony` opened keeps its role. |
+| `colony hi` | What a session you opened runs first, which the line setup adds to `CLAUDE.md` asks for. With no `.colony/colony.toml`, it sets Colony up in that session. Every session a person opens is a lead: with no lead alive, it leads `<person>-main-lead` over the whole repo; with leads alive, it lists them and their folders, and the session asks you only "What's mine?". A session `colony` opened stays a helper. |
+| `colony claim <stream> [folder …]` | This session becomes the lead `<person>-<stream>-lead` over the folders, which no live lead may hold already. No folders: the rest of the repo. It writes `.colony/leads.toml`, the heartbeat and the status comment, and prints the env line. |
+| `colony who` | Every live lead and helper, across people and computers: name, person, computer, account, folders, and each account's 5-hour and weekly room with reset times. A status older than 15 minutes counts as gone. |
 | `colony setup [--print]` | Runs setup in this terminal, as `colony` does the first time. `--print` prints the setup prompt instead, for a session already open to follow. |
 | `colony skill-install [--config-dir <dir>]` | Copies the `colony-setup` skill into a Claude settings folder, `$CLAUDE_CONFIG_DIR` or `~/.claude` by default, so a session in any repo can set Colony up. |
-| `colony join <name>` | Opens a builder on this computer, after saying what it lacks: a clone, the `claude` login, or `gh auth`. |
-| `colony open <name>` | Opens a builder on this computer, in cmux or as a background session. The lead runs it. |
+| `colony join [<lead>] [--in-session]` | Lends this computer to one of your leads, as a helper under the next free builder name, after saying what it lacks: a clone, the `claude` login, or `gh auth`. With one live lead it joins that one; with several it asks once, or `colony join engine` names it. `--in-session` makes the session that runs it the helper, as typing "join" in the app does. |
+| `colony open <name>` | Opens a helper for the lead that runs it, in cmux or as a background session. |
+| `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
 | `colony spec "<feature>"` | Opens the spec agent on a FEATURE, with `.colony/prompts/spec.md` as its first prompt. The lead runs it. |
 | `colony tools [tool …]` | Prints the tools setup offers, each with its default, or writes the named ones: `playwright`, `context7`, `role-skills`, `starter-skills`, `ui-design`, `test-first`. Setup runs it. |

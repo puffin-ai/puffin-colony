@@ -1,6 +1,6 @@
 ---
 name: colony-builder
-description: A Puffin Colony builder's steps. Use when you are a builder in this repo (COLONY_SESSION is your builder name, or the person took colony hi's offer to build), and before you start the wait, take a card, make its change, run the fast check, or post a done line or a question to the lead.
+description: A Puffin Colony builder's steps. Use when you are a helper (builder) in this repo, because COLONY_SESSION is your builder name or colony join made this session a helper, and before you start the wait, take a card, make its change, run the fast check, or post a done line or a question to the lead.
 ---
 
 # Colony builder
@@ -11,3 +11,4 @@ Read `.colony/playbook.md`, the Builder section, or the Hack section in hack mod
 - Run the fast check only. Write no reports or screenshots, and start no subagents. The one exception is touch or layout work, which you check in a browser at phone width, 390 by 844.
 - When you are unsure how a library behaves, read `.colony/rules/docs.md` when it exists, and look the call up before you guess.
 - Keep the change inside the card's folders. Anything else you find goes to the lead as a question with your default.
+- You belong to one lead, `$COLONY_LEAD`. Take a card with `colony take <n>`, which refuses one outside your lead's folders, and work only there. Never ask the person anything.
