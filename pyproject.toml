@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,11 +7,37 @@ name = "puffin-colony"
 dynamic = ["version"]
 description = "One command that runs a repo's whole software life cycle with Claude Code: a lead, builders, and a gate of checks, review and a browser walk."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Puffin Studios, Inc." }]
 requires-python = ">=3.11"
 dependencies = []
+keywords = ["claude", "claude-code", "agents", "ai", "automation", "code-review", "developer-tools", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/puffin-ai/puffin-colony"
+Documentation = "https://github.com/puffin-ai/puffin-colony/tree/main/docs"
+Repository = "https://github.com/puffin-ai/puffin-colony"
+Issues = "https://github.com/puffin-ai/puffin-colony/issues"
 
 [project.scripts]
 colony = "colony.cli:main"
+puffin-colony = "colony.cli:main"
 
 [tool.setuptools]
 packages = ["colony"]

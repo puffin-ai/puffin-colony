@@ -555,6 +555,28 @@ def skill_install(args) -> int:
     return 0
 
 
+FIRST_RUN = ".colony-first-run"  # the marker, in the settings folder, that says the first run installed the skill
+
+
+def first_run() -> None:
+    """The first time `colony` runs on a computer, install the colony-setup skill as `colony skill-install` does, so a
+    plain hi works in a repo that has never used Colony. The marker makes it happen once: a skill the person removes
+    stays removed. A computer without Claude's settings folder yet is skipped, and tried again on the next run."""
+    folder = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    marker = folder / FIRST_RUN
+    if not folder.is_dir() or marker.exists():
+        return
+    target = folder / "skills" / SETUP_SKILL
+    try:
+        if not target.exists():
+            _copy_tree(resources.files(__package__).joinpath("skills", SETUP_SKILL), target)
+            print(f"{NAME}: installed the {SETUP_SKILL} skill in {target}/, so a hi in any repo can set {DISPLAY} up",
+                  file=sys.stderr)
+        marker.write_text(f"{__version__}\n")
+    except OSError:
+        pass  # a settings folder we cannot write to never stops the command the person ran
+
+
 def tools_list() -> str:
     """The one yes-or-no list of tools setup shows the person, with each tool's default and what it installs."""
     lines = ["Tools for this repo, one yes or no each, with the default in brackets:"]
@@ -927,6 +949,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     """Parse the command line and run one command: setup when the repo has no .colony/colony.toml, else the one asked."""
     args = build_parser().parse_args(argv)
+    if not getattr(args, "dry_run", False):
+        first_run()
     try:
         if args.command is None and not config_path().exists():
             return setup(args)
