@@ -27,7 +27,7 @@ Yes. `colony --dry-run` prints the setup plan or the lead's command line. `colon
 It stops when the checks fail the same way two rounds in a row, when a fixer commits nothing, when a merge conflicts outside generated files, or after `max_rounds` rounds. It commits its reports first, and the lead turns the cause into a new card.
 
 **What if a builder goes quiet?**
-A card In progress whose Last update on the board is over 2.5 hours old gives the lead a `stale:` line, unless its State is usage limit. The lead looks at that builder's session. See [cycle.md](cycle.md#the-board).
+A card In progress whose Last update on the board is over 2.5 hours old gives the lead a `stale:` line. The board has no State, so the lead looks at that builder's session to tell a usage limit from a stop. After 7 days with no update, `colony tidy` closes the card, or moves it to future-work when its work never started. See [cycle.md](cycle.md#the-board).
 
 ## Numbers from the first batches
 

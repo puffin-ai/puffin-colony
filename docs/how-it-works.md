@@ -13,7 +13,7 @@ This is Startup, the whole system. Hack and Solo turn parts of it off, and [Hack
 | **Builders** | Interactive Claude Code sessions, each with a name such as `builder-2`. Each builds one card at a time on its own branch. |
 | **The spec agent and the researcher** | Sessions the lead opens with `colony spec` for a FEATURE and `colony research` for an unknown. They write pages in the vault, not code. |
 | **Cards** | GitHub issues titled `<builder>: <what>`, each with up to 3 done-when results, the folders it touches, and a prediction. |
-| **The board** | A GitHub Project that shows each card's Status, Builder, Tier, State and Last update. |
+| **The board** | A GitHub Project that shows each card's Status, Lead, Helper, Size and Last update, and no other field. `colony tidy` keeps it short. |
 | **Lines** | One-sentence issue comments, `for <name>: … (from <name>)`, that the agents use to talk. See [messages.md](messages.md). |
 | **Your Needs issue** | `Needs <you>`, where the lead posts each decision only you make, with its default. |
 | **The gate** | `colony batch`. It runs the full checks, a fresh reviewer, a browser walk and fixers, round by round, until 0 problems are open. |
@@ -110,12 +110,11 @@ The details are in [cycle.md](cycle.md#tiers).
 ## 5. The lead writes cards
 
 ```sh
-gh issue create --title "builder-2: dark mode switch in settings" \
-  --body "<task, done-when list, folders, and predicted: S, 20 min>"
-colony board set 41 Status="To do" Tier=SMALL
+colony card new "builder-2: dark mode switch in settings" \
+  --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S
 ```
 
-Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them, because finding code is a large part of a small change.
+That opens the issue and puts it on the board as To do, with the lead and the size. A card is an issue only when its work starts this week: an idea for later is one line, `colony idea "<the idea>"`, in the future-work register. `colony card new` refuses past 10 open cards per lead, and refuses a duplicate of an open card. Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them, because finding code is a large part of a small change.
 
 ## 6. Builders build
 
@@ -133,11 +132,11 @@ A builder's name is lowercase letters, digits, dots and dashes, such as `builder
 Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 ```
 
-**The lead hands out a card** with `colony post 41 builder-2 "start this card"`, and sets the card's Status, Builder, Branch and Account on the board.
+**The lead hands out a card** with `colony post 41 builder-2 "start: this card"`, and sets the card's Status and Helper on the board.
 
 **Each builder then:**
 1. keeps `colony wait` running in the background all session;
-2. sets `State=working` on the board, and keeps State and Last update current as it works;
+2. stamps the card's Last update on the board, `colony board set 41 Last_update=now`, at the start and after each commit: progress goes there, never in a line;
 3. makes the change in its own worktree and branch, `../builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
 4. runs the fast check and fixes what it reports;
 5. writes a test for a bug fix or new logic (a style change needs none), and checks touch or layout work in a browser at phone width, 390×844;
@@ -145,7 +144,7 @@ Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 7. commits, pushes its branch, and posts `colony post 41 lead "done, builder-2/41 pushed, <the fast check's last line>"`;
 8. takes the next card at once.
 
-Builders run at medium effort by default, write no reports, and ask no person anything. When unsure, a builder sends the lead a question with its own default and keeps building on that default.
+Builders run at medium effort by default, write no reports, and ask no person anything. When unsure, a builder sends the lead a question with its own default, `question: <the question>? I'm going with <default>`, and keeps building on that default.
 
 ## 7. The lead merges each done card
 
@@ -239,7 +238,7 @@ The merge is yours. In Startup and Solo, Colony never merges into your base bran
 2. **Each person runs `colony`** on their own machine and gets a lead named `<login>-lead`. The leads are peers, and each may open builders. The lead and its builders follow the playbook's Hack section, which has no cards: the lead hands out tasks as lines on the board, and each builder lands its own branch with `colony merge`.
 3. **Every line goes to the board,** not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds the prefix. A post is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
 4. **Posts reach the agent between prompts.** `colony wait` keeps the lines addressed to this session that it hasn't printed under `unread` in `~/.colony/<project>/<session>.json`. When you send a prompt, the prompt hook prints them, empties `unread`, and makes no network call. When `colony wait` isn't running, the hook makes one ETag-cached `gh api` call, at most once per 30 seconds. Where Agent Relay runs, a post also arrives at once.
-5. **The gate is the fast check.** `colony merge <branch>` fetches, merges the branch into the base locally, and runs the fast check. It pushes the base only when the check passes and `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. It never force-pushes. Before the demo, `colony batch --review` adds one fresh reviewer.
+5. **The gate is the fast check.** `colony merge <branch>` fetches, merges the branch into the base locally, and runs the fast check. It pushes the base only when the check passes and `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. It never force-pushes. Before the demo, `colony batch --review --name <n>`, with no `--card`, has one fresh reviewer read the demo build, `origin/<base>` as it stands, and posts the open count and the report's link on the board.
 
 Codex and other agents take part through `tools/board`. The step-by-step guide is [hackathon.md](hackathon.md).
 

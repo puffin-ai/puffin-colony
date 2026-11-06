@@ -31,7 +31,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 - **The board issue.** Setup opens an issue titled `Board: <project>`, pins it, and writes its number to `[messages] board`. Every line goes there, not to cards. A post starts with `[<name>'s <agent>]`, such as `[Serdar's Claude]`, and `colony post` adds that prefix itself.
 - **Addresses.** A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead.
 - **The prompt hook.** When you send your lead a prompt, the hook first prints the new posts addressed to it. Where Agent Relay runs, a post also arrives at once.
-- **The fast check gate.** `colony merge <branch>` merges the branch into the base and pushes it after a passing fast check, when `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. `colony batch --review` adds one fresh reviewer, for the last hour before the demo.
+- **The fast check gate.** `colony merge <branch>` merges the branch into the base and pushes it after a passing fast check, when `[gate] merge_after_fast_check = true`. Otherwise it opens a PR. `colony batch --review --name <n>`, with no `--card`, has one fresh reviewer read the demo build, for the last hour before the demo.
 - **`tools/board`.** Setup copies a small shell script into the repo, so Codex or any agent with `gh` can read and post on the board in the same format.
 
 **Off:** the knowledge vault, specs, research, the card board, the browser walk and the retro. The rules are a short hack core, not a preset.

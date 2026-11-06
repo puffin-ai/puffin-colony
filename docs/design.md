@@ -48,7 +48,7 @@ Setup reads the repo and fills in what it can without asking: the stack (package
 **Lead.** It talks with the person and runs the life cycle:
 1. It turns each request into cards: GitHub issues titled `<builder>: <what>`, each with up to 3 done-when results and its folders.
 2. It opens builders on demand. Up to `max_builders` (colony.toml, default 4) run on this machine through `colony open <name>`. For more, it prints `colony join <name>` for the person to paste on another computer.
-3. It hands a card out with a line on the card, `for <builder>: start this card (from lead)`.
+3. It hands a card out with a line on the card, `for <builder>: start: this card (from lead)`.
 4. As each `done` line arrives, it merges that builder's branch into the batch branch.
 5. Every few cards, or when the person asks, it runs `colony batch`, which loops until 0 open problems.
 6. It tells the person the PR link, and asks only what it can't decide: money, secrets, deleting data, new dependencies, merging.

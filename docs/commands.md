@@ -21,10 +21,10 @@ You type `colony`, and `colony join <name>` when the lead asks. The agents and t
 | Command | What it does |
 | --- | --- |
 | `colony wait [--waiting-on N,N]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. |
-| `colony post <card> <name> "<sentence>" [--urgent]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. `--urgent` starts the sentence with `urgent:`. In Hack, the line goes to the board issue, starting with `[<name>'s <agent>]`. |
-| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `burak-lead`, on the `Colony: coordination` issue, or on the board in Hack. |
+| `colony post <card> <name> "<sentence>" [--urgent]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. `--urgent` starts the sentence with `urgent:`. In Hack, the line goes to the board issue, starting with `[<name>'s <agent>]`. It refuses a builder's line that isn't `done`, `question:`, `blocked:` or `urgent:`, and a lead's line to a builder that isn't `start:`, `answer:` or `urgent:`. |
+| `colony say <lead-name> "<sentence>"` | A lead's line for another lead, such as `burak-lead`, on the `Colony: coordination` issue, or on the board in Hack. It is free text, under 300 characters. |
 
-Both take `@<login>` as the recipient, which reaches that person's lead, and `@all` in the sentence reaches every session. A line is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`.
+Both take `@<login>` as the recipient, which reaches that person's lead, and `@all` in the sentence reaches every session. A lead's line for `@<login>` or `@all` is free text. A line is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`.
 
 ## The cycle
 
@@ -32,11 +32,14 @@ Both take `@<login>` as the recipient, which reaches that person's lead, and `@a
 | --- | --- |
 | `colony tier [--base B] [--head H] [--feature] [--why]` | Prints TINY, SMALL or FEATURE for a branch's diff, then its risk list. `--why` prints each reason, and `--feature` forces FEATURE. |
 | `colony needs "<question>" --default "<x>" [--person p]` | The lead posts a decision, with its default, on the person's `Needs <Person>` issue. |
-| `colony board init` | Makes the GitHub Project for the cards, with its fields, or finds it and adds any field it lacks. |
-| `colony board set <card> Field=value …` | Adds the card to the board and sets its fields. It stamps Last update, and an empty value clears a field. |
+| `colony card new "<title>" --body … --size S\|M\|L [--lead <name>]` | Makes a card and puts it on the board as To do, with its Lead and Size. It refuses at the lead's `[limits] open_cards_per_lead` open cards (10), and on a duplicate of an open card, naming its number. |
+| `colony idea "<one line>"` | Appends a dated line to the future-work register, `<vault>/future-work.md`, or `.colony/future-work.md` with no vault. An idea is never an issue. |
+| `colony board init` | Makes the GitHub Project for the cards, with its five fields, Status, Lead, Helper, Size and Last update, or finds it and adds any of them it lacks. |
+| `colony board set <card> Field=value …` | Adds the card to the board and sets its fields. It stamps Last update, an empty value clears a field, and it refuses a field outside the five. |
+| `colony tidy [--dry-run]` | Closes or moves to future-work each card with no update for 7 days, rotates the coordination and Needs issues at 200 comments, archives items Done for 7 days, turns on delete-branch-on-merge, and removes closed cards' clean worktrees. Prints the counts before and after. `--dry-run` prints the plan and changes nothing. Every `colony batch` ends with it. |
 | `colony handover --decisions … --open … --next …` | The lead posts its handover on the coordination issue, and prints the command for a fresh lead. |
 | `colony handover --read` | Prints this lead's last handover. |
-| `colony batch --name <n> --card N=BRANCH …` | Takes the cards through the gate loop to one PR. `--from <branch>` builds on another branch than `origin/<base>`. |
+| `colony batch --name <n> --card N=BRANCH …` | Takes the cards through the gate loop to one PR, whose body says `Closes #N` for each card, then runs `colony tidy`. `--from <branch>` builds on another branch than `origin/<base>`. |
 | `colony status [--name <n>]` | Shows this computer's lead, with its name, account and heartbeat age, then a batch's round, open problems, walk, running steps and minutes. Without `--name`, the newest batch. |
 | `colony stats --card N[=BRANCH] … [--base B]` | Prints each card's predicted and actual minutes and tokens, as a table with a total row. |
 | `colony retro --name <batch>` | Runs the retro agent on a batch's reports, and opens a PR when it finds a lesson. |
@@ -46,6 +49,7 @@ Both take `@<login>` as the recipient, which reaches that person's lead, and `@a
 | Command | What it does |
 | --- | --- |
 | `colony merge <branch>` | Hack only, with `[gate] merge_after_fast_check = true`. Fetches, merges the branch into the base locally, runs the fast check, and pushes the base only when the check passes. Otherwise it opens a PR. It never force-pushes. |
+| `colony batch --review --name <n>` | Hack only, with no `--card`, for the last hour before the demo. One fresh reviewer reads `origin/<base>` as it stands, the demo build, beside the fast check, and writes its report. No fixers run. It pushes the report on the branch `<project>/batch-<n>`, posts one `@all` line on the board with the open count and the report's link, and runs `colony tidy`. |
 
 ### `tools/board`
 
@@ -83,11 +87,11 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tools`, `hooks install` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `hooks install` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |
-| `--review` | `batch` | In Hack, adds one fresh reviewer to the fast check, for the last hour before the demo. |
+| `--review` | `batch` | In Hack, adds one fresh reviewer to the fast check. With no `--card`, it reviews the demo build, `origin/<base>` as it stands, for the last hour before the demo. |
 | `--version` | `colony` | Prints the version. |
 
 `handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post` and `wait` need `$COLONY_SESSION`.

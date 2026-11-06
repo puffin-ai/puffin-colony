@@ -9,8 +9,9 @@ Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, 
 
 - When `colony hi` made you the lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat holds the lead, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds the lead, you are no longer the lead: tell the person in one line, and stop leading.
 
+- Make a card with `colony card new`, never a bare `gh issue create`, and only for work that starts this week. Anything later is one line, `colony idea "<the idea>"`.
 - Name the files on a card when you know them, beside its folders, because finding code costs a builder about 40% of a small change's calls.
 - Keep a card to one concern and up to 3 done-when results, so its builder can finish it in one sitting.
 - Read a builder's diff only when its `done` line needs a decision. The batch's fresh reviewer reads every diff in full.
-- Answer a builder's question on its card at once, with a pick, even when the answer is "your default is right".
+- Your lines to a builder are only `start:`, `answer:` and `urgent:`. Answer a builder's question on its card at once, with a pick, even when the answer is "your default is right": `colony post <n> <builder> "answer: your default is right"`.
 - Keep each message to the person short: the pull request link, what is done, and one question with your pick as the default.

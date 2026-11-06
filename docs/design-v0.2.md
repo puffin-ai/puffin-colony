@@ -71,14 +71,14 @@ It also has a `--staged` fast mode for a pre-commit hook, and prints a count per
   - The lead keeps working on the default, and the person's reply line wins.
   - The lead tells the person in chat only when something is urgent or blocking.
 - **Board.**
-  - `colony board init` makes a GitHub Project from the repo's owner, with Status (To do, In progress, In review, Done), Builder, Tier, State (working, waiting, stopped, usage limit), Last update, Account and Branch.
+  - `colony board init` makes a GitHub Project from the repo's owner, with five fields and no others: Status (To do, In progress, In review, Done), Lead, Helper, Size (S, M, L) and Last update. (It first had Builder, Tier, State, Account and Branch too; the anti-bloat limits cut them.)
   - `colony board set <card> field=value ...` updates a card.
   - The lead and the builders update it as they work: the builder sets State and Last update, and the lead sets the rest.
   - Generalize the session-protocol skill's board commands.
 - **Handover.**
   - `colony handover` writes the handover comment (decisions, open questions, next) on the coordination issue when the session nears compaction. The playbook tells the lead when to do it.
   - It then prints the command that starts a fresh lead with the same name.
-- **Stale cards.** `colony wait` for the lead adds a `stale:` line for each card In progress with no update in 2.5 hours, unless its State is usage limit.
+- **Stale cards.** `colony wait` for the lead adds a `stale:` line for each card In progress with no update in 2.5 hours, naming its Helper.
 - **Card stats.**
   - `colony stats` sums each card's predicted and actual minutes and tokens. The lead writes a `predicted: S, 20 min` line in each card body.
   - The batch PR body includes the table.
