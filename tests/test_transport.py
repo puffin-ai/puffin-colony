@@ -72,6 +72,7 @@ def test_a_line_never_carries_a_secret(gh, monkeypatch, line, why):
     ("builder-2", "lead", "blocked: the test database won't start", False,
      "for lead: blocked: the test database won't start (from builder-2)"),
     ("builder-2", "Lead", "main is  red", True, "for lead: urgent: main is red (from builder-2)"),
+    ("lead", "builder-2", "start: this card", False, "for builder-2: start: this card (from lead)"),
     ("builder-2", "lead", "done, builder-2/41 pushed, 12 passed", False,
      "for lead: done, builder-2/41 pushed, 12 passed (from builder-2)"),
 ])

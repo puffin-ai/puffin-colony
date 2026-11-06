@@ -68,3 +68,9 @@ rule_budgets = { performance = 16000 }   # the puffin preset's performance.md ru
 [board]
 # number = 3                       # optional: the GitHub Project the cards live on; without it, `colony board init`
                                    # makes "Colony: <name>" and every command finds the board by that title
+
+[limits]                           # the anti-bloat limits `colony card new` and `colony tidy` keep
+open_cards_per_lead = 10           # `colony card new` refuses a lead past this many open cards
+stale_days = 7                     # `colony tidy` closes, or moves to future-work, a card with no update this long
+issue_comments = 200               # the coordination and Needs issues rotate at this many comments
+archive_days = 7                   # `colony tidy` archives a board item Done this long

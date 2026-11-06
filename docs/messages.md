@@ -20,7 +20,7 @@ for <name>: <one sentence> (from <name>)
 Agents post every line through Colony, which signs it and sends it through the transport:
 
 ```sh
-colony post 41 builder-2 "start this card"                 # on card #41, from $COLONY_SESSION
+colony post 41 builder-2 "start: this card"                # on card #41, from $COLONY_SESSION
 colony post 41 lead "the date picker test fails on main" --urgent
 colony say burak-lead "I merge into dev at 15:00, hold yours till then?"
 ```
@@ -28,22 +28,24 @@ colony say burak-lead "I merge into dev at 15:00, hold yours till then?"
 - `colony post <card> <name> "<sentence>"` posts `for <name>: <sentence> (from <you>)` on the card. `--urgent` starts the sentence with `urgent:`, unless it already starts with `urgent:`, `blocked:` or `question:`.
 - `colony say <lead-name> "<sentence>"` posts a lead's line for another lead on the `Colony: coordination` issue. Only a lead can run it.
 - `colony needs` posts a decision on your Needs issue, and the hooks post their lines on the coordination issue. See [cycle.md](cycle.md#needs-you) and [safety.md](safety.md#hooks).
+- The coordination issue and each Needs issue close at 200 comments, with a comment listing their open items, and a fresh issue with the same title goes on. `colony say`, `colony needs` and `colony handover` check the count before they post. See [cycle.md](cycle.md#tidy).
 
 ## Line kinds
 
+A line from a builder to its lead is only `done`, `question:`, `blocked:` or `urgent:`. A line from the lead to a builder is only `start:`, `answer:` or `urgent:`. `colony post` refuses any other, since progress belongs in the board's fields, which wake no one. Lead-to-lead lines, `colony say`, and a lead's lines for `@<login>` or `@all` are free text, still under 300 characters.
+
 | Kind | From → to | Example | Reaches the lead |
 | --- | --- | --- | --- |
-| Start | lead → builder | `for builder-2: start this card (from lead)` | |
-| Answer | lead → builder | `for builder-2: keep it until the next release (from lead)` | |
-| Merge ask | lead → builder | `for builder-2: merge origin/builder-3/42 into your branch, resolve it, push, and post done again (from lead)` | |
+| Start | lead → builder | `for builder-2: start: this card (from lead)` | |
+| Answer | lead → builder | `for builder-2: answer: keep it until the next release (from lead)` | |
+| Merge ask | lead → builder | `for builder-2: start: merge origin/builder-3/42 into your branch, resolve it, push, and post done again (from lead)` | |
 | Done | builder → lead | `for lead: done, builder-2/41 pushed, 212 passed in 9.1s (from builder-2)` | in the digest, or at once when the batch waits on that card |
-| Question with a default | builder → lead | `for lead: keep the old route? I'm going with removing it (from builder-2)` | in the digest |
-| Question | builder → lead | `for lead: question: may I add date-fns? (from builder-2)` | at once |
+| Question | builder → lead | `for lead: question: keep the old route? I'm going with removing it (from builder-2)` | at once |
 | Blocked | builder → lead | `for lead: blocked: the test database won't start (from builder-3)` | at once |
 | Urgent | builder → lead | `for lead: urgent: the base branch fails to build since #40 (from builder-3)` | at once |
 | Pop-up | hook → lead | `for serdar-lead: urgent: builder-2 waits for a person's approval on <computer> (from builder-2)` | at once |
 | Stopped | hook → lead | `for serdar-lead: builder-2 stopped on an error (<code>) at <time> (from builder-2)` | in the digest |
-| Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>, and its State is not usage limit; check its session` | in the digest |
+| Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>; check its session` | in the digest |
 | Yours | you → lead | `for lead: ship the batch as it is` | at once |
 | Your answer | you → lead | `for serdar-lead: yes, keep 30 seconds`, on your Needs issue | at once |
 | Lead to lead | lead → lead | `for burak-lead: I merge into dev at 15:00, hold yours till then? (from serdar-lead)` | in the digest, or at once with a prefix |

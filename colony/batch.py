@@ -9,6 +9,10 @@ The mode's [gate] keys shape the gate: `check` is "full" ([project] checks, or w
 "fast" ([project] fast_check alone, hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when
 false), and `walk` walks the changed screens. Startup and solo run the full checks and the reviewer, and solo walks
 only when `walk` is true; hack runs the fast check alone.
+
+In hack mode, `colony batch --review --name <n>` with no `--card` reviews the demo build: one fresh reviewer reads
+origin/<base> as it stands, beside the fast check, with no fixers, and one line on the board gives the open count and
+the report's link (review_demo). Every batch that runs ends with `colony tidy` (tidy_at_end).
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ IMAGE = re.compile(r"\.(png|jpe?g|webp|gif)\b", re.I)
 PYTEST_FAILED = re.compile(r"\bFAILED\s+(\S+?\.py)::(\S+)")
 JS_FAILED = re.compile(r"(?:\bFAIL\b|×|✗)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*(.+))?")
 MINUTE = re.compile(r"^(\d{1,2}:\d{2})\s+(\S+)\s+(\d+(?:\.\d+)?)(?:\s+\$(\d+(?:\.\d+)?))?")
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a diff from it holds every file
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$")
 
 
@@ -267,6 +272,7 @@ class Batch:
     account: tuple[str, str]
     dry: bool = False
     review: bool = True
+    sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-lead`
     lock: threading.RLock = field(default_factory=threading.RLock)
     state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False})
 
@@ -282,12 +288,26 @@ class Batch:
             if not sep or not number.strip("# ") or not branch.strip():
                 raise SystemExit(f"--card wants N=BRANCH, got {item!r}")
             cards[number.strip("# ")] = branch.strip()
-        if not cards:
-            raise SystemExit("colony batch needs at least one --card N=BRANCH")
+        demo = not cards and cli.mode(config) == "hack" and bool(getattr(args, "review", False))
+        if not cards and not demo:
+            raise SystemExit("colony batch needs at least one --card N=BRANCH (in hack mode, --review alone reviews "
+                             "the demo build)")
+        if demo and getattr(args, "from_branch", None):
+            raise SystemExit("colony batch --review with no --card reviews origin/<base> as it stands: drop --from")
         start = getattr(args, "from_branch", None) or f"origin/{config['project']['base']}"
         review = bool(config["gate"]["review"] or getattr(args, "review", False))
-        return cls(config, name, cards, start, _root(config, args), _account(config, args),
-                   bool(getattr(args, "dry_run", False)), review)
+        b = cls(config, name, cards, start, _root(config, args), _account(config, args),
+                bool(getattr(args, "dry_run", False)), review)
+        if demo:
+            from colony import wait
+
+            b.sender = wait.lead_name(config, args)
+        return b
+
+    @property
+    def demo(self) -> bool:
+        """Whether this is hack mode's demo review: no cards, one reviewer on origin/<base> as it stands."""
+        return not self.cards
 
     def __post_init__(self) -> None:
         """Work out the names and paths every step uses.
@@ -403,9 +423,15 @@ def reviewer_prompt(b: Batch, r: int, head: str, prev: dict | None, risks: str) 
     gate = b.config["gate"]
     earlier = b.reports / f"review-{r - 1}.md"
     previous = "" if prev is None else f"This is round {r}. The previous report is {earlier}: mark each of its findings fixed or open."
+    if b.demo:  # the demo build as it stands: its whole tree, against the empty tree
+        diff_range, cards = f"{EMPTY_TREE} HEAD", (f"none. This review reads the demo build, origin/{b.project['base']} "
+                                                   "as it stands: put what would break the demo first")
+    else:
+        diff_range = f"origin/{b.project['base']}...HEAD" if prev is None else f"{prev['head']}..HEAD"
+        cards = _cards_text(b)
     return fill(cli.package_file("prompts", "reviewer.md"), project=b.tag, checkout=b.wt, branch=b.branch, head=head,
-                diff_range=f"origin/{b.project['base']}...HEAD" if prev is None else f"{prev['head']}..HEAD",
-                generated=", ".join(f"`{g}`" for g in b.project.get("generated", [])), cards=_cards_text(b),
+                diff_range=diff_range,
+                generated=", ".join(f"`{g}`" for g in b.project.get("generated", [])), cards=cards,
                 previous=previous, risks=risks,
                 rubric="\n".join(f"{i}. {item}" for i, item in enumerate(gate["rubric"], 1)),
                 rules=", ".join(f"`{rule}`" for rule in gate.get("rules", [])), report=b.reports / f"review-{r}.md")
@@ -643,12 +669,12 @@ def card_stats(b: Batch) -> str:
 
 
 def pr_body(b: Batch) -> str:
-    """The pull request body: the cards, the open problems by round, the check results, the removed tests, the
-    minutes, and the card stats."""
+    """The pull request body: the cards, each as `Closes #N` so the merge closes it, the open problems by round, the
+    check results, the removed tests, the minutes, and the card stats."""
     rounds = b.state["rounds"]
     minutes = (b.reports / "minutes.md").read_text().splitlines() if (b.reports / "minutes.md").exists() else []
     return "\n".join([
-        "## Cards", *[f"- #{n} from `{ref}`" for n, ref in b.cards.items()], "",
+        "## Cards", *[f"- Closes #{n}, from `{ref}`" for n, ref in b.cards.items()], "",
         "## Open problems by round", " → ".join(str(x["open"]) for x in rounds), "",
         "| Round | Open | Walk | Checks |", "| --- | --- | --- | --- |",
         *[f"| {x['round']} | {x['open']} | {x['walk']} | {x['checks']} |" for x in rounds], "",
@@ -725,15 +751,68 @@ def plan(b: Batch) -> str:
     return "\n".join(lines)
 
 
-def run_batch(config: dict, args) -> int:
-    """Run `colony batch`: assemble the cards, then gate and fix round by round until the PR opens or a stop rule fires."""
-    b = Batch.from_args(config, args)
-    if b.dry:
-        print(plan(b))
-        return 0
-    if b.wt.exists() or _git(b.root, "branch", "--list", b.branch):
-        print(f"colony batch {b.name}: {b.branch} or {b.wt} already exists; pick another --name")
+def report_link(b: Batch) -> str:
+    """The address of round 1's review report on the pushed batch branch."""
+    return f"https://github.com/{b.project['repo']}/blob/{b.branch}/{REPORTS}/{b.name}/review-1.md"
+
+
+def demo_plan(b: Batch) -> str:
+    """Describe hack mode's demo review without running it."""
+    lines = [f"colony batch {b.name}: dry run, nothing runs. The demo review runs as {b.account[0]}.", "",
+             "  $ git fetch origin",
+             "  $ " + shlex.join(["git", "worktree", "add", "--no-track", "-b", b.branch, str(b.wt), b.start]),
+             f"  the fast check, in the background: $ {fast_check(b.project)}",
+             "  one fresh reviewer: $ " + shlex.join(claude_cmd(b.config, "reviewer", "<reviewer prompt>")),
+             "  no fixers: the demo build has no cards",
+             "  then: $ " + shlex.join(push_cmd(b)),
+             f"  and one line on the board, from {b.sender}: @all <the open count>, report: {report_link(b)}",
+             f"  then: $ {cli.NAME} tidy", "", "--- reviewer",
+             reviewer_prompt(b, 1, "<origin/" + b.project["base"] + ">", None, RISKS_PLACE).rstrip()]
+    return "\n".join(lines)
+
+
+def review_demo(b: Batch) -> int:
+    """Hack mode's `colony batch --review --name <n>` with no cards: one fresh reviewer reads origin/<base> as it
+    stands, beside the fast check, and writes its report. No fixers run. The report goes up on the batch branch, and
+    one line on the board gives the open count and the report's link."""
+    from colony import transport, wait
+
+    try:
+        assemble(b)
+        gate(b, 1)
+        last = b.state["rounds"][-1]
+        commit_reports(b, f"reviewed: open {last['open']}, fast check {last['checks']}")
+        _run(push_cmd(b), b.wt)
+    except (Stop, OSError) as stop:
+        print(f"colony batch {b.name} stopped: {stop}\nReports: {b.reports}")
         return 1
+    head = last["head"][:7]
+    sentence = (f"demo build {head} reviewed: open: {last['open']}, fast check {last['checks']}, "
+                f"report: {report_link(b)}")
+    print(f"colony batch {b.name}: reviewed origin/{b.project['base']} at {head}: open {last['open']}. "
+          f"{report_link(b)}")
+    try:
+        line = wait.checked(wait.compose(f"@{wait.ALL}", sentence, b.sender), sentence)
+        number = transport.send(b.config, f"@{wait.ALL}", line)
+    except (cli.ColonyError, OSError) as e:
+        print(f"colony batch {b.name}: the board line was not posted: {e}")
+        return 1
+    print(f"#{number} {line}")
+    return 0
+
+
+def tidy_at_end(b: Batch) -> None:
+    """Run `colony tidy` once the batch has run. Tidy never changes the batch's result: a failure prints and goes on."""
+    from colony import tidy
+
+    try:
+        tidy.run_tidy(b.config, b.root)
+    except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+        print(f"colony batch {b.name}: tidy did not run: {e}")
+
+
+def run_rounds(b: Batch) -> int:
+    """Assemble the cards, then gate and fix round by round until the PR opens or a stop rule fires."""
     rounds = int(b.config["gate"].get("max_rounds", 5))
     try:
         assemble(b)
@@ -753,6 +832,21 @@ def run_batch(config: dict, args) -> int:
         print(f"colony batch {b.name} stopped: {stop}\nReports: {b.reports}")
         return 1
     return 1
+
+
+def run_batch(config: dict, args) -> int:
+    """Run `colony batch`: the rounds for the cards (run_rounds), or in hack mode with no cards the demo review
+    (review_demo), then `colony tidy` (tidy_at_end)."""
+    b = Batch.from_args(config, args)
+    if b.dry:
+        print(demo_plan(b) if b.demo else plan(b))
+        return 0
+    if b.wt.exists() or _git(b.root, "branch", "--list", b.branch):
+        print(f"colony batch {b.name}: {b.branch} or {b.wt} already exists; pick another --name")
+        return 1
+    result = review_demo(b) if b.demo else run_rounds(b)
+    tidy_at_end(b)
+    return result
 
 
 def _find_reports(config: dict, name: str | None, args=None) -> Path | None:

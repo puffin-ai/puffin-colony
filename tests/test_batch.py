@@ -117,16 +117,19 @@ provider_dollars = 0
 
 @pytest.fixture
 def stubs(tmp_path, monkeypatch):
-    """Put stub claude and gh commands first on PATH; return the files they log their calls to."""
+    """Put stub claude and gh commands first on PATH; return the files they log their calls to. The tidy every batch
+    ends with (batch.tidy_at_end) only logs the batch's name here, so the gh log holds the batch's own calls; tidy has
+    its own tests in test_tidy.py."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, text in (("claude", CLAUDE_STUB), ("gh", GH_STUB)):
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
-    logs = {"claude": tmp_path / "claude.log", "gh": tmp_path / "gh.log"}
+    logs = {"claude": tmp_path / "claude.log", "gh": tmp_path / "gh.log", "tidy": tmp_path / "tidy.log"}
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("COLONY_STUB_LOG", str(logs["claude"]))
     monkeypatch.setenv("COLONY_GH_LOG", str(logs["gh"]))
+    monkeypatch.setattr(batch, "tidy_at_end", lambda b: logs["tidy"].open("a").write(f"{b.name}\n"))
     return logs
 
 
@@ -317,3 +320,110 @@ def test_the_agents_run_on_account_else_on_prefer_account_while_it_has_room(repo
     args = batch_args(repo, "11=card/a")
     args.account = "one"
     assert batch.Batch.from_args(config, args).account[0] == "one"
+
+
+# Tidy at the end of every batch, the PR body's closing keywords, and hack mode's demo review
+
+
+def test_every_batch_that_runs_ends_with_tidy_whether_it_opens_its_pr_or_stops(repo, config, stubs, capsys,
+                                                                              monkeypatch):
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 0
+    monkeypatch.setenv("COLONY_STUB_MODE", "lazy")
+    args = batch_args(repo, "11=card/a", "12=card/b")
+    args.name = "b2"
+    assert batch.run_batch(config, args) == 1
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", dry_run=True)) == 0
+    assert stubs["tidy"].read_text() == "b1\nb2\n"  # a dry run runs nothing, tidy included
+    body = (Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1" / "pr.md").read_text()
+    assert body.startswith("## Cards\n- Closes #11, from `card/a`\n- Closes #12, from `card/b`\n")
+
+
+def test_tidy_at_the_end_runs_colony_tidy_on_the_repo_and_a_failure_never_changes_the_batch(repo, config, capsys,
+                                                                                         monkeypatch):
+    from colony import tidy
+
+    seen = []
+    monkeypatch.setattr(tidy, "run_tidy", lambda config, root: seen.append(root))
+    b = batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
+    batch.tidy_at_end(b)
+    assert seen == [repo]
+
+    def broken(config, root):
+        raise cli.ColonyError("gh project list failed")
+
+    monkeypatch.setattr(tidy, "run_tidy", broken)
+    batch.tidy_at_end(b)
+    assert "colony batch b1: tidy did not run: gh project list failed" in capsys.readouterr().out
+
+
+HACK_TOML = '''
+[project]
+mode = "hack"
+name = "demo"
+repo = "example/demo"
+base = "main"
+worktrees = "{wt}"
+checks = "false"
+fast_check = "true"
+[accounts.one]
+config_dir = "{account}"
+person = "pat"
+[roles]
+{roles}
+[messages]
+board = 12
+'''
+
+
+@pytest.fixture
+def hack_config(tmp_path):
+    """A hack mode colony.toml, with its board issue, #12."""
+    roles = "\n".join(f'{role} = {{ model = "m-{role}", effort = "low" }}' for role in cli.ROLES)
+    path = tmp_path / "hack.toml"
+    path.write_text(HACK_TOML.format(wt=tmp_path / "wt", account=tmp_path / "account", roles=roles))
+    return cli.load_config(path)
+
+
+def demo_args(repo, dry_run=False):
+    """The args the parser makes for `colony batch --review --name demo`, with no --card."""
+    return Namespace(name="demo", card=None, from_branch=None, dry_run=dry_run, repo=str(repo), review=True)
+
+
+def test_hack_review_with_no_cards_reviews_the_demo_build_and_posts_one_line_on_the_board(repo, hack_config, stubs,
+                                                                                        capsys):
+    head = git(repo, "rev-parse", "origin/main")
+    assert batch.run_batch(hack_config, demo_args(repo)) == 0
+    claude = stubs["claude"].read_text()
+    assert claude.count("You are the fresh batch reviewer") == 1 and "fast builder" not in claude  # no fixers
+    origin = repo.parent / "origin.git"
+    report = git(origin, "show", "demo/batch-demo:.colony/reports/demo/review-1.md")
+    assert report.startswith("open: 3")
+    assert git(origin, "rev-parse", "main") == head  # the base never moves
+    link = "https://github.com/example/demo/blob/demo/batch-demo/.colony/reports/demo/review-1.md"
+    line = f"[pat's Claude] @all demo build {head[:7]} reviewed: open: 3, fast check pass, report: {link} (from pat-lead)"
+    gh = stubs["gh"].read_text().splitlines()
+    assert gh == ["issue", "comment", "12", "--repo", "example/demo", "--body", line]  # one line, and no pull request
+    checks = (Path(hack_config["project"]["worktrees"]) / "demo-batch-demo" / ".colony" / "reports" / "demo" /
+              "checks-1.md").read_text()
+    assert "`true` exited 0" in checks  # the fast check, not the full checks
+    assert stubs["tidy"].read_text() == "demo\n"
+    assert f"open 3. {link}" in capsys.readouterr().out
+
+
+def test_the_demo_reviewer_reads_the_whole_build_and_its_dry_run_runs_nothing(repo, hack_config, stubs, capsys):
+    assert batch.run_batch(hack_config, demo_args(repo, dry_run=True)) == 0
+    out = capsys.readouterr().out
+    assert not stubs["claude"].exists() and not stubs["gh"].exists()
+    for expected in ("one fresh reviewer", "no fixers", f"diff {batch.EMPTY_TREE} HEAD", "the demo build, origin/main",
+                     "@all <the open count>", "--- reviewer"):
+        assert expected in out, expected
+    assert re.search(r"\{\w+\}", out) is None
+
+
+def test_no_cards_is_the_demo_review_only_in_hack_mode_with_review(repo, config, hack_config):
+    with pytest.raises(SystemExit, match="at least one --card"):
+        batch.Batch.from_args(config, demo_args(repo))
+    args = demo_args(repo)
+    args.review = False
+    with pytest.raises(SystemExit, match="--review alone reviews the demo build"):
+        batch.Batch.from_args(hack_config, args)

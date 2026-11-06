@@ -1,6 +1,6 @@
 # The cycle
 
-The gate loop in [how-it-works.md](how-it-works.md) checks what builders build. This page covers the cycle around it: how the lead sizes a request, when a spec or research comes first, how it asks you, where it tracks cards, how it hands over, and how a batch's lessons become rules. The lead follows all of it from `.colony/playbook.md`.
+The gate loop in [how-it-works.md](how-it-works.md) checks what builders build. This page covers the cycle around it: how the lead sizes a request, when a spec or research comes first, how it asks you, where it tracks cards, how `colony tidy` keeps them few, how it hands over, and how a batch's lessons become rules. The lead follows all of it from `.colony/playbook.md`.
 
 ## The roles
 
@@ -31,7 +31,7 @@ The lead picks a tier for each request before it writes a card:
 
 The risk list names each changed file that touches one of these: auth, payments, migrations, secrets, deletion, public API, dependencies, config, and checks (a skip mark, a suppression, or a deleted test). A file gets on it by its path or by an added line, such as `DROP TABLE` or a key-shaped string. Anything on the list makes a change at least SMALL. `colony batch` reads the list again at each round's head and gives it to the reviewer, who reads those places first. A place on the list is not a finding by itself.
 
-When a done card's branch prints a higher tier than its card, the lead raises the card's Tier. A FEATURE with no approved spec goes to the spec agent before its next card.
+When a done card's branch prints a higher tier than the lead picked, a FEATURE with no approved spec goes to the spec agent before its next card. The board keeps no Tier: the tier is the lead's call at the card's start, and `colony tier` reads it again from the branch.
 
 The limits and the extra risk paths live in `[cycle]`. See [configuration.md](configuration.md#cycle).
 
@@ -47,7 +47,7 @@ How a finding becomes a rule is in [knowledge.md](knowledge.md#how-research-beco
 
 ## The spec
 
-1. The lead makes a card titled `spec: <feature>`, sets its Tier to FEATURE, and opens the spec agent with `colony spec "<your request in your words>"`. Its first prompt is `.colony/prompts/spec.md`, with the request filled in.
+1. The lead makes a card titled `spec: <feature>` with `colony card new`, and opens the spec agent with `colony spec "<your request in your words>"`. Its first prompt is `.colony/prompts/spec.md`, with the request filled in.
 2. The spec agent writes in `knowledge/specs/plans/<feature>/`. A feature one card builds gets one feature spec. A larger one gets three pages: requirements, then design, then tasks.
 3. Each open question gets a `[NEEDS CLARIFICATION: …]` marker and a `colony needs` line with the agent's default. The agent keeps working on the default.
 4. It asks you to approve the requirements, with the default "no cards until you approve". It pushes `spec/<feature>` and changes no code.
@@ -70,39 +70,72 @@ That posts `for serdar-lead: Serdar decides: Keep the 30 second timeout? Default
 
 ## The board
 
-The cards live on a GitHub Project, `Colony: <project>`, which `colony board init` makes once from the repo's owner and links to the repo. Running it again adds any missing field or option, and keeps the ones there.
+The cards live on a GitHub Project, `Colony: <project>`, which `colony board init` makes once from the repo's owner and links to the repo. Running it again adds any missing field or option, and keeps the ones there. The board has five fields, and no others:
 
 | Field | Values | Who sets it |
 | --- | --- | --- |
 | Status | To do, In progress, In review, Done | the lead |
-| Builder | the builder's name | the lead |
-| Tier | TINY, SMALL, FEATURE | the lead |
-| State | working, waiting, stopped, usage limit | the builder, and the lead for usage limit |
+| Lead | the lead whose card it is, `<person>-lead` | `colony card new` |
+| Helper | the builder working on it | the lead |
+| Size | S, M, L | `colony card new` |
 | Last update | `YYYY-MM-DD HH:MM UTC` | every `colony board set` stamps it |
-| Account | the account the builder runs on | the lead |
-| Branch | `<builder>/<n>` | the lead |
 
 ```sh
-colony board set 12 Status="In progress" Builder=builder-2 Branch=builder-2/12
-colony board set 12 State=working
+colony board set 12 Status="In progress" Helper=builder-2
+colony board set 12 Last_update=now
 ```
 
-`colony board set` checks every field and value before it writes, so a typo changes nothing. Field names ignore case and spaces, so `last_update` works. Progress goes in State and Last update, which wake no one.
+`colony board set` checks every field and value before it writes, so a typo changes nothing, and it refuses any other field, such as an older board's State, Builder, Tier, Account or Branch. `board init` leaves those old fields on an older board, so no card loses what they hold. Field names ignore case and spaces, so `last_update` works. Progress goes in Last update, which wakes no one, never in a line.
 
-**Stale cards.** Every 10 minutes, the lead's wait checks the board. A card In progress whose Last update is over 2.5 hours old gives the lead one `stale:` line, unless its State is usage limit. The lead then looks at that builder's session.
+**Stale cards.** Every 10 minutes, the lead's wait checks the board. A card In progress whose Last update is over 2.5 hours old gives the lead one `stale:` line, naming its Helper. The board has no State, so a builder waiting on a usage limit shows up too, and the lead looks at its session to tell.
 
 Every computer's `gh` login needs the project scope: `gh auth refresh -s project`. When the board can't be reached, agents say why once and go on without it. `[board] number` points Colony at a project you already have.
 
 ## Cards
 
-A card is a GitHub issue titled `<builder>: <what>`. Its body holds the task, up to 3 done-when results, the folders it touches, and one prediction line:
+A card is an issue only when its work starts this week. An idea for later is one dated line in the future-work register, never an issue:
+
+```sh
+colony idea "a dark mode for the calendar"
+```
+
+That appends `- 2026-11-05: a dark mode for the calendar` to the Ideas section of `<vault>/future-work.md`, or of `.colony/future-work.md` in Hack and Solo, which have no vault. Commit it with the next change.
+
+A card is titled `<builder>: <what>`. Its body holds the task, up to 3 done-when results, the folders it touches, and one prediction line:
 
 ```text
 predicted: S, 20 min
 predicted: M, 45 min, 15M tokens
 ```
 
-The size is S, M or L. Cards that touch the same folders go to the same builder, which keeps conflicts down.
+The lead makes it with `colony card new`, never a bare `gh issue create`:
+
+```sh
+colony card new "builder-2: dark mode switch in settings" --body "<task, done-when, folders, predicted: S, 20 min>" --size S
+```
+
+- It refuses when the lead already has `[limits] open_cards_per_lead` open cards, 10 by default, counted by the board's Lead field: close or finish one first. Without a card board, as in Solo, every open issue but the coordination and Needs issues counts.
+- It refuses a duplicate, and names the open card it repeats: a title with the same words, ignoring case and punctuation and the `<builder>:` start, or one whose words overlap by three quarters or more.
+- It creates the issue and puts it on the board as To do, with its Lead (you, or `--lead <name>`) and Size.
+
+The size is S, M or L. Cards that touch the same folders go to the same builder, which keeps conflicts down. A batch's pull request says `Closes #<n>` for each card, so the merge closes them. GitHub closes them only when the pull request merges into the repo's default branch; on another base, the lead closes them.
+
+## Tidy
+
+`colony tidy` runs at the end of every `colony batch`, and on demand. `colony tidy --dry-run` prints the plan and changes nothing.
+
+| It | When |
+| --- | --- |
+| Closes a card, as not planned, with one line saying why | It shows no update for `[limits] stale_days` (7) and its work started |
+| Moves a card to future-work, and closes it with one line saying why | It shows no update for 7 days and it is still To do |
+| Rotates the coordination issue or a Needs issue | It holds `[limits] issue_comments` (200) comments |
+| Archives a board item | It has been Done, or closed, for `[limits] archive_days` (7) |
+| Turns on the repo's `delete_branch_on_merge`, and says so | It is off |
+| Removes a card's worktree | The card is closed and the worktree is clean: no uncommitted or untracked change. The main checkout is never removed, and a dirty worktree is kept and named |
+
+It finds a card's worktree in `git worktree list --porcelain` by its branch, `<name>/<n>`, and leaves the branch itself. It prints the counts before and after: open cards per lead, stale cards closed or moved, comments on the coordination and Needs issues, rotations, board items archived, and worktrees removed and kept. A step that fails says why, and the others go on.
+
+**Rotation.** A rotated issue gets a closing comment that lists its open items: the `question:`, `blocked:` and `urgent:` lines among its last 50 comments, and on a Needs issue each decision posted after the person's last answer. Then it closes, and a fresh issue with the same title opens, its body linking the old one. `colony say`, `colony needs` and `colony handover` read the issue's comment count before they post, in one cheap call, and rotate it first when it is full. The lead's wait follows the new coordination issue: the computer that rotated it remembers the new number at once, and every other computer checks its remembered number every 10 minutes and drops it once that issue is closed.
 
 ## Handover
 
@@ -124,7 +157,7 @@ colony stats --card 41=builder-2/41 --card 42=builder-3/42
 
 It has one row per card: builder, size, how the card ended, predicted minutes, wall minutes, active minutes, predicted tokens, tokens, and lines changed, with a total row.
 
-- The window opens at the card's `start this card` line, and closes at the builder's `done` line, or at a stop line.
+- The window opens at the card's `start: this card` line, and closes at the builder's `done` line, or at a stop line.
 - Tokens and active minutes come from that builder's Claude Code transcripts on this computer, inside the window: input, cache and output tokens, and only gaps of 2 minutes or less as active time.
 - The lead uses the table to predict the next cards better.
 

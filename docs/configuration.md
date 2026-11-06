@@ -168,6 +168,17 @@ Tiers and stale cards. See [cycle.md](cycle.md). Setup writes this table only wh
 | `risk` | `{ payments = ["src/ledger/"] }` | Extra path fragments per risk kind, for code the built-in list misses |
 | `stale_hours` | `2.5` | How long a card In progress can go without an update before the lead gets a `stale:` line |
 
+## `[limits]`
+
+The anti-bloat limits that `colony card new` and `colony tidy` keep. See [cycle.md](cycle.md#tidy). Each is a whole number.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `open_cards_per_lead` | `10` | The most open cards one lead may have, by the board's Lead field. `colony card new` refuses past it. |
+| `stale_days` | `7` | After this many days with no update, `colony tidy` closes a card, or moves it to future-work when its work never started |
+| `issue_comments` | `200` | At this many comments, the coordination issue or a Needs issue closes with a summary of its open items, and a fresh one goes on |
+| `archive_days` | `7` | After this many days Done, or closed, `colony tidy` archives a board item |
+
 ## `[suppressions]`
 
 | Key | Example | What it does |

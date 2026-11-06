@@ -1,11 +1,12 @@
-"""colony board: the GitHub Project the cards live on, with each card's Status, Builder, Tier, State, Last update,
-Account and Branch.
+"""colony board: the GitHub Project the cards live on, with five fields per card: Status, Lead, Helper, Size and
+Last update.
 
 `colony board init` makes the project from the repo's owner, titled `Colony: <project name>`, links it to the repo
-and adds the fields, keeping every field and option already there. `colony board set <card> field=value ...` adds the
-card's issue to the board, sets the fields and stamps Last update. `[board] number` in colony.toml names another
-project. The lead's wait reads the board for stale cards through `cycle.stale_lines`. Every computer's gh login needs
-the project scope: `gh auth refresh -s project`.
+and adds the five fields, keeping every field and option already there. `colony board set <card> field=value ...` adds
+the card's issue to the board, sets the fields and stamps Last update; it refuses any other field, such as an old
+board's State. `[board] number` in colony.toml names another project. The lead's wait reads the board for stale cards
+through `cycle.stale_lines`, and `colony tidy` counts, closes and archives cards through `items`. Every computer's gh
+login needs the project scope: `gh auth refresh -s project`.
 """
 from __future__ import annotations
 
@@ -17,12 +18,11 @@ from datetime import datetime, timezone
 from colony import cli, wait
 
 STATUS = ("To do", "In progress", "In review", "Done")
-TIERS = ("TINY", "SMALL", "FEATURE")
-STATES = ("working", "waiting", "stopped", "usage limit")
-# Each field the board holds, with its options, or None for a text field. The builder sets State and Last update,
-# and the lead sets the rest.
-FIELDS = {"Status": STATUS, "Builder": None, "Tier": TIERS, "State": STATES, "Last update": None, "Account": None,
-          "Branch": None}
+SIZES = ("S", "M", "L")
+DONE = "Done"
+# The only fields the board holds, with their options, or None for a text field. The lead sets Status, Lead, Helper
+# and Size, and every `colony board set` stamps Last update, so a helper's progress is a stamp that wakes no one.
+FIELDS = {"Status": STATUS, "Lead": None, "Helper": None, "Size": SIZES, "Last update": None}
 LAST_UPDATE = "Last update"
 UPDATE_FORMAT = "%Y-%m-%d %H:%M UTC"
 READ_FORMATS = (UPDATE_FORMAT, "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ")
@@ -36,7 +36,8 @@ FIELDS_QUERY = """query($id: ID!) { node(id: $id) { ... on ProjectV2 { fields(fi
 
 ITEMS_QUERY = """query($id: ID!, $cursor: String) { node(id: $id) { ... on ProjectV2 {
   items(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id
-    content { ... on Issue { number url state } ... on PullRequest { number url state } }
+    content { ... on Issue { number url state title updatedAt closedAt }
+              ... on PullRequest { number url state title updatedAt closedAt } }
     fieldValues(first: 30) { nodes {
       ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
       ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
@@ -157,7 +158,8 @@ def ensure_options(field: dict, wanted: tuple[str, ...]) -> bool:
 
 
 def items(board: dict) -> list[dict]:
-    """Every item on the board: its id, issue number, url, state (OPEN or CLOSED) and fields by squashed name."""
+    """Every item on the board: its id, issue number, url, state (OPEN or CLOSED), title, updatedAt and closedAt, and
+    its fields by squashed name."""
     found, cursor = [], None
     while True:
         page = graphql(ITEMS_QUERY, id=board["id"], **({"cursor": cursor} if cursor else {}))["node"]["items"]
@@ -167,7 +169,9 @@ def items(board: dict) -> list[dict]:
                       for value in (node.get("fieldValues") or {}).get("nodes") or []
                       if value and (value.get("field") or {}).get("name")}
             found.append({"id": node["id"], "number": content.get("number"), "url": content.get("url", ""),
-                          "state": content.get("state", ""), "fields": values})
+                          "state": content.get("state", ""), "title": content.get("title", ""),
+                          "updatedAt": content.get("updatedAt", ""), "closedAt": content.get("closedAt", ""),
+                          "fields": values})
         if not page["pageInfo"]["hasNextPage"]:
             return found
         cursor = page["pageInfo"]["endCursor"]
@@ -203,7 +207,7 @@ def parse_pairs(pairs: list[str]) -> list[tuple[str, str]]:
     for pair in pairs:
         field, sep, value = pair.partition("=")
         if not sep or not field.strip():
-            raise cli.ColonyError(f"{pair!r} is not field=value, such as State=working")
+            raise cli.ColonyError(f"{pair!r} is not field=value, such as Helper=builder-2")
         parsed.append((field.strip(), " ".join(value.split())))
     return parsed
 
@@ -235,11 +239,15 @@ def set_fields(config: dict, card: int, pairs: list[tuple[str, str]]) -> list[tu
              for field, value in pairs]
     if not any(squash(field) == squash(LAST_UPDATE) for field, _ in pairs):
         pairs.append((LAST_UPDATE, stamp(now)))
+    known = {squash(field) for field in FIELDS}
+    unknown = [field for field, _ in pairs if squash(field) not in known]
+    if unknown:
+        raise cli.ColonyError(f"the board has no field {unknown[0]!r}: choose from {', '.join(FIELDS)}")
     board = need_board(config)
     have = fields(board)
     missing = [field for field, _ in pairs if squash(field) not in have]
     if missing:
-        raise cli.ColonyError(f"the board has no field {missing[0]!r}: choose from {', '.join(FIELDS)}")
+        raise cli.ColonyError(f"the board lacks the field {missing[0]!r}: run `{cli.NAME} board init`")
     url = f"https://github.com/{config['project']['repo']}/issues/{card}"
     checked = [(have[squash(field)], value) for field, value in pairs]
     for field, value in checked:
@@ -258,6 +266,32 @@ def set_command(config: dict, args) -> int:
     return 0
 
 
+def field_value(item: dict, field: str) -> str:
+    """One field's value on a board item, or "" when it has none."""
+    return item["fields"].get(squash(field), "")
+
+
+def is_open_card(item: dict) -> bool:
+    """Whether a board item is an open card: its issue is open and its Status is not Done."""
+    return item.get("state") in ("", "OPEN") and squash(field_value(item, "Status")) != squash(DONE)
+
+
+def last_touched(item: dict) -> datetime | None:
+    """When a card last changed: its Last update, else its issue's own last change, else None."""
+    stamped = read_stamp(field_value(item, LAST_UPDATE))
+    if stamped is not None:
+        return stamped
+    try:
+        return datetime.fromisoformat(item["updatedAt"].replace("Z", "+00:00")) if item.get("updatedAt") else None
+    except ValueError:
+        return None
+
+
+def archive(config: dict, board: dict, item: str) -> None:
+    """Archive one item off the board. It stays in the project's archive, and its issue is untouched."""
+    _gh("project", "item-archive", str(board["number"]), "--owner", owner(config), "--id", item)
+
+
 def card_number(value: str) -> int:
     """A card's issue number, such as 12 or #12."""
     if not value.lstrip("#").isdigit():
@@ -271,7 +305,7 @@ def add_commands(sub) -> None:
     board_sub = p.add_subparsers(dest="board_command", metavar="board-command", required=True)
     q = board_sub.add_parser("init", help="make the board from the repo's owner, with its fields")
     q.set_defaults(run=init)
-    q = board_sub.add_parser("set", help="set a card's fields, such as State=working; it also stamps Last update")
+    q = board_sub.add_parser("set", help="set a card's fields, such as Helper=builder-2; it also stamps Last update")
     q.add_argument("card", type=card_number, help="the card's issue number")
     q.add_argument("pairs", nargs="+", metavar="field=value",
                    help=f"fields: {', '.join(FIELDS)}; an empty value clears one, and Last update=now stamps it")
