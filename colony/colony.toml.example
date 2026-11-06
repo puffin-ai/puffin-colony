@@ -15,6 +15,8 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
+release = ""                       # optional: the branch `colony release` releases the base into, such as main
+deploy_workflow = ""               # optional: the workflow `colony release --after` watches, such as deploy.yml
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
 # --account, else the first of its person's [people.<person>] accounts with room (the soonest weekly reset first),

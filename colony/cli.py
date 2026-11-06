@@ -1384,7 +1384,7 @@ ACCOUNT_HELP = ("the account to open on, instead of the pick: [people.<person>] 
 def build_parser() -> argparse.ArgumentParser:
     """The command line: no command for setup or the lead, then the sessions (join, open, research, spec), the lines
     (wait, say, post), the gate (batch, status, merge), the cycle's, the board, check-docs, the guards', and tools."""
-    from colony import board, cycle, guards, presence, tidy, vault
+    from colony import board, cycle, guards, presence, release, tidy, vault
     parser = argparse.ArgumentParser(prog=NAME, description=f"{DISPLAY}: run with no command to open your lead "
                                      f"(or to set up the repo, the first time).")
     parser.add_argument("--version", action="version", version=f"{DISPLAY} {__version__}")
@@ -1480,7 +1480,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
 
-    for module in (cycle, board, vault, guards, presence, tidy):
+    for module in (cycle, board, vault, guards, presence, tidy, release):
         module.add_commands(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
