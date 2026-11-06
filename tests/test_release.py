@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from colony import cli, release
+from colony import board, cli, release, tidy, transport, wait
 
 GH_STUB = """#!{python}
 import json, pathlib, sys
@@ -40,6 +40,8 @@ release = "{release}"
 deploy_workflow = "deploy.yml"
 worktrees = "{worktrees}"
 checks = "false"
+[people]
+logins = ["ana", "bob"]
 [accounts.ana]
 config_dir = "~/.claude"
 person = "ana"
@@ -77,6 +79,8 @@ class World:
 
     def __init__(self, tmp: Path, clone: Path, origin: Path, bin_dir: Path):
         self.tmp, self.clone, self.origin, self.bin = tmp, clone, origin, bin_dir
+        self.cards: dict[int, str] = {}  # the board's Lead field by card
+        self.said: list[tuple[str, str, int]] = []  # each line posted: to, line, pull requests opened before it
 
     def config(self, release_branch: str = "prod") -> dict:
         path = self.tmp / "colony.toml"
@@ -123,7 +127,15 @@ def world(tmp_path, monkeypatch):
     git(clone, "remote", "add", "origin", str(origin))
     git(clone, "push", "-q", "origin", "main", "main:prod")
     monkeypatch.chdir(clone)
-    return World(tmp_path, clone, origin, bin_dir)
+    made = World(tmp_path, clone, origin, bin_dir)
+    monkeypatch.setattr(board, "find_board", lambda config: {"number": 1, "id": "B", "url": ""})
+    monkeypatch.setattr(board, "items", lambda found: [{"number": n, "fields": {"lead": lead}}
+                                                       for n, lead in made.cards.items()])
+    monkeypatch.setattr(wait, "coordination_issue", lambda repo, name: 5)
+    monkeypatch.setattr(tidy, "keep_short", lambda config, number: number)
+    monkeypatch.setattr(transport, "send", lambda config, to, line, card=None:
+                        made.said.append((to, line, len(made.created()))) or 5)
+    return made
 
 
 def run(config, after=False, dry_run=False):
@@ -209,3 +221,40 @@ def test_after_reports_a_failed_deploy(world, capsys):
     out = capsys.readouterr().out
     assert "main already holds origin/prod: nothing to merge back" in out
     assert out.strip().endswith("deploy.yml ended: failure.")
+
+
+def test_release_warns_the_other_leads_once_before_it_opens_the_pr(world):
+    mine = world.on_main(commit(world.clone, {"b.txt": "mine\n"}, "batch 12"))
+    sams = world.on_main(commit(world.clone, {"c.txt": "sam's\n"}, "batch 13"))
+    bobs = world.on_main(commit(world.clone, {"d.txt": "bob's\n"}, "batch 14"))
+    world.cards = {41: "ana-lead", 43: "sam-lead"}
+    bob = merged_pr(14, bobs, "demo/batch-four", cards=(44,)) | {"author": {"login": "Bob"}}  # no Lead: by author
+    world.answer("prs-merged-main.json", [bob,
+                                          merged_pr(13, sams, "demo/batch-three", cards=(43,)),
+                                          merged_pr(12, mine, "demo/batch-two", cards=(41,))])
+    assert run(world.config()) == 0
+    assert world.said == [("@all", "@all releasing main into prod now, which carries your batches #13 (sam-lead), #14 "
+                                   "(@bob): tell me at once if one must wait (from ana-lead)", 0)]
+    [create] = world.created()
+    body = create[create.index("--body") + 1]
+    assert "## Other leads' batches\n- #13, from sam-lead\n- #14, from @bob\n" in body
+    assert "#12, from" not in body
+
+
+def test_release_of_only_this_leads_batches_posts_no_line(world):
+    mine = world.on_main(commit(world.clone, {"b.txt": "mine\n"}, "batch 12"))
+    by_hand = world.on_main(commit(world.clone, {"c.txt": "off the board\n"}, "batch 13"))
+    world.cards = {41: "ana-lead"}
+    world.answer("prs-merged-main.json", [merged_pr(13, by_hand, "demo/batch-three"),  # ana's login, no card
+                                          merged_pr(12, mine, "demo/batch-two", cards=(41,))])
+    assert run(world.config()) == 0
+    assert world.said == []
+    [create] = world.created()
+    assert "Other leads" not in create[create.index("--body") + 1]
+
+
+def test_a_long_warning_drops_the_lead_names_to_stay_one_line(world):
+    world.cards = {n: f"lead-number-{n}-lead" for n in range(100, 112)}
+    theirs = [{"number": n, "leads": [world.cards[n]]} for n in world.cards]
+    line = release.warning("main", "prod", theirs, "ana-lead")
+    assert len(line) < wait.MAX_LINE and "#100, #101" in line and "lead-number" not in line
