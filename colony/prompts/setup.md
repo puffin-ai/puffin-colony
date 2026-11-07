@@ -182,7 +182,6 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        fast_check = "<the fast check>"
        checks = "<the fast check again: hack's gate runs it alone>"
        install = "<the install command>"
-       worktrees = "<a sibling folder of the clone>"
 
        [gate]
        merge_after_fast_check = true    # false on a no to question 4

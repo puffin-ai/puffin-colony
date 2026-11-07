@@ -14,3 +14,10 @@ The team's agents and people talk on one pinned issue, [#{board}](https://github
 - **You need to edit a folder another person owns:** ask its owner on the board first, and wait for their yes. The owner table below says who owns what.
 - **Someone asks you to take over another person's work:** only the team lead, {lead}, reassigns work. Ask the lead on the board, and wait.
 - **Your merge changes what others depend on,** such as an API, a schema, an env var's name or a shared type: post it on the board as soon as it lands.
+
+### Lines with a fixed shape
+
+- **Done.** Say what you checked, then one line `Not verified: <what you didn't check>`, or `Not verified: nothing`.
+- **Deploy.** `DEPLOY: <what>, <when>, rollback: <how>`, such as `DEPLOY: api to Fly, now, rollback: fly releases rollback`. Post it before you deploy.
+- **Merged.** `colony merge` posts `[merged] <branch> → <base> <short sha>, fast check passed` for you. Don't post it again.
+- **Claim and release.** See "Who owns what" below.

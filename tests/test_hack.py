@@ -9,6 +9,7 @@ import sys
 import time
 from importlib import resources
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -145,6 +146,17 @@ def test_a_running_wait_keeps_the_hook_off_github(session):
     assert session.hook() == 0 and len(session.reads) == 1
 
 
+def test_a_wait_that_ended_hands_github_back_to_the_hook_at_once(session, capsys):
+    clock = SimpleNamespace(now=lambda: 0.0, sleep=lambda seconds: None)
+    session.github((200, '"e1"', [comment(41, LINE)]), (200, '"e2"', [comment(42, "[Ben's Codex] @ana next one")]))
+    me = wait.session(CONFIG, argparse.Namespace(), "lead")
+    assert wait.wait("acme/demo", "demo", me, digest=0, clock=clock) == 0
+    assert capsys.readouterr().out == f"#7 {LINE}\n"
+    assert "polled_at" not in session.state()  # the hook doesn't take the ended wait for a running one
+    assert session.hook() == 0 and len(session.reads) == 2
+    assert capsys.readouterr().out.endswith("#7 [Ben's Codex] @ana next one\n")
+
+
 def test_a_builders_hook_takes_only_the_lines_its_lead_sent_it(session, capsys, monkeypatch):
     monkeypatch.setenv(cli.SESSION_ENV, "builder-2")
     session.github((200, None, [comment(1, "for builder-2: start card 41 (from lead)", issue=41),
@@ -237,7 +249,9 @@ def test_the_board_section_holds_every_board_rule():
     for rule in ("starts with `[<Name>'s <agent>]`", "`@<login>`", "`@all`", "act on it", "read it, and change your "
                  "own work only when it touches what you own", "ask its owner on the board first, and wait for their "
                  "yes", "only the team lead, {lead}, reassigns work", "`colony post`", "`tools/board post",
-                 "`tools/board unread`", "`tools/board wait`", "Don't reply only to say you saw it"):
+                 "`tools/board unread`", "`tools/board wait`", "Don't reply only to say you saw it",
+                 "`Not verified: <what you didn't check>`", "`DEPLOY: <what>, <when>, rollback: <how>`",
+                 "`[merged] <branch> → <base> <short sha>, fast check passed`"):
         assert rule in text, rule
     assert placeholders(HACK / "agents-board.md") == {"project", "repo", "board", "lead", "demo"}
 
@@ -246,13 +260,18 @@ def test_the_owner_section_is_a_table_setup_fills_one_row_per_person():
     text = (HACK / "agents-owners.md").read_text()
     assert text.startswith("## Who owns what\n") and "| Person | Login | Owns |\n| --- | --- | --- |\n{owners}\n" in text
     assert placeholders(HACK / "agents-owners.md") == {"lead", "owners"}
+    for rule in ("`taking <files>, @<login> please avoid until PR`", "`<files> released`",
+                 "the commit where you stopped", "The new owner starts from that commit"):
+        assert rule in text, rule
     assert "`{owners}` with one table row per person: `| <Name> | `<login>` |" in hack_steps()
 
 
 def test_the_board_issue_says_how_to_post_address_and_act():
     text = (HACK / "board-issue.md").read_text()
     for rule in ("`[<Name>'s <agent>]`", "`@<login>`", "`@all`", "Only the team lead, {lead}, reassigns work",
-                 "Never paste a key or a token", "`AGENTS.md`"):
+                 "Never paste a key or a token", "`AGENTS.md`", "`Not verified: <what you didn't check>`",
+                 "`DEPLOY: <what>, <when>, rollback: <how>`", "`taking <files>, @<login> please avoid until PR`",
+                 "`<files> released`", "the commit where you stopped"):
         assert rule in text, rule
     assert placeholders(HACK / "board-issue.md") == {"project", "lead", "demo", "team"}
 
@@ -344,13 +363,15 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
     text = "\n".join(line[7:] for line in block.splitlines() if line.startswith("       "))
     for old, new in (("<short name>", "app"), ("<owner/name>", "acme/app"), ("<question 3>", "main"),
                      ("<the fast check again: hack's gate runs it alone>", "npm test"), ("<the fast check>", "npm test"),
-                     ("<the install command>", "npm ci"), ("<a sibling folder of the clone>", "~/worktrees"),
+                     ("<the install command>", "npm ci"),
                      ("<the board issue's number>", "12"), ('["<login>", "<login>"]', '["ana", "ben"]'),
                      ('{ <login> = "<Name>", <login> = "<Name>" }', '{ ana = "Ana", ben = "Ben" }'),
                      ("[accounts.<login>]", "[accounts.ana]"), ('"<login>"', '"ana"')):
         assert old in text, old
         text = text.replace(old, new)
     assert "<" not in text, text
+    # The config is shared: a worktrees path from the setup person's computer would not exist on a teammate's.
+    assert "worktrees" not in text
     path = tmp_path / "colony.toml"
     path.write_text(text)
     config = cli.load_config(path)
@@ -358,6 +379,7 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
     assert config["gate"]["merge_after_fast_check"] is True and config["people"]["names"] == {"ana": "Ana", "ben": "Ben"}
     assert (PACKAGE / "presets" / config["project"]["preset"] / "core.md") == CORE
     assert wait.display_name(config, "ana") == "Ana"
+    assert config["project"]["worktrees"] == str(Path("~/worktrees").expanduser())
 
 
 # The playbook's Hack section, which a hack lead and its builders follow instead of Lead and Builder

@@ -150,7 +150,12 @@ def test_a_passing_fast_check_lands_the_branch_on_the_base(world, capsys):
     assert world.on_origin_main("a.txt") == "good"
     git(world.clone, "merge-base", "--is-ancestor", "ana/login", "origin/main")  # the branch's commit is on the base
     assert git(world.origin, "log", "-1", "--format=%P", "main").count(" ") == 1  # a merge commit, --no-ff
-    assert world.gh_calls() == []
+    assert git(world.origin, "log", "-1", "--format=%s", "main") == "Merge ana/login into main"
+    # The last good build goes on the board, after the board's comment count is read; it addresses no one.
+    head = world.origin_main()
+    assert world.gh_calls() == [["api", "repos/acme/demo/issues/12"],
+                                ["issue", "comment", "12", "--repo", "acme/demo", "--body",
+                                 f"[ana's Claude] [merged] ana/login → main {head[:7]}, fast check passed"]]
 
 
 def test_a_second_merge_reuses_the_merge_worktree(world, capsys):
@@ -229,6 +234,15 @@ def test_a_branch_already_on_the_base_has_nothing_to_push(world, capsys):
     assert land(world.config(), "ana/same") == 0
     assert "ana/same is already in main: nothing to push" in capsys.readouterr().out
     assert world.origin_main() == before
+    assert world.gh_calls() == []  # nothing landed, so the board hears nothing
+
+
+def test_a_board_that_refuses_the_line_never_fails_a_landed_merge(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    (world.bin / "gh").write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n")
+    assert land(world.config(), "ana/login") == 0
+    assert world.on_origin_main("a.txt") == "good"
+    assert "the branch landed, and the board didn't get the line" in capsys.readouterr().err
 
 
 def test_origins_copy_wins_when_the_local_branch_is_behind(world, capsys):

@@ -403,7 +403,10 @@ def test_hack_review_with_no_cards_reviews_the_demo_build_and_posts_one_line_on_
     link = "https://github.com/example/demo/blob/demo/batch-demo/.colony/reports/demo/review-1.md"
     line = f"[pat's Claude] @all demo build {head[:7]} reviewed: open: 3, fast check pass, report: {link} (from pat-lead)"
     gh = stubs["gh"].read_text().splitlines()
-    assert gh == ["issue", "comment", "12", "--repo", "example/demo", "--body", line]  # one line, and no pull request
+    # One read of the board's comment count, so a long board moves first (tidy.keep_board), then one line, and no
+    # pull request.
+    assert gh == ["api", "repos/example/demo/issues/12", "issue", "comment", "12", "--repo", "example/demo", "--body",
+                  line]
     checks = (Path(hack_config["project"]["worktrees"]) / "demo-batch-demo" / ".colony" / "reports" / "demo" /
               "checks-1.md").read_text()
     assert "`true` exited 0" in checks  # the fast check, not the full checks

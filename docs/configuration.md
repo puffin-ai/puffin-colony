@@ -220,6 +220,7 @@ The anti-bloat limits that `colony card new` and `colony tidy` keep. See [cycle.
 | `stale_days` | `7` | After this many days with no update, `colony tidy` closes a card, or moves it to future-work when its work never started |
 | `issue_comments` | `200` | At this many comments, the coordination issue or a Needs issue closes with a summary of its open items, and a fresh one goes on |
 | `archive_days` | `7` | After this many days Done, or closed, `colony tidy` archives a board item |
+| `board_comments` | `300` | Hack mode: at this many comments, the next post closes the board, opens a fresh `Board: <project>` issue that links the old one, and pins it. `tools/board` follows it. |
 
 ## `[suppressions]`
 

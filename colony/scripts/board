@@ -11,12 +11,15 @@
 # .colony/colony.toml and the repo its [project] repo; BOARD_ISSUE and BOARD_REPO override them. Your name comes
 # from BOARD_NAME, else [people] names, else git's user.name; your agent from BOARD_AGENT, else Claude or Codex when
 # the environment shows one. What you have read lives in ~/.colony/board/, one folder per board and agent.
+# A long board moves to a fresh issue with the same title, and the script follows it. BOARD_WAIT=off makes wait
+# return 1 at once, so a `while tools/board wait; do <agent>; done` loop stops.
 
 set -u
 
 TAB=$(printf '\t')
 FIRST_LOOK=10   # the posts a first look shows, for context
 GIVE_UP=20      # failed checks in a row before wait stops
+MOVED='^Closed at [0-9]+ comments; this thread goes on in #[0-9]+'  # colony's last comment on a board it moved
 SECRET='gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
 
 fail() {
@@ -25,7 +28,7 @@ fail() {
 }
 
 usage() {
-  sed -n '2,13s/^# \{0,1\}//p' "$0"
+  sed -n '2,15s/^# \{0,1\}//p' "$0"
 }
 
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || TOP=$(cd "$(dirname "$0")/.." && pwd)
@@ -70,6 +73,56 @@ find_board() {
   slug=$(printf '%s' "$AGENT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')
   STATE="${BOARD_STATE:-$HOME/.colony/board}/$(printf '%s' "$REPO" | tr '/' '_')-$ISSUE/$slug"
   mkdir -p "$STATE" || fail "cannot write $STATE"
+  # A board that grew long moved to a fresh issue: post and read there. The folder keeps the first board's number.
+  moved=""
+  [ -s "$STATE/../issue" ] && moved=$(cat "$STATE/../issue")
+  case $moved in '' | *[!0-9]*) ;; *) ISSUE=$moved ;; esac
+}
+
+moved_to() {
+  ISSUE=$1
+  printf '%s\n' "$1" > "$STATE/../issue"
+}
+
+# pointed_to: the lowest issue after this one that a moved note among its last comments names, or nothing. Colony
+# picks the same: when two posts moved the board at once, the lowest fresh board is the one kept.
+pointed_to() {
+  last=$(((COUNT + 99) / 100))
+  [ "$last" -ge 1 ] || last=1
+  page=$((last - 1))
+  [ "$page" -ge 1 ] || page=1
+  while [ "$page" -le "$last" ]; do
+    gh api "repos/$REPO/issues/$ISSUE/comments?per_page=100&page=$page" --jq '.[].body' 2>/dev/null
+    page=$((page + 1))
+  done | lowest_move
+}
+
+# lowest_move: of the moved notes on stdin, the lowest issue they name after this one.
+lowest_move() {
+  awk -v at="$ISSUE" -v moved="$MOVED" '$0 ~ moved {
+    line = $0; sub(/^Closed at [0-9]+ comments; this thread goes on in #/, "", line); sub(/[^0-9].*/, "", line)
+    if (line + 0 > at + 0 && (low == "" || line + 0 < low + 0)) low = line
+  } END { if (low != "") print low }'
+}
+
+# board_info: set COUNT to the board's comment count, one call. When the board is closed, follow it to the fresh board
+# colony moved it to, and count that one: the lowest issue its moved notes name, else the lowest open issue after it
+# with its title, which is how colony picks it too.
+board_info() {
+  info=$(gh api "repos/$REPO/issues/$ISSUE" --jq '"\(.comments) \(.state) \(.title)"' 2>/dev/null) || return 1
+  COUNT=${info%% *}
+  rest=${info#* }
+  case $COUNT in '' | *[!0-9]*) return 1 ;; esac
+  [ "${rest%% *}" = closed ] || return 0
+  title=${rest#* }
+  next=$(pointed_to)
+  [ -n "$next" ] || next=$(BOARD_TITLE=$title gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" \
+    --json number,title --jq '[.[] | select(.title == env.BOARD_TITLE and .number > '"$ISSUE"') | .number] | min // empty' \
+    2>/dev/null)
+  case $next in '' | *[!0-9]*) return 0 ;; esac
+  [ "$next" -gt "$ISSUE" ] || return 0
+  moved_to "$next"
+  board_info
 }
 
 # Your GitHub login: BOARD_LOGIN, else the one this board's folder remembers, else gh's (which whoami refreshes).
@@ -135,9 +188,8 @@ rows_jq() {
 
 # fetch_last N: the board's last N comments as rows, reading pages from the end.
 fetch_last() {
-  total=$(gh api "repos/$REPO/issues/$ISSUE" --jq .comments 2>/dev/null) || return 1
-  case $total in '' | *[!0-9]*) return 1 ;; esac
-  page=$(((total + 99) / 100))
+  board_info || return 1
+  page=$(((COUNT + 99) / 100))
   rows=""
   while [ "$page" -ge 1 ]; do
     got=$(gh api "repos/$REPO/issues/$ISSUE/comments?per_page=100&page=$page" --jq "$JQ" 2>/dev/null) || return 1
@@ -148,19 +200,34 @@ fetch_last() {
   printf '%s\n' "$rows" | grep . | tail -n "$1"
 }
 
+# fetch_since TIME: the rows of the comments since TIME. When one is colony's note that the board moved, go on to the
+# fresh board too, the lowest such notes name; comment ids grow across issues, so the cursor holds there.
+fetch_since() {
+  got=$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments?per_page=100&since=$1" --jq "$JQ" 2>/dev/null) ||
+    return 1
+  next=$(printf '%s\n' "$got" | awk -F "$TAB" '{ print $5 }' | lowest_move)
+  if [ -n "$next" ] && [ "$next" -gt "$ISSUE" ]; then
+    moved_to "$next"
+    more=$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments?per_page=100&since=$1" --jq "$JQ" 2>/dev/null) ||
+      return 1
+    got=$(printf '%s\n%s' "$got" "$more")
+  fi
+  printf '%s\n' "$got"
+}
+
 # fetch_new: set NEW to the rows past the cursor that this agent didn't post, and NEWEST to the newest row's
 # "<id> <time>", which mark_read makes the cursor. A first look anchors the cursor before the last FIRST_LOOK posts.
+# CURSOR, when set, stands in for the saved cursor, so a wait asks only for what came since its last check.
 fetch_new() {
-  cursor=""
-  [ -s "$STATE/cursor" ] && cursor=$(cat "$STATE/cursor")
+  cursor=${CURSOR:-}
+  [ -z "$cursor" ] && [ -s "$STATE/cursor" ] && cursor=$(cat "$STATE/cursor")
   if [ -z "$cursor" ]; then
     rows=$(fetch_last "$FIRST_LOOK") || return 1
     cursor=$(printf '%s\n' "$rows" | awk -F "$TAB" 'NF > 1 && (low == "" || $1 + 0 < low + 0) { low = $1; at = $3 }
       END { if (low == "") print "0 1970-01-01T00:00:00Z"; else print (low - 1) " " at }')
     printf '%s\n' "$cursor" > "$STATE/cursor"
   else
-    rows=$(gh api --paginate "repos/$REPO/issues/$ISSUE/comments?per_page=100&since=${cursor#* }" --jq "$JQ" \
-      2>/dev/null) || return 1
+    rows=$(fetch_since "${cursor#* }") || return 1
   fi
   last=${cursor%% *}
   mine=" "
@@ -242,13 +309,20 @@ cmd_wait() {
   done
   case $interval in '' | *[!0-9]*) fail "--interval takes whole seconds" ;; esac
   [ "$interval" -ge 1 ] || fail "--interval takes 1 second or more"
+  case ${BOARD_WAIT:-on} in
+    off | OFF | 0 | false | no) fail "waiting is off (BOARD_WAIT=$BOARD_WAIT): unset it to wait again" ;;
+  esac
   start
   failed=0
+  CURSOR=""
+  seen=""  # the new posts by others this wait has read so far, printed when one for you comes
   while :; do
     if fetch_new; then
       failed=0
+      [ -z "$NEW" ] || seen=$(printf '%s\n%s' "$seen" "$NEW")
+      [ -z "$NEWEST" ] || CURSOR=$NEWEST
       if printf '%s\n' "$NEW" | awk -F "$TAB" '$4 == "you" { found = 1 } END { exit !found }'; then
-        printf '%s\n' "$NEW" | show
+        printf '%s\n' "$seen" | show
         mark_read
         return 0
       fi
@@ -296,6 +370,7 @@ command=${1:-help}
 case $command in
   post)
     find_board
+    board_info || true  # follow a board that moved; a post goes out even when the count can't be read
     cmd_post "$@"
     ;;
   unread) cmd_unread "$@" ;;

@@ -6,6 +6,8 @@ The board for {project}: every teammate's agents, and the teammates themselves, 
 
 **Act.** On a post for you or `@all`, act and reply when it's done or stuck. On any other post, change your work only when it touches what you own. Ask an owner here before editing their folders. Only the team lead, {lead}, reassigns work.
 
+**Shapes.** A done line ends with `Not verified: <what you didn't check>`. A deploy is `DEPLOY: <what>, <when>, rollback: <how>`. A claim is `taking <files>, @<login> please avoid until PR`, and its end is `<files> released`. A handoff names the branch and the commit where you stopped.
+
 **The team.**
 {team}
 
