@@ -90,7 +90,10 @@ def check_kind(from_lead: bool, to: str, sentence: str) -> None:
 
 
 def future_work_path(config: dict, root: Path) -> Path:
-    """The future-work register: `<vault>/future-work.md` with the knowledge vault on, else `.colony/future-work.md`."""
+    """The future-work register: `[knowledge] future_work`, a path from the repo's top, when set; else
+    `<vault>/future-work.md` with the knowledge vault on, and `.colony/future-work.md` without it."""
+    if named := str(config.get("knowledge", {}).get("future_work") or "").strip():
+        return root / named
     if config.get("features", {}).get("knowledge"):
         vault = str(config.get("knowledge", {}).get("vault", "knowledge")).strip().rstrip("/")
         return root / vault / "future-work.md"
@@ -99,7 +102,8 @@ def future_work_path(config: dict, root: Path) -> Path:
 
 def add_idea(path: Path, text: str, today: str) -> str:
     """Add `- <today>: <text>` at the end of the register's Ideas section, making the file or the section when it is
-    missing, and return the line."""
+    missing, and return the line. When the section holds a table, the idea goes in as a row after its last one, with
+    `<today>: <text>` in the first cell and the others empty."""
     text = " ".join(text.split())
     line = f"- {today}: {text}"
     if not text or len(line) >= wait.MAX_LINE:
@@ -113,8 +117,17 @@ def add_idea(path: Path, text: str, today: str) -> str:
     else:
         end = page.find("\n## ", start + 1)
         end = len(page) if end == -1 else end
-        section = page[:end].rstrip("\n")
-        page = f"{section}\n{line}\n" + (f"\n{page[end:].lstrip(chr(10))}" if end < len(page) else "")
+        lines = page[:end].split("\n")
+        heading = lines.index(IDEAS)
+        rows = [i for i, row in enumerate(lines) if i > heading and row.lstrip().startswith("|")]
+        if rows:
+            cells = lines[rows[0]].strip().strip("|").count("|") + 1
+            line = f"| {today}: {text} |" + " |" * (cells - 1)
+            lines.insert(rows[-1] + 1, line)
+            page = "\n".join(lines) + page[end:]
+        else:
+            section = page[:end].rstrip("\n")
+            page = f"{section}\n{line}\n" + (f"\n{page[end:].lstrip(chr(10))}" if end < len(page) else "")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(page)
     return line

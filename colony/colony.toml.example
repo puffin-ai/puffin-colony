@@ -61,6 +61,7 @@ logins = []                        # GitHub logins of the people; a line they po
 
 [knowledge]
 vault = "knowledge"                # the knowledge vault's folder at the top of the repo
+# future_work = "knowledge/future-work.md"   # `colony idea`'s register; a table under its ## Ideas gets a row
 # Each check `colony check-docs` runs is "off", "warn" or "fail"; --strict fails on warn too.
 page_types = "fail"                # every page declares a type its .types/ folder defines
 links = "fail"                     # every [[link]] and relative link resolves

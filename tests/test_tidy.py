@@ -185,6 +185,19 @@ def test_an_idea_goes_into_the_vaults_register_inside_its_ideas_section(tmp_path
         tidy.add_idea(path, "word " * 70, "2026-11-05")
 
 
+
+def test_an_idea_goes_to_the_register_future_work_names_as_a_row_of_its_ideas_table(tmp_path):
+    config = {**CONFIG, "features": {"knowledge": True}, "knowledge": {"future_work": "kb/future/register.md"}}
+    path = tidy.future_work_path(config, tmp_path)
+    assert path == tmp_path / "kb" / "future" / "register.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Register\n\n## Ideas\n\n| Item | Stage | Why |\n| --- | --- | --- |\n| one | Idea | x |\n\n"
+                    "Notes under the table.\n\n## Product work\n\n| Item |\n")
+    line = tidy.add_idea(path, "two", "2026-11-07")
+    assert line == "| 2026-11-07: two | | |"
+    assert path.read_text() == ("# Register\n\n## Ideas\n\n| Item | Stage | Why |\n| --- | --- | --- |\n| one | Idea | x |\n"
+                                "| 2026-11-07: two | | |\n\nNotes under the table.\n\n## Product work\n\n| Item |\n")
+
 # Line kinds
 
 
