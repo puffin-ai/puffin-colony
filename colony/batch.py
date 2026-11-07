@@ -18,8 +18,10 @@ or a time limit runs once more by itself with `[checks] rerun`, and counts only 
 The walk runs only when the change touches `[gate] walk_paths`, and walks only the screens the changed files feed
 (`[walk] screens`), with the browser `[walk] browser` names. minutes.md records the minutes each skip saved. A batch
 runs at most MAX_ROUNDS rounds: after the last, each finding still open becomes a card the pull request lists, while
-failing checks still stop it (carry_over). An agent that hits its account's rate limit is stopped within
-RATE_LIMIT_GRACE seconds and its step runs again on the person's next account with room (run_agent).
+failing checks still stop it (carry_over). An agent that hits its account's rate limit, a 429 that lasts
+RATE_LIMIT_GRACE seconds or a message that gives up on it, is stopped and its step runs again on the person's next
+account with room (run_agent). Ctrl-C or SIGTERM stops every agent, check and rerun the batch has running, each in its
+own process group, and ends the batch at once (stop_on_signal).
 
 In hack mode, `colony batch --review --name <n>` with no `--card` reviews the demo build: one fresh reviewer reads
 origin/<base> as it stands, beside the fast check, with no fixers, and one line on the board gives the open count and
@@ -35,7 +37,9 @@ import os
 import queue
 import re
 import shlex
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -62,10 +66,20 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a d
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|e2e)/|(^|/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$")
 MAX_ROUNDS = 3  # the most rounds a batch runs; [gate] max_rounds may lower it
 TIMING = re.compile(r"time\s?out|timed out|time limit|deadline exceeded", re.I)  # a failure the load may have caused
+SECTION = re.compile(r"^\s*([=_-])\1{2,}(.*?)[=_-]*\s*$")  # a section header, such as `=== short test summary info ===`
+DETAIL = re.compile(r"^\s*(E\s|→|\w*Error\b)")  # a failure's detail line: pytest's `E`, vitest's `→`, an `Error:`
+# A sign of a failure that names no test: make's `*** [lint] Error 1`, a compiler's `error:` or `error TS2322`, npm's
+# `npm ERR!`, or a Python traceback.
+FAILURE_SIGNAL = re.compile(r"^\S*make(\[\d+\])?: \*\*\*|\berror(\[\w+\])?:|\berror TS\d+|\bError \d+\b|npm ERR!|"
+                            r"Traceback \(most recent call last\)", re.I)
 RERUN_MAX = 10  # a run with more failing tests than this reruns none of them
 RERUN_SECONDS = 600  # one test's rerun past this counts as failed again
 RATE_LIMIT = re.compile(r"rate_limit_error|exceed your account's rate limit|\brate[ _]limit(ed)?\b", re.I)
-RATE_LIMIT_GRACE = 120  # seconds an agent may wait on its account's rate limit before the step moves accounts
+# A Claude subscription's limit, as Claude Code words it at the start of its message: "You've hit your limit · resets
+# 3pm", "Claude AI usage limit reached|<time>", "5-hour limit reached ∙ resets 3pm".
+SUBSCRIPTION_LIMIT = re.compile(r"^\W*(you['’]ve hit your (\w+ )?limit\b|(claude (ai )?)?usage limit reached\b|"
+                                r"[\w -]{0,30}\blimit reached\b.{0,80}\bresets?\b)", re.I)
+RATE_LIMIT_GRACE = 300  # seconds an agent may wait on its account's rate limit before the step moves accounts
 STALL_SECONDS = 1200  # an agent that prints nothing this long has hung, and its run ends as failed
 BROWSERS = ("playwright", "agent-browser")  # [walk] browser
 
@@ -319,18 +333,55 @@ def test_id(finding: Finding) -> str:
     return "" if text == finding.text else text.split(" > ")[0]
 
 
+def indent(line: str) -> int:
+    """How far a line is indented."""
+    return len(line) - len(line.lstrip())
+
+
+def failure_lines(output: str) -> tuple[list[str], dict[int, list[int]], list[str]]:
+    """Read a check run's output: its lines; each line that names a failing test (parse_check_failures' patterns),
+    with the detail lines under it; and the section header each line sits in, or "". A test's detail lines follow it,
+    indented deeper or marked as details (DETAIL), up to a blank line, a section header or the next test line, such as
+    pytest's `E   Failed: Timeout` or vitest's `→ Test timed out in 5000ms.`"""
+    lines = output.splitlines()
+    tests = [i for i, line in enumerate(lines) if PYTEST_FAILED.search(line) or JS_FAILED.search(line)]
+    headers, header, depth = [], "", 0
+    for line in lines:
+        if section := SECTION.match(line):
+            header, depth = section[2].strip(), indent(line)
+        elif line.strip() and indent(line) < depth:
+            header, depth = "", 0  # a line further out ends the section
+        headers.append(header)
+    blocks = {}
+    for i in tests:
+        block = []
+        for j in range(i + 1, len(lines)):
+            line = lines[j]
+            if PYTEST_FAILED.search(line) or JS_FAILED.search(line) or not line.strip() or \
+                    SECTION.match(line) or not (indent(line) > indent(lines[i]) or DETAIL.match(line)):
+                break
+            block.append(j)
+        blocks[i] = block
+    return lines, blocks, headers
+
+
 def other_failures(output: str, tests: set[str]) -> list[str]:
     """The failures in a check run's output that none of `tests` explains: each top-level `FAIL <step>` line whose
-    indented lines below it name none of them, and each test runner `ERROR` line. A run that prints no `FAIL` line
-    has only its tests' failures."""
+    indented lines below it name none of them, each test runner `ERROR` line, and each failure signal outside the
+    failing tests' own lines (FAILURE_SIGNAL), such as make's `*** [lint] Error 1`. Output that names no failing test
+    and no `FAIL` step can't be accounted for, so it counts as a failure of its own."""
+    lines, blocks, _ = failure_lines(output)
+    own = {i for test, block in blocks.items() for i in (test, *block)}
     found, block, head = [], [], None
 
     def close() -> None:
         if head is not None and not any(test in line for line in [head, *block] for test in tests):
             found.append(head.strip())
 
-    for line in output.splitlines():
+    for i, line in enumerate(lines):
         if PYTEST_ERROR.match(line) and not any(test in line for test in tests):
+            found.append(line.strip())
+        elif i not in own and not line.startswith(("FAIL", "PASS")) and FAILURE_SIGNAL.search(line):
             found.append(line.strip())
         if line[:1].isspace() or not line.strip():
             block.append(line)
@@ -338,7 +389,9 @@ def other_failures(output: str, tests: set[str]) -> list[str]:
         close()
         head, block = (line, []) if line.startswith("FAIL") else (None, [])
     close()
-    return found
+    if not blocks and not any(line.startswith("FAIL") for line in lines):
+        found.append("the output names no failing test or step")
+    return list(dict.fromkeys(found))
 
 
 def should_walk(settings: dict, rounds: list[dict], changed: list[str]) -> bool:
@@ -439,26 +492,33 @@ def _result(stdout: str) -> dict:
 
 def rate_limit_sign(line: str) -> str | None:
     """What one line of a headless claude run says about its account's rate limit: "limited" when the run has given up
-    on it, "waiting" when it is retrying after a 429 or the account's window is rejected, "moving" when the run made
+    on it, its message carries `"error": "rate_limit"`, or its subscription's limit is reached (SUBSCRIPTION_LIMIT),
+    "waiting" when it is retrying after a 429 or the account's window is rejected, "moving" when the run made
     progress, and None for a line that says neither. Only Claude Code's own events count, never a tool's output, so a
     file that mentions rate limits never trips it."""
     try:
         data = json.loads(line)
     except ValueError:
-        return "limited" if RATE_LIMIT.search(line) else None
+        return "limited" if RATE_LIMIT.search(line) or SUBSCRIPTION_LIMIT.search(line) else None
     if not isinstance(data, dict):
         return None
     kind = data.get("type")
     if kind == "system" and data.get("subtype") == "api_retry":
         return "waiting" if data.get("error_status") == 429 or "rate_limit" in str(data.get("error")) else None
+    if data.get("error") == "rate_limit":  # Claude Code's mark on a message that gave up on the limit
+        return "limited"
     if kind == "rate_limit_event":
         return "waiting" if (data.get("rate_limit_info") or {}).get("status") == "rejected" else "moving"
     if kind == "result":
-        error = data.get("is_error") and RATE_LIMIT.search(f"{data.get('result', '')} {data.get('errors', '')}")
+        text = str(data.get("result", ""))
+        error = data.get("is_error") and (RATE_LIMIT.search(f"{text} {data.get('errors', '')}") or
+                                          SUBSCRIPTION_LIMIT.search(text))
         return "limited" if error else None
     if kind == "assistant":
         content = (data.get("message") or {}).get("content") or []
         text = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if SUBSCRIPTION_LIMIT.search(text):
+            return "limited"
         if text.startswith("API Error") and RATE_LIMIT.search(text):
             return "waiting"
         return "moving"
@@ -485,6 +545,8 @@ class Batch:
     person: str = ""  # whose accounts a rate-limited step moves to (switch_account)
     limited: set = field(default_factory=set)  # the accounts that hit their rate limit in this batch
     lock: threading.RLock = field(default_factory=threading.RLock)
+    procs: set = field(default_factory=set)  # the agents, checks and reruns running now, each in its own group
+    stopping: bool = False  # Ctrl-C or SIGTERM came: every running process is being stopped (stop_on_signal)
     state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "paid_spent": 0.0,
                                                        "switches": []})
 
@@ -566,6 +628,18 @@ class Batch:
     def check_env(self) -> dict:
         """The environment for the checks (checks_env)."""
         return checks_env(self.config, self.root)
+
+    def track(self, proc: subprocess.Popen, on: bool = True) -> None:
+        """Count a process the batch started with portable.own_group as running, or as ended. One that starts while
+        the batch is stopping on a signal is stopped at once."""
+        with self.lock:
+            if not on:
+                self.procs.discard(proc)
+                return
+            self.procs.add(proc)
+            stopping = self.stopping
+        if stopping:
+            portable.stop_group(proc)
 
     def save(self) -> None:
         """Write state.json for `colony status`."""
@@ -793,7 +867,11 @@ def run_agent(b: Batch, role: str, prompt: str, cwd: Path, step: str, report: Pa
         b.running(label, True)
         proc = subprocess.Popen(cmd, cwd=cwd, env=b.agent_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, errors="replace", **portable.own_group())
-        stdout, how = watch_agent(proc, b.reports / f"{label}.jsonl")
+        b.track(proc)
+        try:
+            stdout, how = watch_agent(proc, b.reports / f"{label}.jsonl")
+        finally:
+            b.track(proc, on=False)
         b.running(label, False)
         data = _result(stdout)
         b.minute(label, data.get("duration_ms", (time.time() - started) * 1000) / 60000, data.get("total_cost_usd"), clock)
@@ -888,15 +966,25 @@ def failed_areas(b: Batch, ran: list[str] | None, failures: list[Finding]) -> li
 
 
 def timing_tests(output: str, tests: list[str]) -> list[str]:
-    """The failing tests a timeout or a time limit may explain: none when the output names neither, else each test
-    whose own failure lines give no other reason (a line's reason is what follows ` - `)."""
+    """The failing tests a timeout or a time limit explains: each test with at least one reason, every one of which
+    names a timeout or a time limit (TIMING). A test's reasons are what follows ` - ` on its own lines, its detail
+    lines (failure_lines), and the section header its line sits in when that header names a time limit. A test with
+    no reason is never a timing failure."""
     if not TIMING.search(output):
         return []
-    lines = output.splitlines()
+    lines, blocks, headers = failure_lines(output)
     picked = []
     for test in tests:
-        reasons = [line.split(" - ", 1)[1] for line in lines if test in line and " - " in line]
-        if all(TIMING.search(reason) for reason in reasons):
+        reasons = []
+        for i, block in blocks.items():
+            if test not in lines[i]:
+                continue
+            if " - " in lines[i]:
+                reasons.append(lines[i].split(" - ", 1)[1])
+            reasons += [lines[j] for j in block]
+            if TIMING.search(headers[i]):
+                reasons.append(headers[i])
+        if reasons and all(TIMING.search(reason) for reason in reasons):
             picked.append(test)
     return picked
 
@@ -922,11 +1010,14 @@ def rerun_timeouts(b: Batch, r: int, output: str, failures: list[Finding], log: 
             command, shell, env = portable.shell(cmd.replace("{test}", shlex.quote(test)), b.check_env())
             proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdin=subprocess.DEVNULL, stdout=out,
                                     stderr=subprocess.STDOUT, **portable.own_group())
+            b.track(proc)
             try:
                 code = proc.wait(timeout=RERUN_SECONDS)
             except subprocess.TimeoutExpired:
                 portable.stop_group(proc)
                 code = None
+            finally:
+                b.track(proc, on=False)
             out.write(f"=== colony: {test} {'passed alone' if code == 0 else 'failed again'} ===\n")
             out.flush()
             if code == 0:
@@ -941,6 +1032,7 @@ def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, st
     checks-<r>.md; return (passed, result line, failures, the run's minutes before any rerun). The checks pass after
     a failed run when every failing test passed alone and the output shows no other failure (other_failures)."""
     code = proc.wait()
+    b.track(proc, on=False)
     minutes = (time.time() - started) / 60
     b.running(f"checks-r{r}", False)
     b.minute(f"checks-r{r}", minutes, clock=clock)
@@ -1010,7 +1102,9 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
         b.running(f"checks-r{r}", True)
         with log.open("wb") as out:
             command, shell, env = portable.shell(cmd, b.check_env())
-            proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT)
+            proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT,
+                                    **portable.own_group())
+            b.track(proc)
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
@@ -1427,9 +1521,28 @@ def run_rounds(b: Batch) -> int:
     return 1
 
 
+def stop_on_signal(b: Batch) -> dict:
+    """Make Ctrl-C and SIGTERM stop the batch: each agent, check and rerun runs in its own process group, so the
+    terminal's Ctrl-C never reaches them. The handler stops every group the batch has running (b.procs), then exits at
+    once, 130 on Ctrl-C and 143 on SIGTERM, without waiting on the threads that watch them. Returns the handlers it
+    replaced, for signal.signal to put back."""
+
+    def stop(signum, frame) -> None:
+        with b.lock:
+            b.stopping = True
+            running = list(b.procs)
+        portable.stop_groups(running)
+        print(f"\ncolony batch {b.name}: stopped by {signal.Signals(signum).name}, with the {len(running)} processes it "
+              f"had running. Reports: {b.reports}", flush=True)
+        sys.stderr.flush()
+        os._exit(128 + signum)
+
+    return {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
+
+
 def run_batch(config: dict, args) -> int:
     """Run `colony batch`: the rounds for the cards (run_rounds), or in hack mode with no cards the demo review
-    (review_demo), then `colony tidy` (tidy_at_end)."""
+    (review_demo), then `colony tidy` (tidy_at_end). Ctrl-C stops every agent the batch has running (stop_on_signal)."""
     b = Batch.from_args(config, args)
     if b.dry:
         print(demo_plan(b) if b.demo else plan(b))
@@ -1437,8 +1550,13 @@ def run_batch(config: dict, args) -> int:
     if b.wt.exists() or _git(b.root, "branch", "--list", b.branch):
         print(f"colony batch {b.name}: {b.branch} or {b.wt} already exists; pick another --name")
         return 1
-    result = review_demo(b) if b.demo else run_rounds(b)
-    tidy_at_end(b)
+    replaced = stop_on_signal(b) if threading.current_thread() is threading.main_thread() else {}
+    try:
+        result = review_demo(b) if b.demo else run_rounds(b)
+        tidy_at_end(b)
+    finally:
+        for signum, handler in replaced.items():
+            signal.signal(signum, handler)
     return result
 
 

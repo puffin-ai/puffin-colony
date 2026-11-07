@@ -154,21 +154,31 @@ def own_group() -> dict:
 def stop_group(proc: subprocess.Popen) -> None:
     """End a program started with own_group, and everything it started: SIGTERM to its group, then up to 5 seconds
     later SIGKILL to whatever of the group is left, on macOS and Linux; `taskkill /T /F` on its tree on Windows."""
+    stop_groups([proc])
+
+
+def stop_groups(procs: list[subprocess.Popen]) -> None:
+    """End several programs started with own_group at once, as stop_group ends one: every group gets SIGTERM first,
+    and SIGKILL goes to whatever is left 5 seconds later."""
     if WINDOWS:
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
-        proc.wait()
+        for proc in procs:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+            proc.wait()
         return
     import signal
 
     for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
-        try:
-            os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.wait(timeout=wait)
-        except subprocess.TimeoutExpired:
-            pass
+        for proc in procs:
+            try:
+                os.killpg(proc.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+        deadline = None if wait is None else time.monotonic() + wait
+        for proc in procs:
+            try:
+                proc.wait(timeout=None if deadline is None else max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def native(path: str) -> str:

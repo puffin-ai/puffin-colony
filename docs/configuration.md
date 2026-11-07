@@ -107,7 +107,7 @@ Optional. It lets a batch check only the areas a change touches. Without `areas`
 | `areas` | no | `{ web = ["apps/web/"], backend = ["apps/backend/"] }` | Each check area and its paths, as prefixes or globs. A round runs the areas its changed paths are in; a changed path no area names runs every area. The area names fill `{areas}` in `[project] checks`. |
 | `all` | no | `"all"` | What `{areas}` takes when every area runs. Empty joins every area's name. |
 | `skip` | no | `["docs/", "*.md"]` | Paths whose change runs no check, such as docs. A round that changes only these skips the checks. |
-| `rerun` | no | `"cd apps/backend && uv run pytest {test}"` | A failing test whose output names a timeout or a time limit runs once more by itself with this command, `{test}` its id as the output named it. It counts only when it fails again. Empty reruns nothing. |
+| `rerun` | no | `"cd apps/backend && uv run pytest {test}"` | A failing test whose every failure reason names a timeout or a time limit runs once more by itself with this command, `{test}` its id as the output named it. It counts only when it fails again, and the round passes on its reruns only when nothing else in the output failed. Empty reruns nothing. |
 | `minutes` | no | `41` | A run of every area's minutes, the yardstick for the minutes `minutes.md` says a narrowed round saved. Without it, the batch's own run of every area. |
 
 ## `[walk]`

@@ -597,6 +597,55 @@ def test_a_test_that_failed_on_a_timeout_runs_once_more_alone_and_counts_only_wh
     assert "| rerun | 3 |" in batch.minutes_table((b.reports / "minutes.md").read_text())
 
 
+VITEST_LOG = """ × src/cal/week.test.tsx > renders the week
+ × src/cal/day.test.tsx > loads the day
+   → Test timed out in 5000ms.
+"""
+MAKE_LOG = """eslint src
+/repo/src/cal/day.ts
+  3:7  error  'unused' is assigned a value but never used  no-unused-vars
+
+✖ 1 problem (1 error, 0 warnings)
+
+make: *** [lint] Error 1
+vitest run
+ × src/cal/day.test.tsx > loads the day
+   → Test timed out in 5000ms.
+
+ Test Files  1 failed (1)
+make: *** [test] Error 1
+make: Target `check' not remade because of errors.
+"""
+
+
+def test_a_failing_test_with_no_reason_is_never_rerun_as_a_timeout_beside_one_that_timed_out(repo, config, tmp_path):
+    tests = ["src/cal/week.test.tsx", "src/cal/day.test.tsx"]
+    assert batch.timing_tests(VITEST_LOG, tests) == ["src/cal/day.test.tsx"]
+    assert batch.timing_tests(" FAIL  src/cal/day.test.tsx > loads the day\nError: Test timed out in 5000ms.\n",
+                              tests[1:]) == tests[1:]
+    (tmp_path / "log.txt").write_text(VITEST_LOG)
+    b = batch.Batch.from_args(with_areas(config, rerun="echo {test} >> ../reruns.txt"), batch_args(repo, "11=card/a"))
+    b.wt, b.reports = repo, tmp_path / "reports"
+    b.reports.mkdir()
+    passed, _, failures, _ = check_run(b, 1, f"cat {tmp_path / 'log.txt'}; exit 1")
+    assert (tmp_path / "reruns.txt").read_text() == "src/cal/day.test.tsx\n"
+    assert not passed and [batch.test_id(f) for f in failures] == ["src/cal/week.test.tsx"]
+
+
+def test_a_timeout_that_passes_alone_never_clears_a_round_whose_other_steps_failed(repo, config, tmp_path):
+    (tmp_path / "log.txt").write_text(MAKE_LOG)
+    b = batch.Batch.from_args(with_areas(config, rerun="true"), batch_args(repo, "11=card/a"))
+    b.wt, b.reports = repo, tmp_path / "reports"
+    b.reports.mkdir()
+    passed, _, failures, _ = check_run(b, 1, f"cat {tmp_path / 'log.txt'}; exit 2")
+    assert "passed alone on a rerun, so not counted: src/cal/day.test.tsx" in (b.reports / "checks-1.md").read_text()
+    assert not passed
+    assert failures == [Finding("", 0, "checks failed: make: *** [lint] Error 1; make: *** [test] Error 1")]
+    assert batch.other_failures("error: the linker failed\n", {"src/a.test.ts"}) == [
+        "error: the linker failed", "the output names no failing test or step"]
+    assert batch.other_failures(" FAIL  src/a.test.ts > b\nError: Test timed out in 5000ms.\n", {"src/a.test.ts"}) == []
+
+
 def test_a_batch_checks_only_the_areas_its_change_touched_and_minutes_md_shows_what_that_saved(repo, config, stubs):
     with_areas(config, skip=["*.txt"], minutes=41)
     config["project"]["checks"] = "echo {areas} >> ../areas.txt"
@@ -710,6 +759,12 @@ elif folder.endswith("account") and mode == "retry":
         print(json.dumps({"type": "system", "subtype": "api_retry", "attempt": attempt, "max_retries": 10,
                           "retry_delay_ms": 100, "error_status": 429, "error": "rate_limit"}), flush=True)
         time.sleep(0.1)
+elif folder.endswith("account") and mode == "subscription":
+    print(json.dumps({"type": "assistant", "message": {"model": "<synthetic>", "content": [
+        {"type": "text", "text": "You've hit your limit · resets 3pm (Europe/Berlin)"}]}}))
+    print(json.dumps({"type": "result", "is_error": True, "total_cost_usd": 0, "duration_ms": 10,
+                      "result": "You've hit your limit · resets 3pm (Europe/Berlin)"}))
+    sys.exit(1)
 elif folder.endswith("account") and mode == "rejected":
     print(json.dumps({"type": "result", "is_error": True, "total_cost_usd": 0, "duration_ms": 10, "result":
                       "API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":"
@@ -743,7 +798,7 @@ def rate_stub(tmp_path, monkeypatch, config, repo):
     return b
 
 
-@pytest.mark.parametrize("mode", ["retry", "rejected"])
+@pytest.mark.parametrize("mode", ["retry", "rejected", "subscription"])
 def test_a_step_on_a_rate_limited_account_runs_again_on_the_next_account_with_room(rate_stub, tmp_path, monkeypatch,
                                                                                     capsys, mode):
     monkeypatch.setenv("COLONY_STUB_MODE", mode)
@@ -790,6 +845,17 @@ def test_the_rate_limit_signs_come_only_from_claude_codes_own_events():
     assert sign('{"type":"user","message":{"content":"rate_limit_error in a file"}}') == "moving"
     assert sign("API Error: This request would exceed your account's rate limit.") == "limited"
     assert sign("plain progress") is None
+    # A Claude subscription's limit, and any message Claude Code marks with "error": "rate_limit", end the run.
+    assert sign('{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":'
+                '"You\'ve hit your limit · resets 3pm (Europe/Berlin)"}]}}') == "limited"
+    assert sign('{"type":"result","is_error":true,"result":"Claude AI usage limit reached|1794250800"}') == "limited"
+    assert sign('{"type":"result","is_error":true,"result":"5-hour limit reached ∙ resets 3pm"}') == "limited"
+    assert sign('{"type":"assistant","message":{"content":[{"type":"text","text":"API Error: 429"}]},'
+                '"error":"rate_limit"}') == "limited"
+    assert sign('{"type":"assistant","message":{"content":[{"type":"text","text":"The doc: usage limit reached '
+                'means wait"}]}}') == "moving"
+    assert sign('{"type":"result","is_error":false,"result":"You\'ve hit your limit"}') is None
+    assert batch.RATE_LIMIT_GRACE == 300  # a short burst of 429s on a shared account rides it out
 
 
 def test_the_next_account_with_room_skips_the_limited_ones(config, tmp_path, monkeypatch):
@@ -818,3 +884,71 @@ def test_a_dry_run_names_the_areas_the_rerun_the_browser_and_the_three_rounds(re
                      "python3 tools/agent_checks.py all --keep-going"):
         assert expected in out, expected
     assert re.search(r"\{\w+\}", out.replace("{test}", "")) is None
+
+
+STOP_SCRIPT = r'''
+import concurrent.futures as futures, json, sys
+from pathlib import Path
+from colony import batch
+config, folder, agent = json.loads(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+batch.claude_cmd = lambda *args, **kwargs: [sys.executable, agent]
+b = batch.Batch(config, "b1", {}, "HEAD", folder, ("one", str(folder)))
+b.reports = folder
+batch.stop_on_signal(b)
+with futures.ThreadPoolExecutor(max_workers=2) as pool:
+    for step in ("review-r1", "walk-r1"):
+        pool.submit(batch.run_agent, b, "reviewer", "review it", folder, step)
+print("the pool ended", flush=True)
+'''
+LONG_AGENT = r'''
+import json, os, subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+with open(os.path.join(os.path.dirname(__file__), "pids.txt"), "a") as out:
+    out.write(f"{os.getpid()} {child.pid}\n")
+print(json.dumps({"type": "system", "subtype": "init"}), flush=True)
+time.sleep(600)
+'''
+
+
+def gone(pid: int) -> bool:
+    """Whether a process has ended and nothing waits to reap it."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    run = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return run.stdout.strip().startswith("Z") or not run.stdout.strip()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Ctrl-C reaches a process group through POSIX signals")
+@pytest.mark.parametrize("signum", ["SIGINT", "SIGTERM"])
+def test_ctrl_c_stops_every_running_agent_and_ends_the_batch_without_waiting_on_them(config, tmp_path, signum):
+    import json
+    import signal
+    import sys
+
+    (tmp_path / "stop.py").write_text(STOP_SCRIPT)
+    (tmp_path / "agent.py").write_text(LONG_AGENT)
+    env = {**os.environ, "PYTHONPATH": str(Path(batch.__file__).resolve().parents[1])}
+    run = subprocess.Popen([sys.executable, str(tmp_path / "stop.py"), json.dumps(config), str(tmp_path),
+                            str(tmp_path / "agent.py")], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True)
+    pids = tmp_path / "pids.txt"
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and (not pids.exists() or pids.read_text().count("\n") < 2):
+        time.sleep(0.1)
+    if not pids.exists() or pids.read_text().count("\n") != 2:
+        run.kill()
+        pytest.fail(f"the agents never started: {run.communicate()[0]}")
+    started = time.monotonic()
+    run.send_signal(getattr(signal, signum))
+    out, _ = run.communicate(timeout=30)
+    assert time.monotonic() - started < 15
+    assert run.returncode == 128 + getattr(signal, signum), out
+    assert f"colony batch b1: stopped by {signum}, with the 2 processes it had running" in out
+    assert "the pool ended" not in out
+    every = [int(pid) for line in pids.read_text().split("\n") if line for pid in line.split()]
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not all(gone(pid) for pid in every):
+        time.sleep(0.1)
+    assert all(gone(pid) for pid in every), every
