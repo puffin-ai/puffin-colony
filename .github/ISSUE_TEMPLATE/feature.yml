@@ -1,0 +1,22 @@
+name: Feature request
+description: An idea for Colony.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and what got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What Colony could do instead.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Other ways you considered

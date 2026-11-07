@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in Colony doesn't work as its docs say.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, or what you said to the lead, and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: The smallest steps that show the bug. Add `--dry-run` output when it helps.
+      placeholder: |
+        1. colony ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Colony version
+      description: The output of `colony --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: ["hack", "solo", "startup", "not set up yet"]
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and Python version
+      placeholder: macOS 15, Python 3.12
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Any error or log lines. Remove tokens and other secrets first.
+      render: text

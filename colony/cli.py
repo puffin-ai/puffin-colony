@@ -486,7 +486,7 @@ def claude_argv(config: dict, role: str, title: str, config_dir: str, prompt: st
     return ["env", "-u", "CLAUDE_CONFIG_DIR", *argv] if is_default_dir(config_dir) else argv
 
 
-# Where the cmux app keeps its command when the app's installer left it off PATH, as on Burak's Mac.
+# Where the cmux app keeps its command when the app's installer left it off PATH, as on some Macs.
 CMUX_APP = Path("/Applications/cmux.app/Contents/Resources/bin/cmux")
 
 
