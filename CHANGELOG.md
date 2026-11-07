@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1, 2026-11-06
+
+- With both the plugin and `colony hooks install`, each hook runs once: a plugin hook steps aside where the repo's own copy can run, so a helper's error or approval line reaches its lead once.
+- docs/install.md gives the plugin's real install commands.
+
 ## 0.3.0, 2026-11-06
 
 Colony installs as a Claude Code plugin from GitHub, and the lead hears from its helpers sooner.

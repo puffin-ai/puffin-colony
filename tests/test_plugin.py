@@ -129,3 +129,44 @@ def test_the_first_run_says_nothing_when_uv_is_there(tmp_path):
     run, _ = run_first_run(tmp_path, curl="touch called; exit 1", uv=True)
     assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
     assert not (tmp_path / "called").exists()
+
+
+def run_plugin_hook(tmp_path, event: str, repo_hooks: bool, colony_on_path: bool):
+    """Run the plugin's `event` hook through sh in a project of its own, whose settings carry the hooks `colony hooks
+    install` writes or not, with a `colony` on PATH or not. Each colony, the plugin's and the PATH one, writes its
+    name to `ran` when it runs."""
+    project, plugin, path_bin = tmp_path / "project", tmp_path / "plugin", tmp_path / "path"
+    for folder in (project / ".claude", project / cli.DIR / "hooks", plugin / "bin", plugin / "colony" / "hooks",
+                   path_bin):
+        folder.mkdir(parents=True)
+    ran = tmp_path / "ran"
+    for program, name in ((plugin / "bin" / "colony", "plugin"), (path_bin / "colony", "path")):
+        program.write_text(f"#!/bin/sh\necho {name} >> {ran}\n")
+        program.chmod(0o755)
+    for guard in (plugin / "colony" / "hooks" / guards.GUARD, project / cli.DIR / "hooks" / guards.GUARD):
+        guard.write_text(f"open({str(ran)!r}, 'a').write({guard.parts[-4]!r} + '\\n')\n")
+    if repo_hooks:
+        settings = {"hooks": {}}
+        for repo_event, matcher, hook, _ in guards.hook_entries():
+            settings["hooks"].setdefault(repo_event, []).append({"hooks": [hook]})
+        (project / ".claude" / "settings.json").write_text(json.dumps(settings))
+    hooks = json.loads((ROOT / "colony" / guards.PLUGIN_HOOKS).read_text())["hooks"][event]
+    command = hooks[0]["hooks"][0]["command"]
+    path = f"{path_bin}:/usr/bin:/bin" if colony_on_path else "/usr/bin:/bin"
+    subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=60,
+                   env={"PATH": path, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin),
+                        cli.SESSION_ENV: "builder-1"})
+    return ran.read_text().split() if ran.exists() else []
+
+
+def test_the_plugins_hooks_step_aside_where_the_repos_own_hooks_run(tmp_path):
+    for event in ("Notification", "StopFailure", "UserPromptSubmit", "SessionStart"):
+        assert run_plugin_hook(tmp_path / event, event, repo_hooks=True, colony_on_path=True) == []
+    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=True, colony_on_path=False) == []
+
+
+def test_the_plugins_hooks_run_where_the_repos_own_hooks_cannot(tmp_path):
+    for event in ("Notification", "StopFailure", "UserPromptSubmit", "SessionStart"):
+        assert run_plugin_hook(tmp_path / f"{event}-no-path", event, repo_hooks=True, colony_on_path=False) == ["plugin"]
+        assert run_plugin_hook(tmp_path / f"{event}-no-repo", event, repo_hooks=False, colony_on_path=True) == ["plugin"]
+    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=False, colony_on_path=True) == ["plugin"]

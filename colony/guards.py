@@ -204,15 +204,22 @@ def quiet_command(action: str, program: str = cli.NAME) -> str:
             f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {program} hooks {action}; exit 0')
 
 
+def step_aside(marker: str, ready: str) -> str:
+    """The start of a plugin hook's command: exit when the repo's settings carry the same hook from `colony hooks
+    install`, found by its `marker`, and `ready` says that hook can run, so each hook runs once."""
+    files = " ".join(f'"$CLAUDE_PROJECT_DIR/.claude/{name}"' for name in ("settings.json", "settings.local.json"))
+    return f"{ready} && grep -qsF {shlex.quote(marker)} {files} && exit 0; "
+
+
 def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
     """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The `plugin`'s run
     the wait guard and `colony` from the plugin's own copy, where `colony hooks install` copies the guard into the
-    repo and runs the `colony` on PATH."""
+    repo and runs the `colony` on PATH. Where the repo's own copy of a hook can run, the plugin's steps aside."""
     guard = f"colony/hooks/{GUARD}" if plugin else f"{cli.DIR}/hooks/{GUARD}"
     root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
     program = PLUGIN_BIN if plugin else cli.NAME
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
-    return [
+    entries = [
         ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking", program), "async": True}, f"{cli.NAME} hooks asking"),
@@ -221,6 +228,14 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
         ("UserPromptSubmit", None, unread_hook, f"{cli.NAME} hooks unread"),
         ("SessionStart", None, dict(unread_hook), f"{cli.NAME} hooks unread"),
     ]
+    if not plugin:
+        return entries
+    # The repo's guard needs only its copied script, and its other hooks need the `colony` on PATH.
+    repo_guard = f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{GUARD}" ]'
+    on_path = f"command -v {cli.NAME} >/dev/null 2>&1"
+    return [(event, matcher, {**hook, "command": step_aside(mine, repo_guard if GUARD in mine else on_path)
+                              + hook["command"]}, marker)
+            for (event, matcher, hook, marker), (*_, mine) in zip(entries, hook_entries())]
 
 
 PLUGIN_HOOKS = "hooks/hooks.json"  # in the package: the plugin's hooks (.claude-plugin/plugin.json names it)

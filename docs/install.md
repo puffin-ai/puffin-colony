@@ -37,13 +37,13 @@ To have every teammate's Claude Code offer it in your repo, name the marketplace
 }
 ```
 
-When a teammate trusts the repo's folder, Claude Code asks them to install it. One person can also install it alone with `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony`.
+When a teammate trusts the repo's folder, Claude Code asks them to install it. One person can also install it alone with `/plugin marketplace add puffin-ai/puffin-colony`, then `/plugin install puffin-colony@puffin-colony`.
 
 The plugin also gives sessions the `colony` command. Claude Code puts the plugin's `bin/` on the Bash tool's PATH, and `bin/colony` runs Colony from the plugin's own copy through uv, on Python 3.11 or later, which uv fetches when the computer has none. The plugin's hooks run that same `bin/colony`. A `colony` you installed yourself comes first on PATH and wins.
 
 uv is the one thing the plugin needs. When the computer has none, the plugin's first hook of the session installs it with Astral's official installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in `~/.local/bin`) and says so in one line. When that fails, it says so and points to [uv's install page](https://docs.astral.sh/uv/).
 
-The manual route still works: `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>` puts `colony` on your own terminal's PATH as well. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm. Claude Code on claude.ai and Cowork don't install a plugin with a top-level `bin/`, so there Colony takes the manual route.
+The manual route still works: `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>` puts `colony` on your own terminal's PATH as well. A repo that runs the plugin doesn't also need `colony hooks install`. With both, each hook still runs once: a plugin hook steps aside where the repo's settings carry the same hook and it can run, which for the wait guard means its copied script is there, and for the others a `colony` on PATH. Claude Code on claude.ai and Cowork don't install a plugin with a top-level `bin/`, so there Colony takes the manual route.
 
 ## On Windows
 
