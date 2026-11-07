@@ -77,20 +77,20 @@ The workflow `.github/workflows/release.yml` runs on a pushed tag `v*`. It check
 4. **npm: create a token and add the `NPM_TOKEN` secret.**
    1. On npmjs.com: your avatar → Access Tokens → Generate New Token → Granular Access Token. Give it read and write access to packages, scoped to `puffin-colony` (before the first publish, choose "All packages", then narrow it after), and turn on "Bypass two-factor authentication" so CI can publish.
    2. In the GitHub repo: Settings → Secrets and variables → Actions → New repository secret. Name `NPM_TOKEN`, value the token.
-5. **Release.** With the version in `colony/__init__.py` and `npm/package.json` both at `0.2.0`, on the main branch:
+5. **Release.** With the version in `colony/__init__.py`, `npm/package.json` and `.claude-plugin/` all at `0.3.0`, on the main branch:
 
    ```sh
-   git tag v0.2.0 && git push --tags
+   git tag v0.3.0 && git push --tags
    ```
 
    Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
-For each later release, raise the version in both files, commit, and tag `v<version>`.
+For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()` (its install line names the version), add a CHANGELOG.md entry, commit, and tag `v<version>`.
 
 ### Checking a build locally
 
 ```sh
 uv build
-uvx --from ./dist/puffin_colony-0.2.0-py3-none-any.whl puffin-colony --help
+uvx --from ./dist/puffin_colony-0.3.0-py3-none-any.whl puffin-colony --help
 cd npm && npm pack --dry-run
 ```

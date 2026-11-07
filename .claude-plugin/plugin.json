@@ -1,6 +1,6 @@
 {
   "name": "puffin-colony",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Puffin Colony's skills and hooks for Claude Code: the lead, builder, reviewer and walker roles, setup on a hi, and the wait guard.",
   "author": {
     "name": "Puffin Studios, Inc."
