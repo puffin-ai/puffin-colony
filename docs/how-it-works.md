@@ -178,9 +178,13 @@ colony batch --name 2026-11-05 --card 41=builder-2/41 --card 42=builder-3/42 --c
 
 Three things run in parallel:
 
-- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. A round that changed no `backend_paths` file runs the lighter `web_checks` instead, once a full run has passed.
+- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. With `[checks] areas`, a round runs only the areas its change touched: Colony maps each changed path to its areas and fills `{areas}` in the command with their names, or with `[checks] all` when every area runs. A path no area names runs every area, and a change only under `[checks] skip` runs none, so the round skips the checks. After a fix round, the next round runs the areas that failed plus the areas the fixes touched. A failing test whose output names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again; the checks then pass when no other failure is left.
 - **A fresh reviewer.** A new headless session reads the round's diff and checks it against the rubric and the rules, the core and the essentials among them. It reads the places on the risk list first, which `colony batch` takes from `colony tier` at the round's head. It must try to refute each finding before it reports it. Its report starts with `open: N`, the confirmed problems still open, and lists each one as `path:line — what is wrong — the rule it breaks — the smallest fix`. From round 2, it reviews only that round's diff and marks each earlier finding `fixed` or `open`.
-- **A browser walk.** A headless walker starts your stack from a second worktree and walks each card's flows at desktop 1280×800 and phone 390×844, with touch input on the phone, in light and dark. Its report starts with `walk: pass` or `walk: fail`. A round skips the walk when it changes none of the `walk_paths`, unless the last walk failed.
+- **A browser walk.** A headless walker starts your stack from a second worktree and walks each card's flows at desktop 1280×800 and phone 390×844, with touch input on the phone, in light and dark. It walks only the screens the round's changed files feed, as `[walk] screens` maps them, and traces any other changed screen file to its screens itself. It drives the browser `[walk] browser` names: the Playwright MCP, or the `agent-browser` CLI, which runs with no MCP server loaded. Its report starts with `walk: pass` or `walk: fail`. A round skips the walk when it changes none of the `walk_paths`, the user-facing files, unless the last walk failed.
+
+`minutes.md` records what each skip saved, as `saved` lines that the minutes table sums below its total: a skipped check run saves `[checks] minutes` (else the batch's own run of every area), a run of some areas saves that less its own minutes, and a skipped or narrowed walk saves `[walk] minutes` and `cost` the same way.
+
+Every agent streams its events, and Colony watches the stream. When an agent's account hits its rate limit, a 429 `rate_limit_error`, Colony stops it within `RATE_LIMIT_GRACE` seconds (2 minutes), and runs the step again on the person's next account with room, the same pick a session makes. The switch doesn't count as one of the step's two tries, and the PR body lists it. An agent that prints nothing for 20 minutes is stopped as failed.
 
 **A round passes** when the checks pass, the reviewer reports `open: 0`, and the walk passed or was skipped.
 
@@ -200,20 +204,24 @@ A batch stops, and doesn't open a PR, when:
 - the checks fail the same way in two rounds in a row;
 - a fixer commits nothing;
 - a merge conflicts outside the generated files;
-- round `max_rounds` still has findings;
+- the checks still fail in the last round;
 - an agent fails twice, or leaves no valid report twice.
+
+A batch runs at most 3 rounds, fewer when `max_rounds` says so. When the last round passes its checks with review or walk findings still open, each finding becomes a card of its own, and the PR opens listing them. A failing check still stops the batch.
+
+When an agent's account hits its rate limit and none of the person's other accounts has room, the batch stops, naming the account.
 
 On a stop, it commits its reports to the batch branch and prints `stopped: <why>`. The lead turns the cause into a card for the builder who owns it, and runs a new batch under the next name.
 
 ## 9. The pull request
 
-When a round passes, the batch:
+When a round passes, or the last round leaves only review and walk findings, the batch:
 
 1. writes the PR body to `pr.md` and commits the round reports;
 2. pushes the batch branch, and only that branch;
 3. opens a PR into your base branch, titled `<project>: batch <name> (#41, #42, #44)`.
 
-The PR body holds the cards, open problems by round (such as `7 → 4 → 1 → 0`), a table of each round's open count, walk and checks, the check commands and their result lines, any test files the batch deletes, a minutes table that sums each kind of step's runs, minutes and cost, and a card stats table of each card's predicted and actual minutes and tokens.
+The PR body holds the cards, the findings the last round left open as new cards, open problems by round (such as `7 → 4 → 1 → 0`), a table of each round's open count, walk and checks, the check commands and their result lines, any account switches, any test files the batch deletes, a minutes table that sums each kind of step's runs, minutes and cost and what the skips saved, and a card stats table of each card's predicted and actual minutes and tokens.
 
 The lead removes `../next-<batch>`, tells you the link, and keeps the other cards moving.
 

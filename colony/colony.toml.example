@@ -8,9 +8,9 @@ preset = "lean"                    # the rules setup copied: lean, puffin or own
 max_builders = 4                   # builders the lead opens on this machine; more join from other computers
 worktrees = "~/worktrees"          # where builders and batches make their worktrees
 fast_check = "npm test"            # a builder's quick check
-checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs
-web_checks = ""                    # optional: a lighter check for a round that changed no backend_paths file
-backend_paths = []                 # optional: folders whose change needs the full checks
+checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs; with [checks] areas,
+                                   # {areas} in it takes the names of the areas a round runs
+backend_paths = []                 # optional: folders whose change is never TINY to `colony tier`
 generated = []                     # files a build writes, such as "src/generated/*"; a conflict there is rebuilt
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
@@ -38,9 +38,26 @@ tester     = { model = "claude-opus-5-5", effort = "high" }     # `colony tester
 [gate]
 rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]   # the reviewer's checklist
 rules = [".colony/core.md", ".colony/rules/*.md"]   # what the reviewer checks against, plus the repo's CLAUDE.md or AGENTS.md
-max_rounds = 5
+max_rounds = 3                     # 3 at most: after the last, each open finding becomes a card the PR lists
 walk = true                        # walk the changed screens in a browser
 walk_paths = []                    # a round that changes none of these skips the walk; empty walks every round
+
+# Optional: check only the areas a change touches. Each area names its paths, a prefix or a glob; a changed path no
+# area names runs every area, and one under skip runs none. Put {areas} in [project] checks, such as
+# checks = "python3 tools/checks.py {areas}"; all is the word it takes when every area runs.
+[checks]
+areas = {}                         # such as { web = ["apps/web/"], backend = ["apps/backend/"] }
+all = ""                           # such as "all"; empty joins every area's name
+skip = []                          # such as ["docs/", "*.md"]
+rerun = ""                         # a failing test whose output names a timeout or time limit runs once more alone
+                                   # with this, {test} its id, such as "cd apps/backend && uv run pytest {test}"
+minutes = 0                        # a full check run's minutes, the yardstick for the minutes minutes.md says it saved
+
+[walk]
+browser = "playwright"             # "playwright" (the Playwright MCP) or "agent-browser" (the agent-browser CLI)
+screens = {}                       # each screen and the paths that feed it, such as { "/calendar" = ["src/calendar/"] }
+minutes = 0                        # a full walk's minutes and dollars, the yardstick for what a skip saved
+cost = 0
 
 [budget]
 provider_dollars = 0               # model spend inside the app's own evals; above 0 only with the person's yes

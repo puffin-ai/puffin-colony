@@ -111,7 +111,7 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str]:
             installed, last = _shell(project["install"], wt, env)
             if not installed:
                 return False, f"the install failed in the merge worktree: {last}"
-        passed, last = _shell(batch.fast_check(project), wt, env)
+        passed, last = _shell(batch.every_area(config, batch.fast_check(project)), wt, env)
         if not passed:
             return False, f"the fast check failed on the merged result: {last}"
         push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
@@ -182,7 +182,7 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     lines += [f"  in {wt}, at origin/{base}:", "  $ " + shlex.join(["git", "merge", "--no-ff", "--no-edit", branch])]
     if project.get("install"):
         lines.append(f"  $ {project['install']}")
-    return "\n".join(lines + [f"  the fast check: $ {batch.fast_check(project)}",
+    return "\n".join(lines + [f"  the fast check: $ {batch.every_area(config, batch.fast_check(project))}",
                               f"  when it passes: $ git push origin HEAD:refs/heads/{base}",
                               f"  on a conflict or a failing check: $ git push origin {branch}, then",
                               "  $ " + shlex.join(pr)])

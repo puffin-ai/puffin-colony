@@ -357,6 +357,20 @@ def pick(config: dict, person: str, now: datetime | None = None) -> tuple[str, s
     order, last = person_accounts(config, person)
     if not order and not last:
         raise ColonyError(f"{CONFIG_NAME} has no account for {person!r}")
+    found = pick_with_room(config, person, now)
+    if found:
+        return found
+    name = (order or last)[0]
+    whys = "; ".join(judge(n, config["accounts"][n]["config_dir"], now)[2] for n in order + last)
+    return name, config["accounts"][name]["config_dir"], f"every account is out of room, so {name}, the first: {whys}"
+
+
+def pick_with_room(config: dict, person: str, now: datetime | None = None, skip=()) -> tuple[str, str, str] | None:
+    """The person's best account with room or no reading, leaving out the names in `skip`, as (name, config_dir, why),
+    or None when none of the rest has room. pick ranks them; a batch whose account hits its rate limit asks here for
+    the next one."""
+    now = now or datetime.now(timezone.utc)
+    order, last = (([name for name in names if name not in skip]) for names in person_accounts(config, person))
     refresh_usage([config["accounts"][name]["config_dir"] for name in order + last])
     for names in (order, last):
         judged = [(judge(name, config["accounts"][name]["config_dir"], now), i, name) for i, name in enumerate(names)]
@@ -365,9 +379,7 @@ def pick(config: dict, person: str, now: datetime | None = None) -> tuple[str, s
             if ranked:
                 _, _, name, why = ranked[0]
                 return name, config["accounts"][name]["config_dir"], why + (" (last resort)" if names is last else "")
-    name = (order or last)[0]
-    whys = "; ".join(judge(n, config["accounts"][n]["config_dir"], now)[2] for n in order + last)
-    return name, config["accounts"][name]["config_dir"], f"every account is out of room, so {name}, the first: {whys}"
+    return None
 
 
 def pick_account(config: dict, person: str) -> tuple[str, str]:

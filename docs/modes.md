@@ -17,7 +17,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 | Builders | Optional. Each person's lead may open them | Yes | Yes |
 | Messages | One pinned board issue, with `@login` and `@all` mentions, and the prompt hook | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, and the digest |
 | Owner table | Yes, per person, in `AGENTS.md` | No | Optional |
-| Gate | The fast check only. `colony merge <branch>` merges into the base after a passing fast check, when setup's yes allows it. `--review` adds one reviewer before the demo | The checks and a reviewer. The browser walk is optional | The checks, a reviewer and the walk, until 0 problems are open |
+| Gate | The fast check only. `colony merge <branch>` merges into the base after a passing fast check, when setup's yes allows it. `--review` adds one reviewer before the demo | The checks and a reviewer. The browser walk is optional | The checks, a reviewer and the walk, up to 3 rounds; a finding still open after them becomes a card |
 | Knowledge vault, specs, research, card board, retro | No | Off, and each can be turned on | Yes |
 | Rules | A hack core of about 300 words: honesty, ownership and board duties | `lean` | `lean`, `puffin` or `own` |
 | Setup asks | The team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time | The base branch, and the rules | Up to 5 questions, as in [how-it-works.md](how-it-works.md#2-setup-the-first-time) |
@@ -44,7 +44,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 
 ## Startup
 
-**On:** everything. The knowledge vault, tiers, specs, research, the card board, your Needs issue, the gate with its reviewer and browser walk until 0 problems are open, the digest, lead to lead lines, and the retro. The owner table is optional. See [how-it-works.md](how-it-works.md) and [cycle.md](cycle.md).
+**On:** everything. The knowledge vault, tiers, specs, research, the card board, your Needs issue, the gate with its reviewer and browser walk for up to 3 rounds, the digest, lead to lead lines, and the retro. The owner table is optional. See [how-it-works.md](how-it-works.md) and [cycle.md](cycle.md).
 
 ## The defaults files
 

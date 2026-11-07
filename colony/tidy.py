@@ -182,14 +182,22 @@ def lead_cards(items: list[dict], lead: str) -> list[dict]:
             and board.field_value(item, "Lead").lower() == lead.lower()]
 
 
-def card_new(config: dict, args) -> int:
-    """`colony card new "<title>" --body … --size S|M|L [--lead <name>]`: make a card and put it on the board as To
-    do, with its Lead and Size. It refuses at the lead's open-card limit, and on a duplicate of an open issue."""
+class Duplicate(cli.ColonyError):
+    """A new card's title names an open issue's card: `number` is that issue."""
+
+    def __init__(self, number: int, title: str):
+        super().__init__(f"#{number} is already open as {title!r}: add to it instead of opening a duplicate")
+        self.number = number
+
+
+def make_card(config: dict, title: str, body: str, size: str, lead: str, capped: bool = True) -> int:
+    """Make a card, an issue on the board as To do with its Lead and Size, and return its number. It refuses in hack
+    mode, at the lead's `[limits] open_cards_per_lead` when `capped`, and on a duplicate of an open issue (Duplicate).
+    `colony batch` makes the findings its last round leaves open uncapped, since they come from finished work."""
     if wait.hack(config):
         raise cli.ColonyError("hack mode has no cards: hand a task out with a `start:` line on the board")
-    title, repo = " ".join(args.title.split()), config["project"]["repo"]
-    lead = (args.lead or wait.lead_name(config, args)).lower()
-    if not title or not args.body.strip():
+    repo, lead = config["project"]["repo"], lead.lower()
+    if not title or not body.strip():
         raise cli.ColonyError("a card needs a title and a --body")
     limit = limits(config)["open_cards_per_lead"]
     on_board = bool(config.get("features", {}).get("board", True))
@@ -197,19 +205,26 @@ def card_new(config: dict, args) -> int:
     found = board.need_board(config) if on_board else None
     count = len(lead_cards(board.items(found), lead)) if found else \
         len([issue for issue in issues if not is_tracking(issue.get("title", ""))])
-    if count >= limit:
+    if capped and count >= limit:
         raise cli.ColonyError(f"{lead} has {count} open cards, and [limits] open_cards_per_lead is {limit}: close or "
                               "finish one first")
     same = duplicate(title, issues)
     if same is not None:
-        raise cli.ColonyError(f"#{same['number']} is already open as {same.get('title')!r}: add to it instead of "
-                              "opening a duplicate")
-    number = issue_number(wait.gh("issue", "create", "--repo", repo, "--title", title, "--body", args.body))
+        raise Duplicate(same["number"], same.get("title", ""))
+    number = issue_number(wait.gh("issue", "create", "--repo", repo, "--title", title, "--body", body))
     if found:
         try:
-            board.set_fields(config, number, [("Status", "To do"), ("Lead", lead), ("Size", args.size)])
+            board.set_fields(config, number, [("Status", "To do"), ("Lead", lead), ("Size", size)])
         except cli.ColonyError as e:
             raise cli.ColonyError(f"made #{number}, but the board didn't take it: {e}") from None
+    return number
+
+
+def card_new(config: dict, args) -> int:
+    """`colony card new "<title>" --body … --size S|M|L [--lead <name>]`: make a card and put it on the board as To
+    do, with its Lead and Size. It refuses at the lead's open-card limit, and on a duplicate of an open issue."""
+    title, lead = " ".join(args.title.split()), (args.lead or wait.lead_name(config, args)).lower()
+    number = make_card(config, title, args.body, args.size, lead)
     print(f"#{number} {title} (Status=To do, Lead={lead}, Size={args.size})")
     from colony import cycle
     calibrated = cycle.calibration_line(config, args.size, cycle.prediction_of(args.body))

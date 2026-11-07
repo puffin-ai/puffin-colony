@@ -18,7 +18,7 @@ check = "full"                     # a batch runs [project] checks
 review = true                      # and a fresh reviewer reads every round
 walk = false                       # true walks the changed screens in a browser too
 rubric = ["bugs", "security and privacy", "tests", "performance", "accessibility"]
-max_rounds = 5
+max_rounds = 3
 
 [budget]
 provider_dollars = 0

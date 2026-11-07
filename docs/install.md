@@ -16,6 +16,16 @@ You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitH
 
 The sessions Colony opens run `colony` commands themselves (`colony`, `colony wait`, `colony helpers`), so Colony must be on PATH. A first `uvx` or `npx` run takes care of that: it installs Colony for good with `uv tool install puffin-colony`, once, and says so. uv tool, npm, the curl installer and pipx install it for good directly.
 
+### The walker's browser
+
+A batch's walker drives a browser. By default it uses the Playwright MCP, which setup offers. With `[walk] browser = "agent-browser"` in `.colony/colony.toml`, it runs the [agent-browser](https://github.com/vercel-labs/agent-browser) CLI instead, which needs Node and one install on each computer that runs batches. The second command downloads the Chrome it drives:
+
+```sh
+npm install -g agent-browser && agent-browser install
+```
+
+`agent-browser doctor` then checks the install.
+
 ## The repo carries Colony
 
 A repo that runs Colony pins it the way a package file pins a dependency, so a teammate's setup is to clone the repo, open it in Claude Code, and log in. They need no plugin, no click and no command.
