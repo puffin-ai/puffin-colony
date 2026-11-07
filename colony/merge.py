@@ -216,7 +216,7 @@ def sync(config: dict, args) -> int:
         wt = worktree(config)
         ready(root, wt, base)
         _git(wt, "checkout", "--quiet", branch)
-    elif _git(wt, "status", "--porcelain"):
+    elif _git(wt, "status", "--porcelain", "--untracked-files=no"):  # untracked files, such as reports, never block it
         raise cli.ColonyError(f"{branch} has uncommitted changes in {wt}: commit them first")
     before = _git(wt, "rev-parse", "HEAD")
     took = ""
@@ -234,7 +234,9 @@ def sync(config: dict, args) -> int:
                 _git(wt, "merge", "--abort", check=False)
                 print(f"not synced: regen failed after a conflict in {', '.join(paths)}: {last}; {branch} is as it was")
                 return 1
-        _git(wt, "add", "-A")
+        # The tracked files, and what regen writes under the generated paths, never an untracked report.
+        _git(wt, "add", "-u")
+        _git(wt, "add", "-A", "--", *[f":(glob){glob}" for glob in project.get("generated", [])])
         _git(wt, "commit", "--no-edit")
         took = f", taking origin/{base}'s side of {', '.join(paths)}" + (" and running regen" if project.get("regen")
                                                                         else "")

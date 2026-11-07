@@ -324,6 +324,27 @@ def test_sync_rebuilds_a_conflict_only_in_generated_files(world, capsys):
     git(world.clone, "merge-base", "--is-ancestor", "origin/main", "lead/integration")
 
 
+
+def test_sync_passes_untracked_files_by_and_leaves_them_out_of_its_commit(world, capsys):
+    (world.clone / "gen").mkdir()
+    commit(world.clone, {"gen/out.txt": "start\n"}, "generated")
+    git(world.clone, "push", "-q", "origin", "main")
+    world.branch("lead/integration", {"gen/out.txt": "the branch's build\n"})
+    held = world.tmp / "held"
+    git(world.clone, "worktree", "add", "-q", str(held), "lead/integration")
+    (held / ".colony" / "reports" / "b1").mkdir(parents=True)
+    (held / ".colony" / "reports" / "b1" / "review-1.md").write_text("open: 0\n")
+    git(world.teammate, "pull", "-q", "origin", "main")
+    commit(world.teammate, {"gen/out.txt": "the base's build\n"}, "teammate")
+    git(world.teammate, "push", "-q", "origin", "main")
+    assert sync(world.config(template=SYNC), "lead/integration") == 0
+    assert "running regen" in capsys.readouterr().out
+    assert git(held, "status", "--porcelain") == "?? .colony/"
+    assert ".colony" not in git(world.clone, "ls-tree", "-r", "--name-only", "lead/integration")
+    (held / "gen" / "out.txt").write_text("a tracked change\n")
+    with pytest.raises(cli.ColonyError, match="has uncommitted changes"):
+        sync(world.config(template=SYNC), "lead/integration")
+
 def test_sync_stops_on_a_conflict_outside_the_generated_files(world, capsys):
     world.branch("lead/integration", {"a.txt": "from the branch\n"})
     before = git(world.clone, "rev-parse", "lead/integration")
