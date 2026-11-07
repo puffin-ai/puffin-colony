@@ -4,7 +4,9 @@ Only in hack mode, and only when `[gate] merge_after_fast_check = true`, it fetc
 base in Colony's own merge worktree, `<worktrees>/<project>-merge`, runs the fast check there on the merged result,
 and pushes the base only when the check passes. Otherwise it pushes the branch and opens a pull request into the
 base: in another mode, when merging is off, or when the merge conflicts, the check fails, or the base moved on under
-the check twice in a row. It never force-pushes, and one merge runs at a time on a computer.
+the check twice in a row. It never force-pushes, and one merge runs at a time on a computer. When it lands the branch,
+it posts the last good build on the board, `[merged] <branch> → <base> <short sha>, fast check passed`, so every agent
+knows which commit to go back to.
 
 It exits 0 when the branch is on the base, or when the mode or the config sends it to a pull request, and 1 when it
 opened a pull request because the merge or the check failed.
@@ -20,6 +22,7 @@ import json
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 from colony import batch, cli, portable, transport, wait
@@ -89,9 +92,10 @@ def _shell(cmd: str, cwd: Path, env: dict) -> tuple[bool, str]:
     return run.returncode == 0, last
 
 
-def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str]:
+def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str, str]:
     """Merge the branch into origin/<base> in the merge worktree, run the install and the fast check there, and push
-    the base when the check passes. Return whether the branch is on the base, and what happened."""
+    the base when the check passes. Return whether the branch is on the base, what happened, and the commit it pushed,
+    or "" when it pushed none."""
     project = config["project"]
     base, env = project["base"], batch.checks_env(config, root)
     for attempt in range(TRIES):
@@ -100,26 +104,37 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str]:
         ref = branch_ref(root, branch)
         ready(root, wt, base)
         before = _git(wt, "rev-parse", "HEAD")
-        if batch._run(["git", "merge", "--no-ff", "--no-edit", ref], wt, check=False).returncode:
+        message = f"Merge {branch} into {base}"
+        if batch._run(["git", "merge", "--no-ff", "--no-edit", "-m", message, ref], wt, check=False).returncode:
             paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
             _git(wt, "merge", "--abort", check=False)
-            return False, f"merging it into {base} conflicts in {', '.join(paths) or 'the merge'}"
+            return False, f"merging it into {base} conflicts in {', '.join(paths) or 'the merge'}", ""
         head = _git(wt, "rev-parse", "HEAD")
         if head == before:
-            return True, f"{branch} is already in {base}: nothing to push"
+            return True, f"{branch} is already in {base}: nothing to push", ""
         if project.get("install"):
             installed, last = _shell(project["install"], wt, env)
             if not installed:
-                return False, f"the install failed in the merge worktree: {last}"
+                return False, f"the install failed in the merge worktree: {last}", ""
         passed, last = _shell(batch.fast_check(project), wt, env)
         if not passed:
-            return False, f"the fast check failed on the merged result: {last}"
+            return False, f"the fast check failed on the merged result: {last}", ""
         push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
         if push.returncode == 0:
-            return True, f"merged {branch} into {base} at {head[:9]}: the fast check passed ({last})"
+            return True, f"merged {branch} into {base} at {head[:9]}: the fast check passed ({last})", head
         if not REJECTED.search(push.stderr):
             raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
-    return False, f"{base} moved on {TRIES} times while the fast check ran"
+    return False, f"{base} moved on {TRIES} times while the fast check ran", ""
+
+
+def post_landed(config: dict, branch: str, head: str) -> None:
+    """Post the last good build on the board: `[merged] <branch> → <base> <short sha>, fast check passed`. It wakes
+    no agent, and a post that fails says so on stderr alone, since the branch has landed."""
+    line = f"[merged] {branch} → {config['project']['base']} {head[:7]}, fast check passed"
+    try:
+        print(f"posted on the board #{transport.send(config, '', line)}: {line}")
+    except cli.ColonyError as e:
+        print(f"{cli.NAME} merge: the branch landed, and the board didn't get the line: {e}", file=sys.stderr)
 
 
 def open_pr(config: dict, root: Path, branch: str, reason: str) -> str:
@@ -183,7 +198,8 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     if project.get("install"):
         lines.append(f"  $ {project['install']}")
     return "\n".join(lines + [f"  the fast check: $ {batch.fast_check(project)}",
-                              f"  when it passes: $ git push origin HEAD:refs/heads/{base}",
+                              f"  when it passes: $ git push origin HEAD:refs/heads/{base}, and it posts "
+                              f"`[merged] {branch} → {base} <short sha>, fast check passed` on the board",
                               f"  on a conflict or a failing check: $ git push origin {branch}, then",
                               "  $ " + shlex.join(pr)])
 
@@ -271,9 +287,11 @@ def run(config: dict, args) -> int:
         print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
     with one_at_a_time(config):
-        landed, what = land(config, root, wt, branch)
+        landed, what, head = land(config, root, wt, branch)
     if landed:
         print(what)
+        if head:
+            post_landed(config, branch, head)
         return 0
     print(f"not merged: {what}. Pull request: {open_pr(config, root, branch, what)}")
     return 1

@@ -4,10 +4,21 @@ Hack mode is for a team that builds something in hours or a weekend. Each teamma
 
 ## Before you start
 
-Every teammate needs:
-- write access to the repo on GitHub, and `gh` signed in (`gh auth login`);
-- Claude Code, signed in, or another agent that can run shell commands;
-- Colony: `uv tool install git+https://github.com/puffin-ai/puffin-colony`.
+Only the person who runs setup needs Colony, and only once. They run it with uv:
+
+```sh
+uvx --from git+https://github.com/puffin-ai/puffin-colony colony
+```
+
+Or they use the Claude Code plugin, as [install.md](install.md#as-a-claude-code-plugin) says.
+
+Every other teammate needs no Colony install. Setup commits `.colony/bin/colony`, a launcher pinned to one Colony version, and the repo's hooks put it on each session's PATH. The first run fetches that version through uv. So each teammate:
+
+1. clones the repo, with write access on GitHub;
+2. runs `gh auth login`;
+3. opens Claude Code in the repo and logs in to Claude.
+
+A teammate who uses another agent, such as Codex, needs only `sh` and `gh`.
 
 ## Kickoff
 
@@ -15,7 +26,7 @@ Take 10 minutes for this. It saves hours of merge conflicts.
 
 1. **Split the work by folder.** Give each person folders nobody else edits, such as `web/` for one and `api/` for another. Shared files, such as `package.json`, the database schema or shared types, get one owner too.
 2. **Run setup once.** One person runs `colony` in the repo, picks `hack`, and answers: the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. Setup writes the owner table into `AGENTS.md`, opens and pins the board issue, copies `tools/board`, and opens its setup PR. Merge it.
-3. **Everyone opens a lead.** Each teammate pulls and runs `colony` on their own machine. Your lead is `<login>-lead`. Tell it your part of the demo.
+3. **Everyone opens a lead.** Each teammate pulls, opens Claude Code in the repo, and says hi, or runs `.colony/bin/colony` in a terminal. Your lead is `<login>-lead`. Tell it your part of the demo.
 
 The owner table holds each person, their login and their folders, such as:
 
@@ -49,13 +60,28 @@ A post with none of these stays on the board for anyone to read, and wakes no ag
 
 **Good posts** say what changed and where, ask for one thing, or warn the team. You can post yourself, from GitHub on any device. Never paste a key or a token: the board is an issue, and anyone with access to the repo reads it.
 
+**Lines with a fixed shape.** `AGENTS.md` asks every agent for these:
+
+| Line | Shape |
+| --- | --- |
+| Done | ends with `Not verified: <what you didn't check>`, or `Not verified: nothing` |
+| Deploy | `DEPLOY: <what>, <when>, rollback: <how>`, posted before the deploy |
+| Claim | `taking <files>, @<login> please avoid until PR` |
+| Release | `<files> released`, when the PR lands or you stop |
+| Handoff | the branch and the commit where you stopped, such as `handing ana/login to @sam at 3f2a1bc` |
+| Merged | `[merged] <branch> → <base> <short sha>, fast check passed`, which `colony merge` posts for you |
+
+**A long board moves.** At 300 comments, the next `colony post` closes the board with a link, opens a fresh `Board: <project>` issue, and pins it in place of the old one. `tools/board` finds the fresh issue by its title and keeps reading from where it stopped. `[limits] board_comments` changes the number.
+
 ## Shipping
 
 ```sh
 colony merge <branch>
 ```
 
-It fetches, merges the branch into the base on your machine, and runs the fast check. When the check passes and `[gate] merge_after_fast_check = true`, it pushes the base. Otherwise it opens a PR. It never force-pushes. Agents run it when their work is done, so the base moves all day.
+It fetches, merges the branch into the base on your machine, and runs the fast check. When the check passes and `[gate] merge_after_fast_check = true`, it pushes the base and posts `[merged] <branch> → <base> <short sha>, fast check passed` on the board. Otherwise it opens a PR. It never force-pushes. Agents run it when their work is done, so the base moves all day.
+
+**The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base: `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A force push to your own branch still works.
 
 ## Codex and other agents
 
@@ -70,6 +96,14 @@ Setup copies a POSIX shell script to `tools/board`. It needs only `sh` and `gh`,
 | `tools/board read [-n N]` | Prints the board's last posts, or the last `N`. |
 
 Codex reads `AGENTS.md`, which holds the board and owner sections, so it already knows the rules. Tell it once: "Use `tools/board` to talk to the team, and run `tools/board unread` between tasks."
+
+**A loop that wakes the agent.** `tools/board wait` exits 0 and prints the posts when one is for you. So a terminal can run an agent once per post:
+
+```sh
+while posts=$(tools/board wait); do codex exec "New board posts for you: $posts"; done
+```
+
+To stop the loop, press Ctrl-C, or set `BOARD_WAIT=off` in that shell: `tools/board wait` then exits 1 at once and reads nothing. Pass `--interval 60` to check less often.
 
 ## From your phone
 

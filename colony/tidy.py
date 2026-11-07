@@ -9,7 +9,9 @@
   a lead sends its helpers start, answer and urgent lines. Lead-to-lead lines are free text. `colony post` applies it.
 - The coordination issue and each Needs issue rotate at `[limits] issue_comments` comments (`rotate`): the old one
   gets a closing comment with the open items from its last 50 comments and closes, and a fresh one with the same title
-  links back to it. `keep_short` makes the same check from the comment count before a post.
+  links back to it. `keep_short` makes the same check from the comment count before a post. In hack mode the board
+  moves the same way at `[limits] board_comments` comments before a post (`keep_board`), and the fresh board is
+  pinned in its place.
 - `colony tidy [--dry-run]` closes a card with no update in `[limits] stale_days`, or moves it to future-work when its
   work never started; rotates the long issues; archives Done items after `[limits] archive_days`; turns on the repo's
   `delete_branch_on_merge`; and removes each closed card's clean worktree, keeping a dirty one. It prints the counts
@@ -29,7 +31,7 @@ from pathlib import Path
 
 from colony import board, cli, portable, wait
 
-LIMITS = {"open_cards_per_lead": 10, "stale_days": 7, "issue_comments": 200, "archive_days": 7}
+LIMITS = {"open_cards_per_lead": 10, "stale_days": 7, "issue_comments": 200, "archive_days": 7, "board_comments": 300}
 SUMMARY_COMMENTS = 50  # a rotation's closing comment lists the open items among the old issue's last 50 comments
 NEAR = 0.75  # two titles whose meaningful words overlap this much name the same card
 STOP_WORDS = {"a", "an", "the", "to", "of", "and", "or", "for", "in", "on", "with", "is", "it", "at", "by"}
@@ -281,6 +283,57 @@ def keep_short(config: dict, number: int) -> int:
             return rotate(config, number, info)
     except (cli.ColonyError, ValueError, KeyError, TypeError) as e:
         print(f"{cli.NAME}: the comment count of #{number} was not checked: {e}", file=sys.stderr)
+    return number
+
+
+def board_path(config: dict) -> Path:
+    """Where this computer remembers the fresh issue the hack board moved to, keyed by [messages] board."""
+    return wait.state_path(config["project"]["name"], "board")
+
+
+def board_now(config: dict) -> int:
+    """The hack board's issue as this computer last saw it: [messages] board, or the fresh issue it moved to. It makes
+    no call."""
+    from colony import transport
+
+    start = transport.board_issue(config)
+    known = wait.read_json(board_path(config), {})
+    moved = known.get(str(start)) if isinstance(known, dict) else None
+    return moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > start else start
+
+
+def successor(repo: str, title: str, number: int) -> int | None:
+    """The newest open issue with this title after `number`: the fresh board a closed one moved to, or None."""
+    listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{title}" in:title',
+                                "--json", "number,title", "--limit", "20") or "[]")
+    later = [issue["number"] for issue in listed if issue.get("title") == title and issue.get("number", 0) > number]
+    return max(later) if later else None
+
+
+def keep_board(config: dict) -> int:
+    """Before a post on the hack board: follow a closed board to the fresh one it moved to, and move a board that holds
+    [limits] board_comments comments to a fresh pinned issue with the same title (rotate), so a read stays short.
+    Return the issue to post on, which this computer remembers. It reads one issue, and a failure never stops the
+    post."""
+    from colony import transport
+
+    repo, start, number = config["project"]["repo"], transport.board_issue(config), board_now(config)
+    try:
+        info = issue_info(repo, number)
+        if info.get("state") == "closed":
+            number = successor(repo, info.get("title", ""), number) or number
+        elif int(info["comments"]) >= limits(config)["board_comments"]:
+            new = rotate(config, number, info)
+            for action, issue in (("unpin", number), ("pin", new)):
+                try:
+                    wait.gh("issue", action, str(issue), "--repo", repo)
+                except cli.ColonyError as e:
+                    print(f"{cli.NAME}: #{issue} was not {action}ned, and the board works anyway: {e}", file=sys.stderr)
+            number = new
+    except (cli.ColonyError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME}: the board #{number} was not checked: {e}", file=sys.stderr)
+    if number != board_now(config):
+        wait.write_json(board_path(config), {str(start): number})
     return number
 
 

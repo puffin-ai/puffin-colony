@@ -325,6 +325,55 @@ def test_a_post_on_an_issue_under_its_limit_costs_one_read(gh):  # noqa: F811
     assert gh.calls() == [["api", "repos/acme/demo/issues/6"]]
 
 
+# The hack board
+
+HACK_BOARD = {**CONFIG, "project": {**CONFIG["project"], "mode": "hack"}, "messages": {"board": 7},
+              "people": {"logins": ["ana"], "names": {"ana": "Ana"}}}
+
+
+def test_a_post_on_a_board_with_300_comments_moves_it_to_a_fresh_pinned_issue_that_every_later_post_uses(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7", {"state": "open", "title": "Board: demo", "comments": 300,
+                                               "body": "The board for demo."})
+    gh.answer("issue view 7", {"comments": [comment("[Ana's Claude] @all blocked: main is red")]})
+    gh.answer("issue create", "https://github.com/acme/demo/issues/40\n")
+    assert transport.send(HACK_BOARD, "@all", "@all hello (from ana-lead)") == 40
+    create = gh.called("issue", "create")[0]
+    assert create[create.index("--title") + 1] == "Board: demo"
+    assert create[create.index("--body") + 1].endswith("Continues #7, closed at 300 comments.")
+    closing = gh.called("issue", "comment", "7")[0][-1]
+    assert closing.startswith("Closed at 300 comments; this thread goes on in #40.")
+    assert gh.called("issue", "unpin") == [["issue", "unpin", "7", "--repo", "acme/demo"]]
+    assert gh.called("issue", "pin") == [["issue", "pin", "40", "--repo", "acme/demo"]]
+    assert gh.called("issue", "comment", "40")[0][-1] == "[Ana's Claude] @all hello (from ana-lead)"
+    # Every later read and post on this computer, and the status comments, use the fresh board.
+    assert tidy.board_now(HACK_BOARD) == 40
+    from colony import presence
+    assert presence.where(HACK_BOARD) == 40
+
+
+def test_the_board_moves_at_the_limit_the_config_sets_and_not_before(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7", {"state": "open", "title": "Board: demo", "comments": 299})
+    assert tidy.keep_board(HACK_BOARD) == 7
+    assert gh.calls() == [["api", "repos/acme/demo/issues/7"]]
+    assert tidy.limits({"limits": {"board_comments": 120}})["board_comments"] == 120
+
+
+def test_a_post_from_another_computer_follows_the_closed_board_to_the_fresh_one(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7", {"state": "closed", "title": "Board: demo", "comments": 301})
+    gh.answer("issue list", [{"number": 5, "title": "Board: demo"}, {"number": 40, "title": "Board: demo"},
+                             {"number": 41, "title": "Board: demo, old notes"}])
+    assert tidy.keep_board(HACK_BOARD) == 40
+    assert not gh.called("issue", "create")
+    assert tidy.board_now(HACK_BOARD) == 40
+
+
+def test_the_shell_script_reads_the_note_rotate_leaves_on_the_old_board():
+    pattern = re.search(r"^MOVED='([^']+)'", (Path(tidy.__file__).parent / "scripts" / "board").read_text(), re.M)[1]
+    note = "Closed at 300 comments; this thread goes on in #40.\n\nOpen items from its last 50 comments:\n- none"
+    assert re.match(pattern.replace("[0-9]+", r"\d+"), note)
+    assert "this thread goes on in #{new}" in Path(tidy.__file__).read_text()
+
+
 # The board
 
 

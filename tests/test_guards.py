@@ -77,6 +77,72 @@ def test_the_wait_guard_names_the_endless_loop_and_lets_a_background_call_or_an_
     assert guard("not json").returncode == 0
 
 
+REWRITES_BASE = [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push -fu origin main",
+    "git push origin +main",
+    "git push origin +HEAD:refs/heads/main",
+    "git push --force-with-lease origin HEAD:main",
+    "git push --force-with-lease=main:abc123 origin main",
+    "git push origin :main",
+    "git push --delete origin main",
+    "git push --mirror",
+    "git push --force --all",
+    "git -C . push --force origin main",
+    "git push --force",  # no refspec: the branch checked out, which is main
+    "git push -f origin main &",  # in the background it still rewrites main
+    "npm test && git push --force origin main",
+]
+LEAVES_BASE = [
+    "git push origin main",
+    "git push -u origin ana/login",
+    "git push --force origin ana/login",
+    "git push --force-with-lease origin HEAD:refs/heads/ana/login",
+    "git push origin +ana/login",
+    "echo git push --force origin main",
+    "git log --oneline -3",
+]
+
+
+def push_guard(command: str, root: Path, **call) -> subprocess.CompletedProcess:
+    """Run the guard on one command from a repo whose colony.toml names the base, as Claude Code runs it."""
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root)}
+    return subprocess.run([sys.executable, str(GUARD)], input=json.dumps({"cwd": str(root), "tool_input": {
+        "command": command, **call}}), capture_output=True, text=True, env=env)
+
+
+@pytest.fixture
+def on_main(tmp_path):
+    """A clone on its base, main, with a hack colony.toml."""
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    (tmp_path / ".colony").mkdir()
+    (tmp_path / ".colony" / "colony.toml").write_text('[project]\nmode = "hack"\nbase = "main"\n')
+    return tmp_path
+
+
+@pytest.mark.parametrize("command", REWRITES_BASE)
+def test_the_guard_refuses_a_push_that_force_pushes_or_deletes_the_base(command, on_main):
+    run = push_guard(command, on_main)
+    assert run.returncode == 2, command
+    assert run.stderr.startswith("push guard: refused, ") and "colony merge <branch>" in run.stderr
+    assert push_guard(command, on_main, run_in_background=True).returncode == 2
+
+
+@pytest.mark.parametrize("command", LEAVES_BASE)
+def test_the_guard_lets_a_push_that_leaves_the_base_alone_run(command, on_main):
+    run = push_guard(command, on_main)
+    assert (run.returncode, run.stderr) == (0, ""), command
+
+
+def test_the_guard_protects_the_base_colony_toml_names(on_main):
+    (on_main / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[gate]\nbase = "other"\n')
+    assert push_guard("git push --force origin dev", on_main).returncode == 2
+    assert push_guard("git push --force origin main", on_main).returncode == 0
+    subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
+    assert push_guard("git push --force", on_main).returncode == 0  # the branch checked out is not the base
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A fresh git repo to run in, with HOME in the temporary folder."""
