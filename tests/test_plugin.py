@@ -33,3 +33,33 @@ def test_the_plugins_hooks_file_holds_the_hooks_colony_hooks_install_writes():
 
 def test_the_plugin_carries_colonys_version():
     assert PLUGIN["version"] == MARKETPLACE["plugins"][0]["version"] == __version__
+
+
+def run_first_run(tmp_path, with_colony: bool):
+    """Run the plugin's first-run hook through sh, with a PATH that has `colony` on it or not."""
+    import subprocess
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if with_colony:
+        (bin_dir / "colony").write_text("#!/bin/sh\nexit 0\n")
+        (bin_dir / "colony").chmod(0o755)
+    hooks = json.loads((ROOT / "colony" / guards.PLUGIN_HOOKS).read_text())["hooks"]["SessionStart"]
+    command = next(h["command"] for group in hooks for h in group["hooks"] if "systemMessage" in h["command"])
+    return subprocess.run(["sh", "-c", command], capture_output=True, text=True,
+                          env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
+
+
+def test_the_first_run_names_the_install_command_when_colony_is_missing(tmp_path):
+    run = run_first_run(tmp_path, with_colony=False)
+    assert run.returncode == 0
+    event = json.loads(run.stdout)
+    line = f"uv tool install git+https://github.com/puffin-ai/puffin-colony@v{__version__}"
+    assert event["systemMessage"].endswith(f"Run: {line}")
+    assert f"Tell the person to run `{line}` themselves, and install nothing" in \
+        event["hookSpecificOutput"]["additionalContext"]
+
+
+def test_the_first_run_says_nothing_once_colony_is_installed(tmp_path):
+    run = run_first_run(tmp_path, with_colony=True)
+    assert (run.returncode, run.stdout, run.stderr) == (0, "", "")

@@ -18,6 +18,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -27,7 +28,7 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from colony import cli, portable
+from colony import __version__, cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
@@ -226,7 +227,25 @@ def plugin_hooks() -> dict:
     hooks: dict[str, list] = {}
     for event, matcher, hook, _ in hook_entries(plugin=True):
         hooks.setdefault(event, []).append({**({"matcher": matcher} if matcher else {}), "hooks": [hook]})
-    return {"description": f"{cli.DISPLAY}'s hooks, the ones `{cli.NAME} hooks install` writes", "hooks": hooks}
+    hooks["SessionStart"].append({"hooks": [{"type": "command", "command": first_run_command()}]})
+    return {"description": f"{cli.DISPLAY}'s hooks, the ones `{cli.NAME} hooks install` writes, and its first run",
+            "hooks": hooks}
+
+
+def install_line() -> str:
+    """The command that installs this version of Colony from GitHub, which the plugin's first run names."""
+    return f"uv tool install git+https://github.com/puffin-ai/puffin-colony@v{__version__}"
+
+
+def first_run_command() -> str:
+    """The plugin's SessionStart hook: when `colony` is not on PATH, tell the person the one command that installs
+    it, and the session to leave the install to them. It installs nothing, and always exits 0."""
+    message = f"{cli.DISPLAY}'s plugin is on, but the {cli.NAME} command is not installed. Run: {install_line()}"
+    context = (f"The {cli.NAME} command is not on PATH, so {cli.DISPLAY} can't run yet. Tell the person to run "
+               f"`{install_line()}` themselves, and install nothing on your own.")
+    event = {"systemMessage": message,
+             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+    return f"command -v {cli.NAME} >/dev/null 2>&1 || printf '%s\\n' {shlex.quote(json.dumps(event))}; exit 0"
 
 
 def merge_hooks(path: Path) -> tuple[list[str], list[str]]:

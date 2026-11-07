@@ -37,7 +37,7 @@ To have every teammate's Claude Code offer it in your repo, name the marketplace
 
 When a teammate trusts the repo's folder, Claude Code asks them to install it. One person can also install it alone with `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony`.
 
-The plugin gives a session the skills and the hooks, not the `colony` command, which the sessions run themselves. Install the command one of the ways above. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm.
+The plugin gives a session the skills and the hooks, not the `colony` command, which the sessions run themselves. When `colony` is not on PATH, the plugin's first hook of each session says so and names the command to run, `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>`, and tells the session to leave the install to you: it installs nothing itself. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm.
 
 ## On Windows
 
