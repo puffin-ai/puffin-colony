@@ -20,6 +20,8 @@ The sessions Colony opens run `colony` commands themselves (`colony`, `colony wa
 
 The repo is also a Claude Code plugin marketplace, from GitHub alone. `.claude-plugin/marketplace.json` names one plugin, `puffin-colony`, whose skills are Colony's own (`colony/skills/`) and whose hooks are the ones `colony hooks install` writes (`colony/hooks/hooks.json`). The wait guard runs from the plugin's own copy.
 
+This is the whole setup on a new computer: trust the repo's folder in Claude Code and accept the plugin. Nothing is typed and nothing else is installed by hand, and since the repo is public, Claude Code fetches the plugin from GitHub with no login.
+
 To have every teammate's Claude Code offer it in your repo, name the marketplace and turn the plugin on in the repo's `.claude/settings.json`:
 
 ```json
@@ -37,7 +39,11 @@ To have every teammate's Claude Code offer it in your repo, name the marketplace
 
 When a teammate trusts the repo's folder, Claude Code asks them to install it. One person can also install it alone with `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony`.
 
-The plugin gives a session the skills and the hooks, not the `colony` command, which the sessions run themselves. When `colony` is not on PATH, the plugin's first hook of each session says so and names the command to run, `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>`, and tells the session to leave the install to you: it installs nothing itself. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm.
+The plugin also gives sessions the `colony` command. Claude Code puts the plugin's `bin/` on the Bash tool's PATH, and `bin/colony` runs Colony from the plugin's own copy through uv, on Python 3.11 or later, which uv fetches when the computer has none. The plugin's hooks run that same `bin/colony`. A `colony` you installed yourself comes first on PATH and wins.
+
+uv is the one thing the plugin needs. When the computer has none, the plugin's first hook of the session installs it with Astral's official installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in `~/.local/bin`) and says so in one line. When that fails, it says so and points to [uv's install page](https://docs.astral.sh/uv/).
+
+The manual route still works: `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>` puts `colony` on your own terminal's PATH as well. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm. Claude Code on claude.ai and Cowork don't install a plugin with a top-level `bin/`, so there Colony takes the manual route.
 
 ## On Windows
 
@@ -57,7 +63,7 @@ The first time `colony` runs on a computer, it also installs the `colony-setup` 
 
 ## Publishing a release (maintainers)
 
-The workflow `.github/workflows/release.yml` runs on a pushed tag `v*`. It checks that the tag matches `colony/__init__.py` and `npm/package.json`, runs the tests, builds the sdist and the wheel, publishes them to PyPI with trusted publishing (no token), and then publishes `npm/` to npm with the `NPM_TOKEN` secret.
+A pushed tag `v*` publishes nothing by itself: the plugin and `uv tool install git+...@v<version>` install from the tag on GitHub, and the tag is the release. The workflow `.github/workflows/release.yml` publishes to PyPI and npm only when a maintainer runs it by hand, under Actions → release → Run workflow, with the tag to publish. It checks that the tag matches `colony/__init__.py`, `npm/package.json` and `.claude-plugin/plugin.json`, runs the tests, builds the sdist and the wheel, publishes them to PyPI with trusted publishing (no token), and then publishes `npm/` to npm with the `NPM_TOKEN` secret.
 
 ### One-time setup
 
@@ -83,7 +89,7 @@ The workflow `.github/workflows/release.yml` runs on a pushed tag `v*`. It check
    git tag v0.3.0 && git push --tags
    ```
 
-   Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
+   That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
 For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()` (its install line names the version), add a CHANGELOG.md entry, commit, and tag `v<version>`.
 

@@ -1,32 +1,65 @@
 # Puffin Colony
 
-**One command, and Claude Code runs your repo's whole software life cycle: knowledge, plan, research, spec, build, check and learn.**
+[![tests](https://github.com/puffin-ai/puffin-colony/actions/workflows/tests.yml/badge.svg)](https://github.com/puffin-ai/puffin-colony/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 
-New here? [Explained simply](#explained-simply) says what it does in a minute. [The full overview](docs/overview.md) covers every part, with diagrams.
+**A team of Claude Code agents for your repo: you say what you want, they plan, build, check, and hand you one pull request.**
 
-## Install once, then pick one of 3 setups
+## What happens, in 30 seconds
 
-You need Python 3.11 or later, `git`, the GitHub CLI `gh` (signed in), and [Claude Code](https://code.claude.com) (signed in). Your repo must be on GitHub.
+1. You open your repo in Claude Code and say what you want, in plain words: "Add a dark mode switch, and fix the date picker on phones."
+2. Your **lead**, the session you talk to, splits the request into **cards** on a GitHub board and asks you only what it can't decide, each time with a default.
+3. **Helpers** take the cards and build them at the same time, each on its own branch and in its own part of the code.
+4. Colony checks the work: your tests, a fresh **reviewer** that reads the change, and, for a web app, a **walker** that clicks through it in a browser. Each problem goes back to the helper that made it, until none are left.
+5. The lead hands you **one pull request**. You read it and merge.
 
-Install once:
+What the agents learn stays in your repo as pages, not in a chat that ends. [Explained simply](docs/explained-simply.md) says a bit more about each part.
+
+## Quick start
+
+You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitHub CLI `gh` (signed in). Your repo must be on GitHub.
+
+1. In Claude Code, add the plugin: `/plugin marketplace add puffin-ai/puffin-colony`, then `/plugin install puffin-colony@puffin-colony`.
+2. Open your repo in Claude Code.
+3. Say **hi**.
+
+Your teammates skip step 1: a repo that names the plugin in its `.claude/settings.json` offers it when they trust the folder, so they only accept it. [docs/install.md](docs/install.md#as-a-claude-code-plugin) shows the lines.
+
+There is nothing to install: the plugin runs `colony` through [uv](https://docs.astral.sh/uv/), and installs uv the first time when the computer has none, saying so in one line.
+
+The first time, Colony asks which of 3 setups you want, then a few questions, each with a default, and opens one PR with everything it wrote. Merge it. Every time after that, "hi" opens your lead.
+
+To install by hand instead, and run Colony from your terminal:
 
 ```sh
 uv tool install git+https://github.com/puffin-ai/puffin-colony
+cd your-repo && colony
 ```
 
-`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Colony is also a Claude Code plugin: `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony` gives a session its skills and hooks, and [docs/install.md](docs/install.md#as-a-claude-code-plugin) says how a repo names it for every teammate. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works too: the first run installs Colony for good, so `colony` is on your PATH after.
+`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. [docs/install.md](docs/install.md) covers the plugin, Windows, and how a repo names Colony for every teammate. Add `--dry-run` to any `colony` command to see a plan without running anything.
 
-There is no separate setup command. The first `colony` in a repo, or saying "hi" in the Claude app in that repo, asks which of the 3 setups you want:
+## Docs
+
+- [Explained simply](docs/explained-simply.md): the whole system in plain words
+- [Overview](docs/overview.md): every part on one page, with diagrams
+- [Install](docs/install.md): the plugin, the package, and Windows
+- [Modes](docs/modes.md): Hack, Solo and Startup, the defaults files, and switching
+- [Hackathon guide](docs/hackathon.md): one page, from kickoff to the demo
+- [How it works](docs/how-it-works.md): setup, the lead, builders and the gate, step by step
+- [The cycle](docs/cycle.md): tiers, spec, research, the Needs issue, the board, handover, stats and retro
+- [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
+- [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
+- [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
+- [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
+
+## The 3 setups
 
 - **Hack:** a lead for each teammate, one pinned board issue for messages, and a fast check before `colony merge`.
 - **Solo:** one lead for one person, with tests and a reviewer on every change.
 - **Startup:** a lead for each person, plus the vault, specs, research, a browser walk and a retro.
 
-Then it asks a few more questions, each with a default, and opens one PR with everything it wrote. Merge it.
-
-Every time after that, `colony` or "hi" opens your lead. Every session you type into is a lead, over its own folders when another lead is already working; type `join` instead, and that session becomes a helper of your lead. To switch setups later, change `mode` in `.colony/colony.toml`. See [docs/modes.md](docs/modes.md#switching-later).
-
-Saying "hi" works even in a repo that has never used Colony, because the first `colony` run on a computer installs what it needs. Add `--dry-run` to any `colony` command to see a plan without running anything.
+Every session you type into is a lead, over its own folders when another lead is already working; type `join` instead, and that session becomes a helper of your lead. To switch setups later, change `mode` in `.colony/colony.toml`. See [docs/modes.md](docs/modes.md#switching-later).
 
 ## Why Puffin Colony
 
@@ -35,33 +68,7 @@ Saying "hi" works even in a repo that has never used Colony, because the first `
 - **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop until 0 problems are open.
 - **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, subagents split each card into pieces that run at the same time, and every minute and dollar is measured.
 - **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
-- **Nothing new to run.** One command, no servers, standard-library Python, on your own machine and your own Claude accounts.
-
-What one team saw in its first runs, on 2026-11-05. These are early runs, not a benchmark, and your numbers will differ:
-
-- Open problems went from 7 to 0 over 4 fix rounds, across 10 cards.
-- The browser walk caught 4 phone bugs that the tests missed.
-- Loading rules only when needed cut the cost per session by 14%.
-- A tiny change took about 2 minutes.
-- In the second batch, two cards went from the request to an open PR in about 66 minutes, for $9.58 of agent cost at API prices.
-
-## Explained simply
-
-- You tell a **lead** what you want.
-- The lead splits it into **cards** and gives each card to a **helper**.
-- You can run lots of helpers at once, on this computer or others. Each belongs to one lead and works only in its part of the code.
-- A helper uses **subagents** to finish faster. Subagents are mini-workers: each does one piece at the same time as the others and hands back a short result. More helpers means more cards at once. More subagents means each card finishes sooner.
-- Colony checks everything: the tests, a fresh **reviewer**, and a **walker** that clicks through the app. Each problem goes back to the helper that made it, until 0 are left.
-- The lead brings you one **PR**, and you merge.
-- What they learn goes in the **vault**, and your lead can talk to **other people's leads**.
-
-[docs/explained-simply.md](docs/explained-simply.md) says a bit more about each part.
-
-```console
-$ cd your-repo && colony     # first time: pick a setup, a few questions, then one PR
-$ colony                     # every day after: your lead opens
-> Add a dark mode switch to settings, and fix the date picker on phones.
-```
+- **Nothing new to run.** No servers, standard-library Python, on your own machine and your own Claude accounts.
 
 ## Modes
 
@@ -123,21 +130,9 @@ One team's first batch: Puffin Calendar, on 2026-11-05. It is one run, not a ben
 | Time per fix card | 1 to 25 minutes, median about 5 |
 | A tiny change | about 2 minutes |
 | The whole batch | about 2.5 hours, mostly checks |
+| Cost per session after rules loaded only when needed | 14% lower |
 
 Colony's first batch with nobody relaying messages, and what it cost, are in [docs/faq.md](docs/faq.md#numbers-from-the-first-batches).
-
-## Docs
-
-- [Explained simply](docs/explained-simply.md): the whole system in plain words
-- [Overview](docs/overview.md): every part on one page, with diagrams
-- [Modes](docs/modes.md): Hack, Solo and Startup, the defaults files, and switching
-- [Hackathon guide](docs/hackathon.md): one page, from kickoff to the demo
-- [How it works](docs/how-it-works.md): setup, the lead, builders and the gate, step by step
-- [The cycle](docs/cycle.md): tiers, spec, research, the Needs issue, the board, handover, stats and retro
-- [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
-- [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
-- [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
-- [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## Develop
 
@@ -145,4 +140,4 @@ Colony's first batch with nobody relaying messages, and what it cost, are in [do
 uv run --with pytest pytest -q tests
 ```
 
-Colony is Python 3.11+ standard library only, and shells out to `git`, `gh`, `claude` and `cmux`.
+Colony is Python 3.11+ standard library only, and shells out to `git`, `gh`, `claude` and `cmux`. [CONTRIBUTING.md](CONTRIBUTING.md) says how to send a change, and [SECURITY.md](SECURITY.md) how to report a security problem.
