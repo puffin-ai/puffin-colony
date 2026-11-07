@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from colony import __version__, cli, portable
+from colony import cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
@@ -188,30 +188,35 @@ def python_command(path: str, *args: str, root: str = "$CLAUDE_PROJECT_DIR") -> 
             f"{run}; elif python -V >/dev/null 2>&1; then exec python {run}; else exec py -3 {run}; fi")
 
 
-def colony_command(action: str) -> str:
+PLUGIN_BIN = '"${CLAUDE_PLUGIN_ROOT}/bin/colony"'  # the plugin's own `colony`: a hook's PATH lacks the plugin's bin/
+
+
+def colony_command(action: str, program: str = cli.NAME) -> str:
     """A hook's shell command that runs `colony hooks <action>` in a Colony session, and skips every other one."""
-    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {cli.NAME} >/dev/null 2>&1 || exit 0; '
-            f'cd "$CLAUDE_PROJECT_DIR" && exec {cli.NAME} hooks {action}')
+    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {program} >/dev/null 2>&1 || exit 0; '
+            f'cd "$CLAUDE_PROJECT_DIR" && exec {program} hooks {action}')
 
 
-def quiet_command(action: str) -> str:
+def quiet_command(action: str, program: str = cli.NAME) -> str:
     """A hook's shell command that runs `colony hooks <action>` in a Colony session, skips every other one, and always
     exits 0: a UserPromptSubmit hook that exits 2 would erase the person's prompt."""
-    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {cli.NAME} >/dev/null 2>&1 || exit 0; '
-            f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {cli.NAME} hooks {action}; exit 0')
+    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {program} >/dev/null 2>&1 || exit 0; '
+            f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {program} hooks {action}; exit 0')
 
 
 def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
     """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The `plugin`'s run
-    the wait guard from the plugin's own copy of the package, where `colony hooks install` copies it into the repo."""
+    the wait guard and `colony` from the plugin's own copy, where `colony hooks install` copies the guard into the
+    repo and runs the `colony` on PATH."""
     guard = f"colony/hooks/{GUARD}" if plugin else f"{cli.DIR}/hooks/{GUARD}"
     root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
-    unread_hook = {"type": "command", "command": quiet_command("unread"), "timeout": HOOK_TIMEOUT}
+    program = PLUGIN_BIN if plugin else cli.NAME
+    unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
     return [
         ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
         ("Notification", "permission_prompt",
-         {"type": "command", "command": colony_command("asking"), "async": True}, f"{cli.NAME} hooks asking"),
-        ("StopFailure", None, {"type": "command", "command": colony_command("stopped"), "async": True},
+         {"type": "command", "command": colony_command("asking", program), "async": True}, f"{cli.NAME} hooks asking"),
+        ("StopFailure", None, {"type": "command", "command": colony_command("stopped", program), "async": True},
          f"{cli.NAME} hooks stopped"),
         ("UserPromptSubmit", None, unread_hook, f"{cli.NAME} hooks unread"),
         ("SessionStart", None, dict(unread_hook), f"{cli.NAME} hooks unread"),
@@ -232,20 +237,27 @@ def plugin_hooks() -> dict:
             "hooks": hooks}
 
 
-def install_line() -> str:
-    """The command that installs this version of Colony from GitHub, which the plugin's first run names."""
-    return f"uv tool install git+https://github.com/puffin-ai/puffin-colony@v{__version__}"
+UV_INSTALLER = "https://astral.sh/uv/install.sh"  # Astral's official installer, which puts uv in ~/.local/bin
+UV_HOME_BIN = "$HOME/.local/bin/uv"  # where that installer puts uv, which bin/colony looks in too
 
 
 def first_run_command() -> str:
-    """The plugin's SessionStart hook: when `colony` is not on PATH, tell the person the one command that installs
-    it, and the session to leave the install to them. It installs nothing, and always exits 0."""
-    message = f"{cli.DISPLAY}'s plugin is on, but the {cli.NAME} command is not installed. Run: {install_line()}"
-    context = (f"The {cli.NAME} command is not on PATH, so {cli.DISPLAY} can't run yet. Tell the person to run "
-               f"`{install_line()}` themselves, and install nothing on your own.")
-    event = {"systemMessage": message,
-             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
-    return f"command -v {cli.NAME} >/dev/null 2>&1 || printf '%s\\n' {shlex.quote(json.dumps(event))}; exit 0"
+    """The plugin's SessionStart hook: the plugin's bin/colony runs Colony through uv, so when the computer has no uv,
+    install it with Astral's official installer and say so in one line. With uv in place it says nothing, and it
+    always exits 0."""
+    def say(message: str) -> str:
+        event = {"systemMessage": message,
+                 "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": message}}
+        return f"printf '%s\\n' {shlex.quote(json.dumps(event))}"
+    installed = say(f"{cli.DISPLAY} installed uv, which runs the {cli.NAME} command, with Astral's installer "
+                    f"({UV_INSTALLER}).")
+    failed = say(f"{cli.DISPLAY} could not install uv, which runs the {cli.NAME} command: install it from "
+                 f"https://docs.astral.sh/uv/ and start a new session.")
+    have_uv = f'command -v uv >/dev/null 2>&1 || [ -x "{UV_HOME_BIN}" ]'
+    return (f"{have_uv} && exit 0; "
+            f"if command -v curl >/dev/null 2>&1; then curl -LsSf {UV_INSTALLER}; else wget -qO- {UV_INSTALLER}; fi "
+            f"2>/dev/null | sh >/dev/null 2>&1; "
+            f"if {have_uv}; then {installed}; else {failed}; fi; exit 0")
 
 
 def merge_hooks(path: Path) -> tuple[list[str], list[str]]:

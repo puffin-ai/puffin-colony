@@ -1,6 +1,10 @@
 """Tests for the Claude Code plugin: .claude-plugin/ at the top of the repo names one plugin, puffin-colony, whose
 skills are colony/skills/ and whose hooks file is colony/hooks/hooks.json, the hooks `colony hooks install` writes."""
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from colony import __version__, cli, guards
@@ -35,31 +39,93 @@ def test_the_plugin_carries_colonys_version():
     assert PLUGIN["version"] == MARKETPLACE["plugins"][0]["version"] == __version__
 
 
-def run_first_run(tmp_path, with_colony: bool):
-    """Run the plugin's first-run hook through sh, with a PATH that has `colony` on it or not."""
-    import subprocess
+def test_the_plugins_hooks_run_the_plugins_own_colony():
+    hooks = json.loads((ROOT / "colony" / guards.PLUGIN_HOOKS).read_text())["hooks"]
+    for event in ("Notification", "StopFailure", "UserPromptSubmit"):
+        command = hooks[event][0]["hooks"][0]["command"]
+        assert '"${CLAUDE_PLUGIN_ROOT}/bin/colony" hooks' in command and " colony hooks" not in command
 
+
+def run_bin(*args, cwd, env=None):
+    return subprocess.run([str(ROOT / "bin" / "colony"), *args], capture_output=True, text=True, cwd=cwd,
+                          env={"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], **(env or {})}, timeout=120)
+
+
+def test_the_plugins_bin_runs_colony_from_the_plugins_own_copy(tmp_path):
+    shadow = tmp_path / "colony"  # a repo with its own colony folder must not shadow the package
+    shadow.mkdir()
+    (shadow / "__main__.py").write_text('raise SystemExit("shadowed")\n')
+    run = run_bin("--version", cwd=tmp_path)
+    assert (run.returncode, run.stdout.strip()) == (0, f"{cli.DISPLAY} {__version__}")
+
+
+def test_the_plugins_bin_is_no_uvx_run_that_installs_colony_for_good(tmp_path):
+    """bin/colony runs the plugin's copy in place, outside any active virtualenv, so cli.install_permanently never
+    fires a `uv tool install`: not even from inside a uvx run, such as this test's own."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "uv").write_text('#!/bin/sh\nprintf "%s|" "VIRTUAL_ENV=$VIRTUAL_ENV" "$@"\n')
+    (fake / "uv").chmod(0o755)
+    run = run_bin("--version", cwd=tmp_path, env={"PATH": f"{fake}:/usr/bin:/bin", "VIRTUAL_ENV": sys.prefix})
+    assert run.stdout == "VIRTUAL_ENV=|run|-q|--no-project|--python|>=3.11|python|-P|-m|colony|--version|"
+    probe = (f"import sys; sys.path.insert(0, {str(ROOT)!r}); from colony import cli; "
+             f"print(bool(cli.EPHEMERAL.search(sys.prefix)))")
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    run = subprocess.run([shutil.which("uv"), "run", "-q", "--no-project", "--python", ">=3.11", "python", "-P", "-c",
+                          probe], capture_output=True, text=True, cwd=tmp_path, env=env, timeout=120)
+    assert run.stdout.strip() == "False"
+
+
+def test_the_plugins_bin_finds_uv_where_astrals_installer_puts_it(tmp_path):
+    home_bin = tmp_path / ".local" / "bin"
+    home_bin.mkdir(parents=True)
+    (home_bin / "uv").symlink_to(shutil.which("uv"))
+    run = run_bin("--version", cwd=tmp_path, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
+    assert run.stdout.strip() == f"{cli.DISPLAY} {__version__}"
+
+
+def test_the_plugins_bin_says_how_to_get_uv_when_there_is_none(tmp_path):
+    run = run_bin("--version", cwd=tmp_path, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
+    assert run.returncode == 127 and "uv is not installed" in run.stderr
+
+
+def run_first_run(tmp_path, curl: str | None = None, uv: bool = False):
+    """Run the plugin's first-run hook through sh, in a HOME and PATH of its own: with uv on PATH or not, and with a
+    stand-in curl that serves the `curl` script as Astral's installer."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    if with_colony:
-        (bin_dir / "colony").write_text("#!/bin/sh\nexit 0\n")
-        (bin_dir / "colony").chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    for name, body in (("uv", "exit 0" if uv else None), ("curl", curl)):
+        if body is not None:
+            (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+            (bin_dir / name).chmod(0o755)
     hooks = json.loads((ROOT / "colony" / guards.PLUGIN_HOOKS).read_text())["hooks"]["SessionStart"]
-    command = next(h["command"] for group in hooks for h in group["hooks"] if "systemMessage" in h["command"])
-    return subprocess.run(["sh", "-c", command], capture_output=True, text=True,
-                          env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
+    command = next(h["command"] for group in hooks for h in group["hooks"] if guards.UV_INSTALLER in h["command"])
+    run = subprocess.run(["sh", "-c", command], capture_output=True, text=True,
+                         env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(home)}, timeout=60)
+    return run, home
 
 
-def test_the_first_run_names_the_install_command_when_colony_is_missing(tmp_path):
-    run = run_first_run(tmp_path, with_colony=False)
-    assert run.returncode == 0
+INSTALLER = ('echo "mkdir -p \\$HOME/.local/bin; printf \'#!/bin/sh\\n\' > \\$HOME/.local/bin/uv; '
+             'chmod +x \\$HOME/.local/bin/uv"')  # a stand-in installer script that puts uv where Astral's does
+
+
+def test_the_first_run_installs_uv_with_astrals_installer_and_says_so(tmp_path):
+    run, home = run_first_run(tmp_path, curl=f'[ "$2" = "{guards.UV_INSTALLER}" ] && {INSTALLER}')
+    assert run.returncode == 0 and (home / ".local" / "bin" / "uv").exists()
     event = json.loads(run.stdout)
-    line = f"uv tool install git+https://github.com/puffin-ai/puffin-colony@v{__version__}"
-    assert event["systemMessage"].endswith(f"Run: {line}")
-    assert f"Tell the person to run `{line}` themselves, and install nothing" in \
-        event["hookSpecificOutput"]["additionalContext"]
+    assert event["systemMessage"].startswith(f"{cli.DISPLAY} installed uv") and "\n" not in event["systemMessage"]
+    assert event["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 
 
-def test_the_first_run_says_nothing_once_colony_is_installed(tmp_path):
-    run = run_first_run(tmp_path, with_colony=True)
+def test_the_first_run_says_so_when_uv_could_not_be_installed(tmp_path):
+    run, home = run_first_run(tmp_path, curl="exit 6")
+    assert run.returncode == 0
+    assert json.loads(run.stdout)["systemMessage"].startswith(f"{cli.DISPLAY} could not install uv")
+
+
+def test_the_first_run_says_nothing_when_uv_is_there(tmp_path):
+    run, _ = run_first_run(tmp_path, curl="touch called; exit 1", uv=True)
     assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
+    assert not (tmp_path / "called").exists()
