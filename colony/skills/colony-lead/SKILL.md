@@ -9,6 +9,7 @@ Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, 
 
 - When `colony` or `colony claim` made you a lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat and status comment hold your lead's name, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds it, tell the person in one line, and stop leading.
 - Work and hand out cards only in your folders, which `.colony/leads.toml` lists, and ask another lead on the coordination issue before touching theirs. Run `colony who` to see who leads what, and which computer's account has room.
+- A line to another lead waits for its 10-minute digest. Mark it `--urgent` only when work stops on it: a helper of yours is blocked on that lead, or your question stops work, as in `colony say <lead> "<what stops, and what you need>" --urgent`.
 
 - Make a card with `colony card new`, never a bare `gh issue create`, and only for work that starts this week. Anything later is one line, `colony idea "<the idea>"`.
 - Name the files on a card when you know them, beside its folders, because finding code costs a builder about 40% of a small change's calls.
