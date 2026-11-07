@@ -511,7 +511,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
 def test_the_version_comes_from_the_package(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
-    assert capsys.readouterr().out.strip() == "Puffin Colony 0.3.1"
+    assert capsys.readouterr().out.strip() == "Puffin Colony 0.4.0"
 
 
 def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config, capsys):
@@ -527,7 +527,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
 COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "sync", "tier",
-            "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "who", "whoami",
+            "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
             "tidy", "idea", "card", "release", "setup", "skill-install", "tools")
 
 

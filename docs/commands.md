@@ -86,7 +86,8 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 | Command | What it does |
 | --- | --- |
 | `colony suppressions [--update]` | Counts lint and type suppressions in each file against `.colony/suppressions.json`, and fails when a count grows. `# noqa` counts in any case, and stylesheets count `@ts-ignore`, `@ts-expect-error` and skipped tests too. `--update` lowers the record, and the first run writes it. |
-| `colony hooks install` | Merges the wait guard and the two posting hooks into `.claude/settings.json`, keeping the hooks already there. |
+| `colony hooks install` | Merges Colony's hooks into `.claude/settings.json`, keeping the hooks already there, copies the wait guard, and writes `.colony/bin/colony`, the launcher pinned to the version that ran. |
+| `colony upgrade [--to v<version>]` | On a new branch, moves the launcher's pin to the newest release (or the one named), has that release refresh the files Colony copied into the repo, and commits, ready for a PR. |
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
 | `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. A line either hook can't post waits in `~/.colony/<project>/outbox.json` until the next hook or wait posts it. |
 
@@ -94,7 +95,7 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `hooks install` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `hooks install`, `upgrade` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |

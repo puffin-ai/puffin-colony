@@ -131,16 +131,17 @@ def test_the_first_run_says_nothing_when_uv_is_there(tmp_path):
     assert not (tmp_path / "called").exists()
 
 
-def run_plugin_hook(tmp_path, event: str, repo_hooks: bool, colony_on_path: bool):
+def run_plugin_hook(tmp_path, event: str, repo_hooks: bool, launcher: bool):
     """Run the plugin's `event` hook through sh in a project of its own, whose settings carry the hooks `colony hooks
-    install` writes or not, with a `colony` on PATH or not. Each colony, the plugin's and the PATH one, writes its
-    name to `ran` when it runs."""
-    project, plugin, path_bin = tmp_path / "project", tmp_path / "plugin", tmp_path / "path"
-    for folder in (project / ".claude", project / cli.DIR / "hooks", plugin / "bin", plugin / "colony" / "hooks",
-                   path_bin):
+    install` writes or not, with the repo's launcher or not. Each colony, the plugin's and the repo's, writes its name
+    to `ran` when it runs."""
+    project, plugin = tmp_path / "project", tmp_path / "plugin"
+    for folder in (project / ".claude", project / cli.DIR / "hooks", plugin / "bin", plugin / "colony" / "hooks"):
         folder.mkdir(parents=True)
     ran = tmp_path / "ran"
-    for program, name in ((plugin / "bin" / "colony", "plugin"), (path_bin / "colony", "path")):
+    programs = [(plugin / "bin" / "colony", "plugin")] + ([(project / guards.LAUNCHER, "repo")] if launcher else [])
+    for program, name in programs:
+        program.parent.mkdir(parents=True, exist_ok=True)
         program.write_text(f"#!/bin/sh\necho {name} >> {ran}\n")
         program.chmod(0o755)
     for guard in (plugin / "colony" / "hooks" / guards.GUARD, project / cli.DIR / "hooks" / guards.GUARD):
@@ -152,21 +153,31 @@ def run_plugin_hook(tmp_path, event: str, repo_hooks: bool, colony_on_path: bool
         (project / ".claude" / "settings.json").write_text(json.dumps(settings))
     hooks = json.loads((ROOT / "colony" / guards.PLUGIN_HOOKS).read_text())["hooks"][event]
     command = hooks[0]["hooks"][0]["command"]
-    path = f"{path_bin}:/usr/bin:/bin" if colony_on_path else "/usr/bin:/bin"
     subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, timeout=60,
-                   env={"PATH": path, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin),
+                   env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_PLUGIN_ROOT": str(plugin),
                         cli.SESSION_ENV: "builder-1"})
     return ran.read_text().split() if ran.exists() else []
 
 
 def test_the_plugins_hooks_step_aside_where_the_repos_own_hooks_run(tmp_path):
     for event in ("Notification", "StopFailure", "UserPromptSubmit", "SessionStart"):
-        assert run_plugin_hook(tmp_path / event, event, repo_hooks=True, colony_on_path=True) == []
-    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=True, colony_on_path=False) == []
+        assert run_plugin_hook(tmp_path / event, event, repo_hooks=True, launcher=True) == []
+    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=True, launcher=False) == []
 
 
 def test_the_plugins_hooks_run_where_the_repos_own_hooks_cannot(tmp_path):
     for event in ("Notification", "StopFailure", "UserPromptSubmit", "SessionStart"):
-        assert run_plugin_hook(tmp_path / f"{event}-no-path", event, repo_hooks=True, colony_on_path=False) == ["plugin"]
-        assert run_plugin_hook(tmp_path / f"{event}-no-repo", event, repo_hooks=False, colony_on_path=True) == ["plugin"]
-    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=False, colony_on_path=True) == ["plugin"]
+        assert run_plugin_hook(tmp_path / f"{event}-no-launcher", event, repo_hooks=True, launcher=False) == ["plugin"]
+        assert run_plugin_hook(tmp_path / f"{event}-no-repo", event, repo_hooks=False, launcher=True) == ["plugin"]
+    assert run_plugin_hook(tmp_path / "guard", "PreToolUse", repo_hooks=False, launcher=True) == ["plugin"]
+
+
+def test_the_plugins_bin_hands_a_repo_that_carries_colony_to_its_own_launcher(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    launcher = tmp_path / guards.LAUNCHER
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text('#!/bin/sh\necho "pinned $*"\n')
+    launcher.chmod(0o755)
+    (tmp_path / "sub").mkdir()
+    run = run_bin("hooks", "unread", cwd=tmp_path / "sub")
+    assert (run.returncode, run.stdout) == (0, "pinned hooks unread\n")

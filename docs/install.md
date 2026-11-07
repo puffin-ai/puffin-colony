@@ -16,11 +16,19 @@ You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitH
 
 The sessions Colony opens run `colony` commands themselves (`colony`, `colony wait`, `colony helpers`), so Colony must be on PATH. A first `uvx` or `npx` run takes care of that: it installs Colony for good with `uv tool install puffin-colony`, once, and says so. uv tool, npm, the curl installer and pipx install it for good directly.
 
+## The repo carries Colony
+
+A repo that runs Colony pins it the way a package file pins a dependency, so a teammate's setup is to clone the repo, open it in Claude Code, and log in. They need no plugin, no click and no command.
+
+- **The launcher.** `.colony/bin/colony` is a short shell script that names one Colony version, its pin. `colony setup` writes it through `colony hooks install`, and so does every later `colony hooks install`, pinned to the version that ran. The first time it runs on a computer, it installs that version from its tag on GitHub (`git+https://github.com/puffin-ai/puffin-colony@v<pin>`) through uv, into `~/.cache/puffin-colony/v<pin>/`. Every run after that starts Colony from there, so a run costs one Python start. If the computer has no uv, the launcher installs it first with Astral's official installer and says so.
+- **The PATH.** The repo's `.claude/settings.json` carries a SessionStart hook that adds `export PATH="<repo>/.colony/bin:$PATH"` to the `CLAUDE_ENV_FILE` Claude Code runs before each Bash command. So a plain `colony` in any session in the repo runs the pinned version. Colony's other hooks run `"$CLAUDE_PROJECT_DIR/.colony/bin/colony"` directly, because a hook doesn't read that file.
+- **A newer release.** At most once a day, the lead's session shows one line when a newer Colony tag than the pin exists, with a link to its CHANGELOG. `colony upgrade` creates a branch, `colony/upgrade-v<new>`, and moves the pin. Then, running under the new version, it rewrites the files Colony copied into the repo: the launcher, the wait guard, the hooks, and the role skills the repo has. It commits all of that, ready for you to push and open a PR. `colony upgrade --to v<version>` pins a release other than the newest.
+
+The plugin and a `colony` you installed yourself still work beside the launcher. In a repo that carries Colony, the plugin's `colony` hands over to the repo's launcher, and the plugin's hooks step aside, so each hook runs once.
+
 ## As a Claude Code plugin
 
-The repo is also a Claude Code plugin marketplace, from GitHub alone. `.claude-plugin/marketplace.json` names one plugin, `puffin-colony`, whose skills are Colony's own (`colony/skills/`) and whose hooks are the ones `colony hooks install` writes (`colony/hooks/hooks.json`). The wait guard runs from the plugin's own copy.
-
-This is the whole setup on a new computer: trust the repo's folder in Claude Code and accept the plugin. Nothing is typed and nothing else is installed by hand, and since the repo is public, Claude Code fetches the plugin from GitHub with no login.
+The plugin is the way to try Colony in a repo that hasn't adopted it yet. The Colony repo is also a Claude Code plugin marketplace, from GitHub alone. `.claude-plugin/marketplace.json` names one plugin, `puffin-colony`, whose skills are Colony's own (`colony/skills/`) and whose hooks are the ones `colony hooks install` writes (`colony/hooks/hooks.json`). The wait guard runs from the plugin's own copy.
 
 To have every teammate's Claude Code offer it in your repo, name the marketplace and turn the plugin on in the repo's `.claude/settings.json`:
 
@@ -43,7 +51,7 @@ The plugin also gives sessions the `colony` command. Claude Code puts the plugin
 
 uv is the one thing the plugin needs. When the computer has none, the plugin's first hook of the session installs it with Astral's official installer (`curl -LsSf https://astral.sh/uv/install.sh | sh`, which puts it in `~/.local/bin`) and says so in one line. When that fails, it says so and points to [uv's install page](https://docs.astral.sh/uv/).
 
-The manual route still works: `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>` puts `colony` on your own terminal's PATH as well. A repo that runs the plugin doesn't also need `colony hooks install`. With both, each hook still runs once: a plugin hook steps aside where the repo's settings carry the same hook and it can run, which for the wait guard means its copied script is there, and for the others a `colony` on PATH. Claude Code on claude.ai and Cowork don't install a plugin with a top-level `bin/`, so there Colony takes the manual route.
+The manual route still works: `uv tool install git+https://github.com/puffin-ai/puffin-colony@v<version>` puts `colony` on your own terminal's PATH as well. A repo that runs the plugin doesn't also need `colony hooks install`. With both, each hook still runs once: a plugin hook steps aside where the repo's settings carry the same hook and it can run, which for the wait guard means its copied script is there, and for the others the repo's launcher. Claude Code on claude.ai and Cowork don't install a plugin with a top-level `bin/`, so there Colony takes the manual route.
 
 ## On Windows
 
@@ -91,7 +99,7 @@ A pushed tag `v*` publishes nothing by itself: the plugin and `uv tool install g
 
    That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
-For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()` (its install line names the version), add a CHANGELOG.md entry, commit, and tag `v<version>`.
+For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()`, add a CHANGELOG.md entry, commit, and tag `v<version>`.
 
 ### Checking a build locally
 
