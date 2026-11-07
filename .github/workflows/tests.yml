@@ -1,0 +1,24 @@
+# Run the tests on every push to main and on every pull request.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: git config --global user.name ci && git config --global user.email ci@example.com
+      - run: uv run --with pytest pytest -q tests
