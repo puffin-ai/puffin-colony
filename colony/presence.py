@@ -93,10 +93,10 @@ def parse(text: str, comment: int | None = None) -> Status | None:
 
 def where(config: dict) -> int:
     """The issue the statuses live on: the board in hack mode, else the coordination issue."""
-    from colony import transport, wait
+    from colony import tidy, wait
 
     if wait.hack(config):
-        return transport.board_issue(config)
+        return tidy.board_now(config)  # the board's fresh issue, once it moved
     return wait.coordination_issue(config["project"]["repo"], config["project"]["name"])
 
 
@@ -238,6 +238,8 @@ def keep(config: dict, status: Status, state: dict, now: float | None = None) ->
         return False
     repo, text = config["project"]["repo"], body(status)
     comment = state.get("status_id")
+    if state.get("status_issue", where(config)) != where(config):
+        comment = None  # the board moved: post the status on the fresh one, where `read` looks
     if comment is None:  # find the comment a past session of this name left, before ever adding one
         comment = next((s.comment for s in read(config) if s.name == status.name and s.comment), None)
     if comment is not None:
@@ -248,7 +250,7 @@ def keep(config: dict, status: Status, state: dict, now: float | None = None) ->
     if comment is None:
         made = json.loads(wait.gh("api", f"repos/{repo}/issues/{where(config)}/comments", "-f", f"body={text}"))
         comment = made["id"]
-    state["status_id"], state["status_at"] = comment, now
+    state["status_id"], state["status_at"], state["status_issue"] = comment, now, where(config)
     return True
 
 

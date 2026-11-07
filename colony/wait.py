@@ -510,6 +510,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
             print("\n".join(line for line, _ in pending))
             state["pending"], state["unread"], state["listed"] = [], [], []
+            state.pop("polled_at", None)  # this wait has ended, so the prompt hook reads GitHub until the next one
             write_json(path, state)
             return 0
         if clock.now() >= digest_at:

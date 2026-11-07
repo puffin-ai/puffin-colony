@@ -44,6 +44,21 @@ def save():
 if args[:2] == ["repo", "view"]:
     answer({"nameWithOwner": db["repo"]}, ".nameWithOwner")
     sys.exit(0)
+closed = db.get("closed", [])
+
+
+def comments_of(number):
+    """An issue's comments: the board's in db["comments"], any other issue's in db["boards"]."""
+    if number == db["issue"]:
+        return db["comments"]
+    return db.setdefault("boards", {}).setdefault(str(number), [])
+
+
+if args[:2] == ["issue", "list"]:
+    program = args[args.index("--jq") + 1] if "--jq" in args else None
+    numbers = [db["issue"]] + [int(n) for n in db.get("boards", {})]
+    answer([{"number": n, "title": "Board: app"} for n in numbers if n not in closed], program)
+    sys.exit(0)
 program, fields, target, rest = None, {}, None, args[1:]
 while rest:
     word = rest.pop(0)
@@ -60,27 +75,31 @@ while rest:
         target = word
 url = urlsplit(target)
 query = {key: values[0] for key, values in parse_qs(url.query).items()}
-issue = "repos/{}/issues/{}".format(db["repo"], db["issue"])
-comments = sorted(db["comments"], key=lambda c: c["id"])
+parts = url.path.split("/")
+on_issue = url.path.startswith("repos/{}/issues/".format(db["repo"])) and len(parts) >= 5 and parts[4].isdigit()
+number = int(parts[4]) if on_issue else None
 if url.path == "user":
     answer({"login": db["login"]}, program)
-elif url.path == issue:
-    answer({"number": db["issue"], "comments": len(comments)}, program)
-elif url.path == issue + "/comments" and fields:
-    number = max([c["id"] for c in comments] + [100]) + 1
-    at = "2026-11-05T11:{:02d}:00Z".format(len(comments) % 60)
-    made = {"id": number, "user": {"login": db["login"]}, "body": fields["body"], "created_at": at,
+elif on_issue and len(parts) == 5:
+    answer({"number": number, "comments": len(comments_of(number)), "title": "Board: app",
+            "state": "closed" if number in closed else "open"}, program)
+elif on_issue and parts[5:] == ["comments"] and fields:
+    everything = db["comments"] + [c for board in db.get("boards", {}).values() for c in board]
+    made_id = max([c["id"] for c in everything] + [100]) + 1
+    at = "2026-11-05T11:{:02d}:00Z".format(len(everything) % 60)
+    made = {"id": made_id, "user": {"login": db["login"]}, "body": fields["body"], "created_at": at,
             "updated_at": at,
-            "html_url": "https://github.com/{}/issues/{}#issuecomment-{}".format(db["repo"], db["issue"], number)}
-    db["comments"].append(made)
+            "html_url": "https://github.com/{}/issues/{}#issuecomment-{}".format(db["repo"], number, made_id)}
+    comments_of(number).append(made)
     save()
     answer(made, program)
-elif url.path == issue + "/comments":
+elif on_issue and parts[5:] == ["comments"]:
+    comments = sorted(comments_of(number), key=lambda c: c["id"])
     if "since" in query:
         page = [c for c in comments if c["updated_at"] >= query["since"]]
     else:
-        size, number = int(query.get("per_page", 30)), int(query.get("page", 1))
-        page = comments[(number - 1) * size:number * size]
+        size, page_number = int(query.get("per_page", 30)), int(query.get("page", 1))
+        page = comments[(page_number - 1) * size:page_number * size]
     answer(page, program)
     if db.get("arrivals"):
         db["comments"].append(db["arrivals"].pop(0))
@@ -264,3 +283,78 @@ def test_wait_and_read_refuse_bad_numbers_and_every_command_needs_a_board(board)
     assert board.run("nonsense").returncode == 2
     assert "tools/board post" in board.run("help").stdout
     assert board.calls() == []
+
+
+def since_values(calls: list[list[str]]) -> list[str]:
+    """The since= time of each read of new comments, in order."""
+    return [re.search(r"since=(\S+)", word)[1] for call in calls for word in call if "since=" in word]
+
+
+def test_wait_asks_only_for_what_came_since_its_last_check(board):
+    board.add(comment(1, "sam", "kickoff"))
+    board.run("unread")
+    board.add(comment(2, "sam", "pushed the schema"), comment(3, "sam", "pushed the seed"),
+              comment(4, "lee", "@all freeze at 4"), key="arrivals")
+    run = board.run("wait", "--interval", "1")
+    assert run.returncode == 0, run.stderr
+    assert posts(run.stdout) == ["sam 2 -", "sam 3 -", "lee 4 you"]
+    # Each check starts from the newest post the wait has read, so a quiet agent never reads the same posts again.
+    assert since_values(board.calls()) == [comment(n, "", "")["updated_at"] for n in (1, 1, 2, 3)]
+    assert board.cursor().read_text().split()[0] == "4"
+
+
+def test_board_wait_off_returns_at_once_without_reading_github(board):
+    run = board.run("wait", BOARD_WAIT="off")
+    assert run.returncode == 1 and "waiting is off" in run.stderr
+    assert board.calls() == []
+
+
+def test_unread_follows_the_board_to_the_fresh_issue_it_moved_to_and_posts_there(board):
+    board.add(comment(1, "sam", "kickoff"))
+    board.run("unread")
+    board.add(comment(2, "ana", "Closed at 300 comments; this thread goes on in #13.\n\nOpen items: none"))
+    db = board.load()
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(3, "sam", "@all first post on the fresh board")]}
+    board.save(db)
+    run = board.run("unread")
+    assert posts(run.stdout) == ["ana 2 -", "sam 3 you"]
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"
+    assert board.run("post", "hello").returncode == 0
+    assert board.load()["boards"]["13"][-1]["body"] == "[Ana's Codex] hello"
+
+
+def test_a_first_look_at_a_closed_board_finds_the_fresh_one_by_its_title(board):
+    db = board.load()
+    db["comments"] = [comment(1, "sam", "old post")]
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(5, "sam", "new post")]}
+    board.save(db)
+    run = board.run("read", "-n", "5")
+    assert posts(run.stdout) == ["sam 5 -"]
+    assert any(call[:2] == ["issue", "list"] for call in board.calls())
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"
+
+
+def test_a_board_moved_twice_at_once_is_followed_to_the_lowest_fresh_board_as_colony_keeps(board):
+    db = board.load()
+    db["comments"] = [comment(1, "sam", "old post"),
+                      comment(2, "ana", "Closed at 300 comments; this thread goes on in #14.\n\nOpen items: none"),
+                      comment(3, "sam", "Closed at 300 comments; this thread goes on in #13.\n\nOpen items: none")]
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(5, "sam", "kept board")], "14": [comment(6, "sam", "twin")]}
+    board.save(db)
+    run = board.run("read", "-n", "5")
+    assert posts(run.stdout) == ["sam 5 -"]
+    assert not any(call[:2] == ["issue", "list"] for call in board.calls()), "the notes name the board, no search"
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"
+
+
+def test_unread_follows_the_lowest_of_two_moved_notes(board):
+    board.add(comment(1, "sam", "kickoff"))
+    board.run("unread")
+    board.add(comment(2, "ana", "Closed at 300 comments; this thread goes on in #14."),
+              comment(3, "sam", "Closed at 300 comments; this thread goes on in #13."))
+    db = board.load()
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(4, "sam", "@all kept board")], "14": [comment(5, "ana", "x")]}
+    board.save(db)
+    run = board.run("unread")
+    assert posts(run.stdout) == ["ana 2 -", "sam 3 -", "sam 4 you"]
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"

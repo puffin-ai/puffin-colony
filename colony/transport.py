@@ -2,7 +2,7 @@
 the one place that posts a line.
 
 In hack mode every line goes to the pinned board issue, `[messages] board`, after the poster's prefix,
-`[<Name>'s Claude]`.
+`[<Name>'s Claude]`. A long board moves to a fresh pinned issue first (tidy.keep_board).
 """
 from __future__ import annotations
 
@@ -59,7 +59,9 @@ def send(config: dict, to: str, line: str, card: int | None = None) -> int:
         raise cli.ColonyError(f"a line never carries a secret, and this one holds {why}")
     repo = config["project"]["repo"]
     if wait.hack(config):
-        number, body = board_issue(config), f"{prefix(config)} {line}"
+        from colony import tidy
+
+        number, body = tidy.keep_board(config), f"{prefix(config)} {line}"
     else:
         number = int(card) if card is not None else wait.coordination_issue(repo, config["project"]["name"])
         body = line
