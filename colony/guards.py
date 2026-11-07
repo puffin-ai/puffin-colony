@@ -179,10 +179,11 @@ def suppressions(config: dict, args) -> int:
     return 0
 
 
-def python_command(path: str, *args: str) -> str:
-    """A hook's shell command that runs a script with the first Python it finds, and skips a missing script."""
+def python_command(path: str, *args: str, root: str = "$CLAUDE_PROJECT_DIR") -> str:
+    """A hook's shell command that runs a script under `root` with the first Python it finds, and skips a missing
+    script."""
     run = " ".join(f'"{part}"' for part in ("$f", *args))
-    return (f'f="$CLAUDE_PROJECT_DIR/{path}"; [ -f "$f" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 '
+    return (f'f="{root}/{path}"; [ -f "$f" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 '
             f"{run}; elif python -V >/dev/null 2>&1; then exec python {run}; else exec py -3 {run}; fi")
 
 
@@ -199,12 +200,14 @@ def quiet_command(action: str) -> str:
             f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {cli.NAME} hooks {action}; exit 0')
 
 
-def hook_entries() -> list[tuple[str, str | None, dict, str]]:
-    """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file)."""
-    guard = f"{cli.DIR}/hooks/{GUARD}"
+def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
+    """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The `plugin`'s run
+    the wait guard from the plugin's own copy of the package, where `colony hooks install` copies it into the repo."""
+    guard = f"colony/hooks/{GUARD}" if plugin else f"{cli.DIR}/hooks/{GUARD}"
+    root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
     unread_hook = {"type": "command", "command": quiet_command("unread"), "timeout": HOOK_TIMEOUT}
     return [
-        ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard)}, guard),
+        ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking"), "async": True}, f"{cli.NAME} hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped"), "async": True},
@@ -212,6 +215,18 @@ def hook_entries() -> list[tuple[str, str | None, dict, str]]:
         ("UserPromptSubmit", None, unread_hook, f"{cli.NAME} hooks unread"),
         ("SessionStart", None, dict(unread_hook), f"{cli.NAME} hooks unread"),
     ]
+
+
+PLUGIN_HOOKS = "hooks/hooks.json"  # in the package: the plugin's hooks (.claude-plugin/plugin.json names it)
+
+
+def plugin_hooks() -> dict:
+    """The plugin's hooks file: the hooks `colony hooks install` writes, in the hooks.json form Claude Code reads
+    from a plugin. tests/test_plugin.py keeps the shipped file equal to it."""
+    hooks: dict[str, list] = {}
+    for event, matcher, hook, _ in hook_entries(plugin=True):
+        hooks.setdefault(event, []).append({**({"matcher": matcher} if matcher else {}), "hooks": [hook]})
+    return {"description": f"{cli.DISPLAY}'s hooks, the ones `{cli.NAME} hooks install` writes", "hooks": hooks}
 
 
 def merge_hooks(path: Path) -> tuple[list[str], list[str]]:

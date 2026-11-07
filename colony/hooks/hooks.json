@@ -1,0 +1,61 @@
+{
+  "description": "Puffin Colony's hooks, the ones `colony hooks install` writes",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"${CLAUDE_PLUGIN_ROOT}/colony/hooks/wait_guard.py\"; [ -f \"$f\" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 \"$f\"; elif python -V >/dev/null 2>&1; then exec python \"$f\"; else exec py -3 \"$f\"; fi"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec colony hooks asking",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec colony hooks stopped",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && colony hooks unread; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && colony hooks unread; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

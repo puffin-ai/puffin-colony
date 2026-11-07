@@ -1,0 +1,17 @@
+{
+  "name": "puffin-colony",
+  "owner": {
+    "name": "Puffin Studios, Inc."
+  },
+  "metadata": {
+    "description": "Puffin Colony, as a Claude Code plugin."
+  },
+  "plugins": [
+    {
+      "name": "puffin-colony",
+      "source": "./",
+      "description": "Puffin Colony's skills and hooks for Claude Code: the lead, builder, reviewer and walker roles, setup on a hi, and the wait guard.",
+      "version": "0.2.0"
+    }
+  ]
+}
