@@ -1,5 +1,5 @@
 {
-  "description": "Puffin Colony's hooks, the ones `colony hooks install` writes",
+  "description": "Puffin Colony's hooks, the ones `colony hooks install` writes, and its first run",
   "hooks": {
     "PreToolUse": [
       {
@@ -53,6 +53,14 @@
             "type": "command",
             "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && colony hooks unread; exit 0",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v colony >/dev/null 2>&1 || printf '%s\\n' '{\"systemMessage\": \"Puffin Colony'\"'\"'s plugin is on, but the colony command is not installed. Run: uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.2.0\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"The colony command is not on PATH, so Puffin Colony can'\"'\"'t run yet. Tell the person to run `uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.2.0` themselves, and install nothing on your own.\"}}'; exit 0"
           }
         ]
       }
