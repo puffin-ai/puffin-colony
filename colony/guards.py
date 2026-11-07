@@ -14,6 +14,7 @@ sessions so a usage limit or a dropped connection never ends a turn for good.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import platform
@@ -28,7 +29,7 @@ from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 
-from colony import cli, portable
+from colony import __version__, cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
@@ -211,31 +212,44 @@ def step_aside(marker: str, ready: str) -> str:
     return f"{ready} && grep -qsF {shlex.quote(marker)} {files} && exit 0; "
 
 
+LAUNCHER = f"{cli.DIR}/bin/{cli.NAME}"  # in a host repo: the launcher that runs the Colony version the repo pins
+REPO_BIN = f'"$CLAUDE_PROJECT_DIR/{LAUNCHER}"'  # the launcher, as the repo's hooks run it
+
+
+def path_command() -> str:
+    """The repo's SessionStart hook that puts the launcher's folder first on the Bash tool's PATH, through the
+    CLAUDE_ENV_FILE Claude Code runs before each Bash command, so a plain `colony` runs the repo's pin."""
+    line = f'export PATH="%s/{cli.DIR}/bin:$PATH"\\n'
+    return (f'[ -n "$CLAUDE_ENV_FILE" ] && [ -x {REPO_BIN} ] && '
+            f"printf '{line}' \"$CLAUDE_PROJECT_DIR\" >> \"$CLAUDE_ENV_FILE\"; exit 0")
+
+
 def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
-    """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The `plugin`'s run
-    the wait guard and `colony` from the plugin's own copy, where `colony hooks install` copies the guard into the
-    repo and runs the `colony` on PATH. Where the repo's own copy of a hook can run, the plugin's steps aside."""
+    """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The repo's run the
+    wait guard `colony hooks install` copies and the repo's launcher, and put the launcher on PATH. The `plugin`'s run
+    the wait guard and `colony` from the plugin's own copy, and step aside where the repo's own copy of a hook can
+    run. A marker matches a hook from before the launcher too, so an install updates it in place."""
     guard = f"colony/hooks/{GUARD}" if plugin else f"{cli.DIR}/hooks/{GUARD}"
     root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
-    program = PLUGIN_BIN if plugin else cli.NAME
+    program = PLUGIN_BIN if plugin else REPO_BIN
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
     entries = [
         ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
         ("Notification", "permission_prompt",
-         {"type": "command", "command": colony_command("asking", program), "async": True}, f"{cli.NAME} hooks asking"),
+         {"type": "command", "command": colony_command("asking", program), "async": True}, "hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped", program), "async": True},
-         f"{cli.NAME} hooks stopped"),
-        ("UserPromptSubmit", None, unread_hook, f"{cli.NAME} hooks unread"),
-        ("SessionStart", None, dict(unread_hook), f"{cli.NAME} hooks unread"),
+         "hooks stopped"),
+        ("UserPromptSubmit", None, unread_hook, "hooks unread"),
+        ("SessionStart", None, dict(unread_hook), "hooks unread"),
     ]
     if not plugin:
-        return entries
-    # The repo's guard needs only its copied script, and its other hooks need the `colony` on PATH.
+        return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE")]
+    # The repo's guard needs only its copied script, and its other hooks need its launcher.
     repo_guard = f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{GUARD}" ]'
-    on_path = f"command -v {cli.NAME} >/dev/null 2>&1"
-    return [(event, matcher, {**hook, "command": step_aside(mine, repo_guard if GUARD in mine else on_path)
+    launcher = f"[ -x {REPO_BIN} ]"
+    return [(event, matcher, {**hook, "command": step_aside(marker, repo_guard if GUARD in marker else launcher)
                               + hook["command"]}, marker)
-            for (event, matcher, hook, marker), (*_, mine) in zip(entries, hook_entries())]
+            for event, matcher, hook, marker in entries]
 
 
 PLUGIN_HOOKS = "hooks/hooks.json"  # in the package: the plugin's hooks (.claude-plugin/plugin.json names it)
@@ -254,6 +268,10 @@ def plugin_hooks() -> dict:
 
 UV_INSTALLER = "https://astral.sh/uv/install.sh"  # Astral's official installer, which puts uv in ~/.local/bin
 UV_HOME_BIN = "$HOME/.local/bin/uv"  # where that installer puts uv, which bin/colony looks in too
+UV_INSTALL = (f"if command -v curl >/dev/null 2>&1; then curl -LsSf {UV_INSTALLER}; else wget -qO- {UV_INSTALLER}; fi "
+              "2>/dev/null | sh >/dev/null 2>&1")
+PACKAGE = "puffin-colony"
+GITHUB = "https://github.com/puffin-ai/puffin-colony"
 
 
 def first_run_command() -> str:
@@ -269,10 +287,40 @@ def first_run_command() -> str:
     failed = say(f"{cli.DISPLAY} could not install uv, which runs the {cli.NAME} command: install it from "
                  f"https://docs.astral.sh/uv/ and start a new session.")
     have_uv = f'command -v uv >/dev/null 2>&1 || [ -x "{UV_HOME_BIN}" ]'
-    return (f"{have_uv} && exit 0; "
-            f"if command -v curl >/dev/null 2>&1; then curl -LsSf {UV_INSTALLER}; else wget -qO- {UV_INSTALLER}; fi "
-            f"2>/dev/null | sh >/dev/null 2>&1; "
-            f"if {have_uv}; then {installed}; else {failed}; fi; exit 0")
+    return f"{have_uv} && exit 0; {UV_INSTALL}; if {have_uv}; then {installed}; else {failed}; fi; exit 0"
+
+
+def launcher(pin: str = __version__) -> str:
+    """The repo's .colony/bin/colony: run Colony `pin` from its tag on GitHub, installed through uv once per computer
+    into a cache folder per version and run from there, so a run costs one Python start. It installs uv when the
+    computer has none, saying so, and puts its own folder first on PATH for the commands Colony starts."""
+    return f'''#!/bin/sh
+# {cli.DISPLAY}'s launcher, which `{cli.NAME} hooks install` writes and `{cli.NAME} upgrade` moves. This repo runs
+# the {cli.DISPLAY} version pinned below, from its tag on GitHub, installed once per computer under
+# ~/.cache/{PACKAGE}/.
+pin={pin}
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
+PATH="$here:$PATH"; export PATH
+cache="${{XDG_CACHE_HOME:-$HOME/.cache}}/{PACKAGE}/v$pin"
+py="$cache/bin/python"; [ -x "$py" ] || py="$cache/Scripts/python.exe"
+if [ ! -x "$py" ]; then
+    uv=$(command -v uv) || uv="{UV_HOME_BIN}"
+    if [ ! -x "$uv" ]; then
+        echo "{cli.NAME}: installing uv, which runs {cli.DISPLAY}, with Astral's installer ({UV_INSTALLER})" >&2
+        {UV_INSTALL}
+        [ -x "$uv" ] || {{ echo "{cli.NAME}: uv did not install: see https://docs.astral.sh/uv/" >&2; exit 127; }}
+    fi
+    echo "{cli.NAME}: fetching {cli.DISPLAY} v$pin for this repo, once per computer" >&2
+    mkdir -p "$(dirname -- "$cache")" && tmp="$cache.$$" && unset VIRTUAL_ENV &&
+        "$uv" venv -q --relocatable --python ">=3.11" "$tmp" &&
+        VIRTUAL_ENV="$tmp" "$uv" pip install -q "{PACKAGE} @ git+{GITHUB}@v$pin" ||
+        {{ rm -rf "$tmp"; echo "{cli.NAME}: could not install {cli.DISPLAY} v$pin" >&2; exit 1; }}
+    mv "$tmp" "$cache" 2>/dev/null || rm -rf "$tmp"  # a run beside this one got there first
+    py="$cache/bin/python"; [ -x "$py" ] || py="$cache/Scripts/python.exe"
+fi
+unset VIRTUAL_ENV
+exec "$py" -P -m {cli.NAME} "$@"
+'''
 
 
 def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
@@ -308,30 +356,113 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
     if added or updated:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n")
-    return added, updated
+    return list(dict.fromkeys(added)), list(dict.fromkeys(updated))  # SessionStart carries two of Colony's hooks
 
 
 def install(config: dict, args) -> int:
-    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, and copy the wait guard into
-    .colony/hooks/. Every mode gets the same five hooks."""
+    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, copy the wait guard into
+    .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the same
+    hooks."""
     root = cli.repo_root()
     # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
     name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
     settings, guard = root / ".claude" / name, root / cli.DIR / "hooks" / GUARD
-    events = ", ".join(event for event, *_ in hook_entries())
+    events = ", ".join(dict.fromkeys(event for event, *_ in hook_entries()))
     if args.dry_run:
         print(f"hooks plan for {root}:")
         print(f"  .claude/{name}: merge the {events} hooks, keeping every hook already there")
         print(f"  {cli.DIR}/hooks/{GUARD}: the wait guard, copied from the package")
+        print(f"  {LAUNCHER}: the launcher, pinned to {cli.DISPLAY} {__version__}")
         print("Nothing ran.")
         return 0
     added, updated = merge_hooks(settings)
-    guard.parent.mkdir(parents=True, exist_ok=True)
-    guard.write_text(resources.files(__package__).joinpath("hooks", GUARD).read_text())
-    guard.chmod(0o755)
+    for path, text in ((guard, resources.files(__package__).joinpath("hooks", GUARD).read_text()),
+                       (root / LAUNCHER, launcher())):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755)
     done = f"added {', '.join(added) or 'nothing'}" + (f", updated {', '.join(updated)}" if updated else "")
     print(f"wrote .claude/{name}: {done}, and kept every hook already there")
     print(f"wrote {cli.DIR}/hooks/{GUARD}")
+    print(f"wrote {LAUNCHER}, pinned to {cli.DISPLAY} {__version__}")
+    return 0
+
+
+def version_of(tag: str) -> tuple[int, ...] | None:
+    """A release tag's version as numbers, such as (0, 4, 0) for v0.4.0, or None for any other tag."""
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", tag)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def latest_release() -> str | None:
+    """The newest release tag on GitHub, such as v0.4.0, or None when git can't reach it within a few seconds."""
+    try:
+        run = subprocess.run(["git", "ls-remote", "--tags", "--refs", GITHUB, "v*"], capture_output=True, text=True,
+                             timeout=UPGRADE_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    tags = [line.rsplit("refs/tags/", 1)[-1] for line in run.stdout.splitlines()] if not run.returncode else []
+    releases = [tag for tag in tags if version_of(tag)]
+    return max(releases, key=version_of) if releases else None
+
+
+UPGRADE_EVERY = 24 * 3600  # the lead's note on a newer release shows at most once a day
+UPGRADE_TIMEOUT = 5  # seconds the note may spend asking GitHub for the tags
+
+
+def upgrade_note(config: dict, now: float | None = None, latest=latest_release) -> str:
+    """The lead's line when a newer Colony release than the running one, the repo's pin, exists, with a link to what
+    changed, at most once a day per project, else an empty string. The day counts from the last check."""
+    from colony import wait
+
+    now = time.time() if now is None else now
+    path = wait.state_path(config["project"]["name"], "upgrade-check")
+    last = wait.read_json(path, 0)
+    if isinstance(last, (int, float)) and now - last < UPGRADE_EVERY:
+        return ""
+    wait.write_json(path, now)
+    tag = latest()
+    if not tag or version_of(tag) <= version_of(f"v{__version__}"):
+        return ""
+    return (f"{cli.DISPLAY} {tag} is out, and this repo pins v{__version__}; what changed: {GITHUB}/blob/{tag}/"
+            f"CHANGELOG.md. `{cli.NAME} upgrade` moves the pin on a branch, ready for a PR.")
+
+
+def upgrade(config: dict, args) -> int:
+    """`colony upgrade`: on a new branch, move the launcher's pin to the newest release, have that release refresh
+    the files Colony copied into the repo (`colony upgrade --refresh`), and commit, ready for a PR."""
+    from colony import merge
+
+    root = cli.repo_root()
+    if args.refresh:
+        install(config, argparse.Namespace(dry_run=False, local=False))
+        present = [name for name in cli.ROLE_SKILLS if (root / ".claude" / "skills" / name).is_dir()]
+        if present:
+            print("wrote", ", ".join(cli.copy_skills(root, present)[0]))
+        return 0
+    tag = args.to or latest_release()
+    if not tag or not version_of(tag):
+        raise cli.ColonyError(f"no release tag found at {GITHUB}: check the network, or pass --to v<version>")
+    if version_of(tag) <= version_of(f"v{__version__}"):
+        print(f"{cli.DISPLAY} v{__version__} is the newest release, so the pin stays.")
+        return 0
+    branch = f"{cli.NAME}/upgrade-{tag}"
+    if args.dry_run:
+        print(f"upgrade plan: on a new branch {branch}, pin {LAUNCHER} to {tag}, run `{cli.NAME} upgrade --refresh` "
+              f"under it to refresh the copied files, and commit. Nothing ran.")
+        return 0
+    if merge._git(root, "status", "--porcelain"):
+        raise cli.ColonyError("the working tree has changes: commit or set them aside, then upgrade")
+    merge._git(root, "switch", "-c", branch)
+    (root / LAUNCHER).parent.mkdir(parents=True, exist_ok=True)  # a repo from before the launcher has no bin/ yet
+    (root / LAUNCHER).write_text(launcher(tag.removeprefix("v")))
+    (root / LAUNCHER).chmod(0o755)
+    refresh = subprocess.run([str(root / LAUNCHER), "upgrade", "--refresh"], cwd=root)
+    if refresh.returncode:
+        raise cli.ColonyError(f"{tag} could not refresh the copied files: {branch} holds the new pin, uncommitted")
+    merge._git(root, "add", "-A", "--", *(name for name in (cli.DIR, ".claude") if (root / name).exists()))
+    merge._git(root, "commit", "-q", "-m", f"chore({cli.NAME}): upgrade {cli.DISPLAY} to {tag}")
+    print(f"{branch} pins {tag}, with the copied files refreshed: push it and open a PR.")
     return 0
 
 
@@ -574,6 +705,14 @@ def unread(config: dict, args) -> int:
         print(f"{cli.NAME} hooks unread: {e}", file=sys.stderr)
     if note:
         print(note)
+    if me == cli.LEAD:
+        try:
+            note = upgrade_note(config)
+        except (OSError, ValueError, KeyError) as e:
+            note = ""
+            print(f"{cli.NAME} hooks unread: {e}", file=sys.stderr)
+        if note:
+            print(note)
     try:
         entries = read_unread(config, args, me)
     except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
@@ -601,6 +740,12 @@ def add_commands(sub) -> None:
     p.add_argument("--local", action="store_true",
                    help="write .claude/settings.local.json, this machine's only, instead of the shared settings.json")
     p.set_defaults(run=install)
+    p = sub.add_parser("upgrade", help=f"move {LAUNCHER}'s pin to the newest {cli.DISPLAY} release on a new branch, "
+                                       "with the copied files refreshed, ready for a PR")
+    p.add_argument("--to", metavar="TAG", help="the release to pin, such as v0.4.0, instead of the newest")
+    p.add_argument("--refresh", action="store_true", help="run by upgrade under the new pin: rewrite the copied files")
+    p.add_argument("--dry-run", action="store_true", help="print what it would do, and run nothing")
+    p.set_defaults(run=upgrade)
     p = actions.add_parser("asking", help="the Notification hook: an urgent line for the lead (Claude Code runs it)")
     p.set_defaults(run=asking)
     p = actions.add_parser("stopped", help="the StopFailure hook: a line for the lead (Claude Code runs it)")

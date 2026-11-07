@@ -20,15 +20,15 @@ What the agents learn stays in your repo as pages, not in a chat that ends. [Exp
 
 You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitHub CLI `gh` (signed in). Your repo must be on GitHub.
 
+**In a repo that already runs Colony**, Colony comes with the repo, the way a Next.js app's version comes with its `package.json`: clone it, open it in Claude Code, and log in. There is no plugin, click or command. The repo carries `.colony/bin/colony`, a launcher pinned to one Colony version, and its hooks put that launcher on the session's PATH. The first run fetches the pinned version from GitHub through [uv](https://docs.astral.sh/uv/) and keeps it for later runs. If the computer has no uv, the launcher installs it and says so.
+
+**To try Colony in a repo that doesn't run it yet**, use the plugin:
+
 1. In Claude Code, add the plugin: `/plugin marketplace add puffin-ai/puffin-colony`, then `/plugin install puffin-colony@puffin-colony`.
 2. Open your repo in Claude Code.
 3. Say **hi**.
 
-Your teammates skip step 1: a repo that names the plugin in its `.claude/settings.json` offers it when they trust the folder, so they only accept it. [docs/install.md](docs/install.md#as-a-claude-code-plugin) shows the lines.
-
-There is nothing to install: the plugin runs `colony` through [uv](https://docs.astral.sh/uv/), and installs uv the first time when the computer has none, saying so in one line.
-
-The first time, Colony asks which of 3 setups you want, then a few questions, each with a default, and opens one PR with everything it wrote. Merge it. Every time after that, "hi" opens your lead.
+The first time, Colony asks which of 3 setups you want, then a few questions, each with a default. It opens one PR with everything it wrote, including the launcher pinned to the version you ran. Merge it, and from then on the repo carries Colony for every teammate. Every time after that, "hi" opens your lead. When a newer Colony is out, the lead says so once a day with a link to what changed, and `colony upgrade` moves the pin on a branch, ready for a PR.
 
 To install by hand instead, and run Colony from your terminal:
 

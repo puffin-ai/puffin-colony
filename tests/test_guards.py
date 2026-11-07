@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -108,9 +109,10 @@ def test_merging_the_hooks_keeps_the_hooks_and_settings_already_there(tmp_path):
     assert data["hooks"]["PreToolUse"][1]["matcher"] == "Bash"
     asking = data["hooks"]["Notification"][1]
     assert asking["matcher"] == "permission_prompt" and asking["hooks"][0]["async"] is True
-    assert "colony hooks asking" in asking["hooks"][0]["command"]
+    assert '.colony/bin/colony" hooks asking' in asking["hooks"][0]["command"]
     assert "matcher" not in data["hooks"]["StopFailure"][0]
-    assert "colony hooks stopped" in commands(data, "StopFailure")[0]
+    assert '.colony/bin/colony" hooks stopped' in commands(data, "StopFailure")[0]
+    assert "CLAUDE_ENV_FILE" in commands(data, "SessionStart")[1]
 
 
 def test_merging_again_changes_nothing_and_brings_an_old_colony_hook_up_to_date(tmp_path):
@@ -388,3 +390,207 @@ def test_hooks_install_local_writes_the_machine_settings_only(tmp_path, monkeypa
     guards.install({}, argparse.Namespace(dry_run=False, local=True))
     assert (tmp_path / ".claude" / "settings.local.json").exists()
     assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+# The repo's launcher, .colony/bin/colony, and the upgrade that moves its pin
+
+def script(path: Path, body: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+def run_launcher(tmp_path, *args, path: str = "/usr/bin:/bin"):
+    """Write the launcher into a repo of its own and run it, with HOME and the cache folder in tmp_path."""
+    launcher = tmp_path / "repo" / guards.LAUNCHER
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text(guards.launcher("9.9.9"))
+    launcher.chmod(0o755)
+    env = {"PATH": path, "HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "cache"),
+           "VIRTUAL_ENV": "/somewhere/archive-v0/env"}
+    return subprocess.run([str(launcher), *args], capture_output=True, text=True, env=env, timeout=60)
+
+
+CACHED = "puffin-colony/v9.9.9"
+FAKE_PYTHON = 'echo "PATH=${PATH%%:*} VIRTUAL_ENV=$VIRTUAL_ENV args=$*"'
+
+
+def test_hooks_install_writes_the_launcher_pinned_to_this_version(tmp_path, monkeypatch):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    guards.install({}, argparse.Namespace(dry_run=False))
+    launcher = tmp_path / guards.LAUNCHER
+    assert launcher.read_text() == guards.launcher() and os.access(launcher, os.X_OK)
+    assert f"\npin={cli.__version__}\n" in launcher.read_text()
+    assert "git+https://github.com/puffin-ai/puffin-colony@v$pin" in launcher.read_text()
+
+
+def test_the_launcher_runs_the_cached_pin_with_its_folder_first_on_path(tmp_path):
+    script(tmp_path / "cache" / CACHED / "bin" / "python", FAKE_PYTHON)
+    run = run_launcher(tmp_path, "wait", "--x")
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() == f"PATH={tmp_path / 'repo' / cli.DIR / 'bin'} VIRTUAL_ENV= args=-P -m colony wait --x"
+    assert run.stderr == ""
+
+
+def fake_uv(path: Path, log: Path) -> Path:
+    """A uv that logs each call, and whose `venv` makes a folder with the fake Python in it."""
+    return script(path, f'echo "VIRTUAL_ENV=$VIRTUAL_ENV $*" >> {log}\nfor last; do :; done\n'
+                        f'if [ "$1" = venv ]; then mkdir -p "$last/bin"; printf \'#!/bin/sh\\n%s\\n\' '
+                        f'{shlex.quote(FAKE_PYTHON)} > "$last/bin/python"; chmod +x "$last/bin/python"; fi')
+
+
+def test_the_launcher_installs_the_pin_from_its_github_tag_once(tmp_path):
+    bin_dir, log = tmp_path / "bin", tmp_path / "uv.log"
+    fake_uv(bin_dir / "uv", log)
+    run = run_launcher(tmp_path, "--version", path=f"{bin_dir}:/usr/bin:/bin")
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip().endswith("VIRTUAL_ENV= args=-P -m colony --version")
+    assert "fetching Puffin Colony v9.9.9 for this repo, once per computer" in run.stderr
+    venv, install = log.read_text().splitlines()
+    assert venv.startswith("VIRTUAL_ENV= venv -q --relocatable --python >=3.11 ")
+    staged = venv.rsplit(" ", 1)[1]
+    assert install == (f"VIRTUAL_ENV={staged} pip install -q "
+                       "puffin-colony @ git+https://github.com/puffin-ai/puffin-colony@v9.9.9")
+    assert (tmp_path / "cache" / CACHED / "bin" / "python").exists() and not Path(staged).exists()
+    again = run_launcher(tmp_path, "--version", path=f"{bin_dir}:/usr/bin:/bin")
+    assert again.stderr == "" and len(log.read_text().splitlines()) == 2
+
+
+def test_the_launcher_installs_uv_with_astrals_installer_when_there_is_none(tmp_path):
+    template = fake_uv(tmp_path / "template" / "uv", tmp_path / "uv.log")
+    uv = tmp_path / "home" / ".local" / "bin" / "uv"
+    script(tmp_path / "bin" / "curl",
+           f'[ "$2" = "{guards.UV_INSTALLER}" ] || exit 7\necho "mkdir -p {uv.parent}; cp {template} {uv}"')
+    run = run_launcher(tmp_path, path=f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    assert "installing uv, which runs Puffin Colony, with Astral's installer" in run.stderr
+    assert run.returncode == 0 and run.stdout.strip().endswith("args=-P -m colony"), run.stderr
+    assert uv.exists()
+
+
+def test_the_launcher_stops_with_a_reason_when_uv_cannot_install(tmp_path):
+    script(tmp_path / "bin" / "curl", "exit 6")
+    run = run_launcher(tmp_path, path=f"{tmp_path / 'bin'}:/usr/bin:/bin")
+    assert run.returncode == 127 and "uv did not install" in run.stderr
+
+
+def test_the_repos_session_start_hook_puts_the_launcher_first_on_the_bash_path(tmp_path):
+    [(event, _, hook, _)] = [entry for entry in guards.hook_entries() if entry[3] == "CLAUDE_ENV_FILE"]
+    assert event == "SessionStart"
+    env_file = tmp_path / "env"
+    env_file.write_text("export A=1\n")
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(tmp_path), "CLAUDE_ENV_FILE": str(env_file)}
+    assert subprocess.run(["sh", "-c", hook["command"]], env=env).returncode == 0
+    assert env_file.read_text() == "export A=1\n"  # no launcher yet: nothing to put on PATH
+    script(tmp_path / guards.LAUNCHER, "echo repo-colony")
+    assert subprocess.run(["sh", "-c", hook["command"]], env=env).returncode == 0
+    assert env_file.read_text() == f'export A=1\nexport PATH="{tmp_path}/.colony/bin:$PATH"\n'
+    run = subprocess.run(["bash", "-c", f". {env_file}; colony"], capture_output=True, text=True,
+                         env={"PATH": "/usr/bin:/bin"})
+    assert run.stdout == "repo-colony\n"
+
+
+def test_the_repos_hooks_run_the_launcher():
+    for event, _, hook, marker in guards.hook_entries():
+        if marker.startswith("hooks "):
+            assert f'exec "$CLAUDE_PROJECT_DIR/{guards.LAUNCHER}" {marker}' in hook["command"] or \
+                f'&& "$CLAUDE_PROJECT_DIR/{guards.LAUNCHER}" {marker}' in hook["command"], event
+
+
+def test_an_install_brings_a_hook_from_before_the_launcher_up_to_date(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"hooks": {"StopFailure": [{"hooks": [{"type": "command", "command":
+        '[ -n "$COLONY_SESSION" ] && command -v colony >/dev/null 2>&1 || exit 0; exec colony hooks stopped'}]}]}}))
+    assert "StopFailure" in guards.merge_hooks(path)[1]
+    assert len(commands(json.loads(path.read_text()), "StopFailure")) == 1
+
+
+def test_release_tags_compare_as_versions(monkeypatch):
+    out = "".join(f"abc\trefs/tags/{tag}\n" for tag in ("v0.9.0", "v0.10.0", "v0.10.0-rc1", "latest", "v0.4.0"))
+    monkeypatch.setattr(guards.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, out, ""))
+    assert guards.latest_release() == "v0.10.0"
+    monkeypatch.setattr(guards.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 128, "", "offline"))
+    assert guards.latest_release() is None
+
+
+def test_the_upgrade_note_names_a_newer_release_at_most_once_a_day(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = {"project": {"name": "demo"}}
+    asked = []
+    start = 1_800_000_000
+
+    def latest():
+        asked.append(1)
+        return "v99.0.0"
+    note = guards.upgrade_note(config, now=start, latest=latest)
+    assert note.startswith(f"Puffin Colony v99.0.0 is out, and this repo pins v{cli.__version__}")
+    assert "https://github.com/puffin-ai/puffin-colony/blob/v99.0.0/CHANGELOG.md" in note
+    assert "`colony upgrade`" in note and "\n" not in note
+    assert guards.upgrade_note(config, now=start + guards.UPGRADE_EVERY - 1, latest=latest) == ""
+    assert len(asked) == 1  # within the day, not even GitHub is asked
+    assert guards.upgrade_note(config, now=start + guards.UPGRADE_EVERY, latest=latest) != ""
+    current = guards.upgrade_note(config, now=start + 3 * guards.UPGRADE_EVERY, latest=lambda: f"v{cli.__version__}")
+    assert current == ""
+    assert guards.upgrade_note(config, now=start + 5 * guards.UPGRADE_EVERY, latest=lambda: None) == ""
+
+
+@pytest.mark.parametrize("me, shown", [("lead", True), ("builder-1", False)])
+def test_only_the_leads_prompt_hook_shows_the_upgrade_note(me, shown, monkeypatch, capsys):
+    monkeypatch.setenv(cli.SESSION_ENV, me)
+    monkeypatch.setattr(guards, "hook_event", dict)
+    monkeypatch.setattr(guards, "watchdog_note", lambda *a: "")
+    monkeypatch.setattr(guards, "read_unread", lambda *a: [])
+    monkeypatch.setattr(guards, "upgrade_note", lambda config: "Puffin Colony v99.0.0 is out")
+    assert guards.unread({"project": {"name": "demo"}}, argparse.Namespace()) == 0
+    assert ("v99.0.0 is out" in capsys.readouterr().out) is shown
+
+
+def git_repo(root: Path) -> Path:
+    root.mkdir()
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.com"], ["config", "user.name", "T"],
+                 ["commit", "-q", "--allow-empty", "-m", "start"]):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    return root
+
+
+def test_upgrade_moves_the_pin_on_a_branch_and_commits_the_refreshed_files(tmp_path, monkeypatch):
+    root = git_repo(tmp_path / "repo")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    # The new release's cached Python stands in for its `colony upgrade --refresh`, which rewrites the copied files.
+    script(tmp_path / "cache" / "puffin-colony/v99.0.0/bin/python",
+           f'echo "$*" > {tmp_path / "refresh"}; mkdir -p .colony/hooks; echo new > .colony/hooks/wait_guard.py')
+    assert guards.upgrade({}, argparse.Namespace(refresh=False, to="v99.0.0", dry_run=False)) == 0
+    assert (tmp_path / "refresh").read_text() == "-P -m colony upgrade --refresh\n"
+    git = lambda *args: subprocess.run(["git", *args], cwd=root, capture_output=True, text=True).stdout.strip()
+    assert git("branch", "--show-current") == "colony/upgrade-v99.0.0"
+    assert git("log", "-1", "--format=%s") == "chore(colony): upgrade Puffin Colony to v99.0.0"
+    assert set(git("show", "--name-only", "--format=").split()) == {guards.LAUNCHER, ".colony/hooks/wait_guard.py"}
+    assert "\npin=99.0.0\n" in (root / guards.LAUNCHER).read_text() and git("status", "--porcelain") == ""
+
+
+def test_upgrade_keeps_the_pin_when_it_is_the_newest(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(git_repo(tmp_path / "repo"))
+    assert guards.upgrade({}, argparse.Namespace(refresh=False, to=f"v{cli.__version__}", dry_run=False)) == 0
+    assert "the pin stays" in capsys.readouterr().out and not (tmp_path / "repo" / guards.LAUNCHER).exists()
+
+
+def test_upgrade_refuses_a_working_tree_with_changes(tmp_path, monkeypatch):
+    root = git_repo(tmp_path / "repo")
+    (root / "notes.txt").write_text("mine\n")
+    monkeypatch.chdir(root)
+    with pytest.raises(cli.ColonyError, match="the working tree has changes"):
+        guards.upgrade({}, argparse.Namespace(refresh=False, to="v99.0.0", dry_run=False))
+
+
+def test_upgrade_refresh_rewrites_the_copied_files_and_the_role_skills_the_repo_has(tmp_path, monkeypatch):
+    root = git_repo(tmp_path / "repo")
+    monkeypatch.chdir(root)
+    skill = root / ".claude" / "skills" / "colony-lead" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("old\n")
+    assert guards.upgrade({}, argparse.Namespace(refresh=True, to=None, dry_run=False)) == 0
+    assert (root / guards.LAUNCHER).read_text() == guards.launcher()
+    assert (root / cli.DIR / "hooks" / guards.GUARD).exists() and (root / ".claude" / "settings.json").exists()
+    assert skill.read_text() != "old\n" and not (root / ".claude" / "skills" / "colony-builder").exists()

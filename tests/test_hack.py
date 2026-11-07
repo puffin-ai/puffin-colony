@@ -192,10 +192,10 @@ def test_install_adds_the_prompt_hook_at_session_start_and_before_each_prompt_in
     assert guards.install(config, argparse.Namespace(dry_run=False)) == 0
     data = json.loads((repo / ".claude" / "settings.json").read_text())
     for event in ("UserPromptSubmit", "SessionStart"):
-        [group] = data["hooks"][event]
+        [group] = [group for group in data["hooks"][event] if "hooks unread" in group["hooks"][0]["command"]]
         [hook] = group["hooks"]
         assert "matcher" not in group and "async" not in hook, event  # its output must reach the session
-        assert "colony hooks unread" in hook["command"] and hook["timeout"] == guards.HOOK_TIMEOUT
+        assert 'colony" hooks unread' in hook["command"] and hook["timeout"] == guards.HOOK_TIMEOUT
     assert "UserPromptSubmit, SessionStart" in capsys.readouterr().out
 
 
@@ -204,7 +204,7 @@ def test_the_prompt_hooks_command_passes_the_lines_on_and_never_blocks_the_promp
     command = json.loads((repo / ".claude" / "settings.json").read_text())["hooks"]["UserPromptSubmit"][0]["hooks"][0]
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    stub = bin_dir / "colony"
+    stub = repo / guards.LAUNCHER  # the hook runs the repo's launcher
     env = {"PATH": stub_path(bin_dir), "CLAUDE_PROJECT_DIR": str(repo), cli.SESSION_ENV: "lead"}
     for script, out in (('echo "#7 a line for you"', "#7 a line for you\n"),
                         ("echo 'colony: .colony/colony.toml is missing' >&2; exit 2", "")):

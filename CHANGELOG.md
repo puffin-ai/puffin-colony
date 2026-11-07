@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0, 2026-11-06
+
+Colony comes with the repo, pinned like a package: a teammate clones, opens Claude Code and logs in.
+
+- The repo carries `.colony/bin/colony`, a launcher pinned to one Colony version, which `colony hooks install` writes. It installs that version from its GitHub tag through uv once per computer, and installs uv when the computer has none.
+- The repo's hooks run the launcher, and a SessionStart hook puts `.colony/bin` first on the Bash tool's PATH through `CLAUDE_ENV_FILE`.
+- At most once a day, the lead sees one line when a newer release than the pin exists, with a link to what changed. `colony upgrade` moves the pin and refreshes the copied files on a branch, ready for a PR.
+- The plugin's `colony` hands a repo that carries Colony to its launcher, and its hooks step aside where the launcher runs them.
+
 ## 0.3.1, 2026-11-06
 
 - With both the plugin and `colony hooks install`, each hook runs once: a plugin hook steps aside where the repo's own copy can run, so a helper's error or approval line reaches its lead once.
