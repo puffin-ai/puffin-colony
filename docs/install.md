@@ -16,6 +16,29 @@ You need [Claude Code](https://code.claude.com) (signed in), `git`, and the GitH
 
 The sessions Colony opens run `colony` commands themselves (`colony`, `colony wait`, `colony helpers`), so Colony must be on PATH. A first `uvx` or `npx` run takes care of that: it installs Colony for good with `uv tool install puffin-colony`, once, and says so. uv tool, npm, the curl installer and pipx install it for good directly.
 
+## As a Claude Code plugin
+
+The repo is also a Claude Code plugin marketplace, from GitHub alone. `.claude-plugin/marketplace.json` names one plugin, `puffin-colony`, whose skills are Colony's own (`colony/skills/`) and whose hooks are the ones `colony hooks install` writes (`colony/hooks/hooks.json`). The wait guard runs from the plugin's own copy.
+
+To have every teammate's Claude Code offer it in your repo, name the marketplace and turn the plugin on in the repo's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "puffin-colony": {
+      "source": { "source": "github", "repo": "puffin-ai/puffin-colony" }
+    }
+  },
+  "enabledPlugins": {
+    "puffin-colony@puffin-colony": true
+  }
+}
+```
+
+When a teammate trusts the repo's folder, Claude Code asks them to install it. One person can also install it alone with `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony`.
+
+The plugin gives a session the skills and the hooks, not the `colony` command, which the sessions run themselves. Install the command one of the ways above. A repo that runs the plugin doesn't also need `colony hooks install`; with both, each hook runs twice, which does no harm.
+
 ## On Windows
 
 Colony runs on Windows with [Git for Windows](https://gitforwindows.org), which Claude Code needs there too.

@@ -14,7 +14,7 @@ Install once:
 uv tool install git+https://github.com/puffin-ai/puffin-colony
 ```
 
-`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works too: the first run installs Colony for good, so `colony` is on your PATH after.
+`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Colony is also a Claude Code plugin: `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony` gives a session its skills and hooks, and [docs/install.md](docs/install.md#as-a-claude-code-plugin) says how a repo names it for every teammate. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works too: the first run installs Colony for good, so `colony` is on your PATH after.
 
 There is no separate setup command. The first `colony` in a repo, or saying "hi" in the Claude app in that repo, asks which of the 3 setups you want:
 
