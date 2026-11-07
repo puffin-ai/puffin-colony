@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v colony >/dev/null 2>&1 || printf '%s\\n' '{\"systemMessage\": \"Puffin Colony'\"'\"'s plugin is on, but the colony command is not installed. Run: uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.2.0\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"The colony command is not on PATH, so Puffin Colony can'\"'\"'t run yet. Tell the person to run `uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.2.0` themselves, and install nothing on your own.\"}}'; exit 0"
+            "command": "command -v colony >/dev/null 2>&1 || printf '%s\\n' '{\"systemMessage\": \"Puffin Colony'\"'\"'s plugin is on, but the colony command is not installed. Run: uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.3.0\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"The colony command is not on PATH, so Puffin Colony can'\"'\"'t run yet. Tell the person to run `uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.3.0` themselves, and install nothing on your own.\"}}'; exit 0"
           }
         ]
       }
