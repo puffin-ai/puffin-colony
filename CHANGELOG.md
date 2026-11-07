@@ -4,9 +4,9 @@
 
 Hack mode, from a dry run of a two-person team.
 
-- A board at 300 comments (`[limits] board_comments`) moves to a fresh pinned `Board: <project>` issue that links the old one. `tools/board` follows it, and its reads stay incremental.
+- A board at 300 comments (`[limits] board_comments`) moves to a fresh pinned `Board: <project>` issue that links the old one. `tools/board` follows it, and its reads stay incremental. When two posts move the board at once, the lowest fresh board is kept and the other closes with a link to it. A move that stopped half-way is finished on the board it opened, and a reader follows the old board's closing note before it searches by title.
 - `colony merge` posts `[merged] <branch> → <base> <short sha>, fast check passed` on the board after it pushes.
-- The wait guard refuses a `git push` that would force-push, rewrite or delete the base, in every mode.
+- The wait guard refuses a `git push` that would force-push, rewrite or delete the base or the repo's default branch, in every mode. A plain push and a forced push of tags alone still run.
 - `BOARD_WAIT=off` stops a `while tools/board wait; do <agent>; done` loop. `tools/board wait` asks GitHub only for what came since its last check.
 - `AGENTS.md` asks for a `Not verified:` line, `DEPLOY: <what>, <when>, rollback: <how>`, file claims and releases, and handoffs that name a commit.
 - Fixed: the prompt hook stayed off GitHub for a minute after `colony wait` ended, so it missed new posts.

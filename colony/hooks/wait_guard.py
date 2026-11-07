@@ -14,8 +14,9 @@ waits become its own, so `sleep 600 & wait` is refused. A sleep whose length it 
 passes. It drops here-document bodies first, because a body is text a command reads, not a command.
 
 It also refuses, in every mode and even in the background, a `git push` that force-pushes or deletes the base branch,
-`[project] base` in .colony/colony.toml (main when unset): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+`
-refspec or a deletion. A force push rewrites the branch every teammate builds on, and makes each of them rebase.
+`[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
+can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec or a deletion. A force push rewrites the
+branch every teammate builds on, and makes each of them rebase. A plain push, and a forced push of tags alone, pass.
 """
 from __future__ import annotations
 
@@ -59,9 +60,8 @@ BACKGROUND = "&"
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}  # git's, before `push`
 PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
-PUSH_REFUSAL = ("push guard: refused, {reason}. {base} is the branch every teammate builds on: never force-push, "
-                "rewrite or delete it. Push your own branch and land it with `colony merge <branch>`, or ask your "
-                "person.")
+PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
+                "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person.")
 REFUSAL = ("wait guard: refused, {reason}. A foreground wait blocks the session. Start the command with "
            "run_in_background and carry on, or start `colony wait` with run_in_background and act on its lines.")
 
@@ -288,9 +288,25 @@ def current_branch(cwd: str) -> str:
     return run.stdout.strip() if run.returncode == 0 else ""
 
 
-def push_rewrites(arguments: list[str], base: str, cwd: str) -> str:
-    """Why a `git push` with these arguments, the words after `push`, rewrites or deletes `base`, or ""."""
-    force = delete = everything = mirror = False
+def default_branch(cwd: str) -> str:
+    """The repo's default branch, origin's HEAD as git remembers it, else main."""
+    try:
+        run = subprocess.run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=cwd or None,
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return "main"
+    found = run.stdout.strip().removeprefix("refs/remotes/origin/") if run.returncode == 0 else ""
+    return found or "main"
+
+
+def protected_branches(cwd: str) -> list[str]:
+    """The branches no push may rewrite: the base, and the repo's default branch when it is another one."""
+    return list(dict.fromkeys([base_branch(cwd), default_branch(cwd)]))
+
+
+def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
+    """Why a `git push` with these arguments, the words after `push`, rewrites or deletes a protected branch, or ""."""
+    force = delete = everything = mirror = tags = False
     positional: list[str] = []
     skip = False
     for word in arguments:
@@ -306,16 +322,19 @@ def push_rewrites(arguments: list[str], base: str, cwd: str) -> str:
             delete = True
         elif word in ("--all", "--branches"):
             everything = True
+        elif word == "--tags":
+            tags = True
         elif word.startswith("--"):
             continue
         elif word.startswith("-") and len(word) > 1:
-            force, delete = force or "f" in word[1:], delete or "d" in word[1:]
+            letters, option, value = word[1:].partition("o")  # -o takes the rest as its value, as in -odeploy
+            force, delete, skip = force or "f" in letters, delete or "d" in letters, bool(option and not value)
         else:
             positional.append(word)
     if mirror:
         return "`git push --mirror` overwrites every branch on the remote"
     if force and everything:
-        return f"a force push of every branch rewrites {base}"
+        return f"a force push of every branch rewrites {' and '.join(protected)}"
     targets = []  # (the branch a refspec updates, how it rewrites it, or "")
     for spec in positional[1:]:
         plus, spec = spec.startswith("+"), spec.lstrip("+")
@@ -323,13 +342,13 @@ def push_rewrites(arguments: list[str], base: str, cwd: str) -> str:
         deletes = delete or bool(colon and not source)
         how = "deletes" if deletes else "force-pushes" if force or plus else ""
         targets.append((destination if colon else source, how))
-    if len(positional) <= 1:  # no refspec: git pushes the branch checked out
+    if len(positional) <= 1 and not tags:  # no refspec: git pushes the branch checked out, or with --tags only tags
         targets.append(("HEAD", "deletes" if delete else "force-pushes" if force else ""))
     for target, how in targets:
         if target == "HEAD":
             target = current_branch(cwd)
-        if how and target.removeprefix("refs/heads/") == base:
-            return f"this push {how} {base}"
+        if how and target.removeprefix("refs/heads/") in protected:
+            return f"this push {how} {target.removeprefix('refs/heads/')}"
     return ""
 
 
@@ -354,7 +373,7 @@ def pushes(command: str, cwd: str) -> list[str]:
                     here = os.path.join(cwd, program[index + 1])
                 index += 2 if program[index] in GIT_VALUE_OPTIONS else 1
             if program[index:index + 1] == ["push"]:
-                reason = push_rewrites(program[index + 1:], base_branch(cwd), here)
+                reason = push_rewrites(program[index + 1:], protected_branches(here), here)
                 if reason:
                     found.append(reason)
         else:
@@ -377,8 +396,10 @@ def main() -> int:
         cwd = str(call.get("cwd") or os.getcwd())
         rewrites = pushes(command, cwd)
         if rewrites:
+            branches = protected_branches(cwd)
             sys.stderr.write(PUSH_REFUSAL.format(reason="; ".join(dict.fromkeys(rewrites)),
-                                                 base=base_branch(cwd)) + "\n")
+                                                 branches=" and ".join(branches),
+                                                 them="them" if len(branches) > 1 else "it") + "\n")
             return 2
     if tool_input.get("run_in_background") is True:
         return 0

@@ -362,8 +362,62 @@ def test_a_post_from_another_computer_follows_the_closed_board_to_the_fresh_one(
     gh.answer("api repos/acme/demo/issues/7", {"state": "closed", "title": "Board: demo", "comments": 301})
     gh.answer("issue list", [{"number": 5, "title": "Board: demo"}, {"number": 40, "title": "Board: demo"},
                              {"number": 41, "title": "Board: demo, old notes"}])
+    gh.answer("api repos/acme/demo/issues/40", {"state": "open", "title": "Board: demo", "comments": 3})
     assert tidy.keep_board(HACK_BOARD) == 40
     assert not gh.called("issue", "create")
+    assert tidy.board_now(HACK_BOARD) == 40
+
+
+BOARD_7 = {"state": "open", "title": "Board: demo", "comments": 300, "body": "The board for demo."}
+
+
+def moved_note(new: int) -> dict:
+    """The note a move leaves on the old board, as the comments API answers it."""
+    return {"body": f"Closed at 300 comments; this thread goes on in #{new}.\n\nOpen items: none"}
+
+
+def test_a_full_board_that_another_post_moved_already_is_followed_there_without_a_second_fresh_board(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7", BOARD_7)
+    gh.answer("issue list", [{"number": 40, "title": "Board: demo"}])
+    assert tidy.keep_board(HACK_BOARD) == 40
+    assert not gh.called("issue", "create")
+    assert gh.called("issue", "comment", "7")[0][-1].startswith("Closed at 300 comments; this thread goes on in #40.")
+    assert gh.called("issue", "close") == [["issue", "close", "7", "--repo", "acme/demo"]]
+    assert gh.called("issue", "pin") == [["issue", "pin", "40", "--repo", "acme/demo"]]
+
+
+def test_two_posts_that_move_the_board_at_once_keep_the_lowest_fresh_board_and_close_the_other(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/41", {"state": "open", "title": "Board: demo", "comments": 0})
+    gh.answer("api repos/acme/demo/issues/7", BOARD_7)
+    gh.answer("issue list", [], once=True)  # the other post's fresh board, #40, is not found before this one opens
+    gh.answer("issue list", [{"number": 40, "title": "Board: demo"}, {"number": 41, "title": "Board: demo"}])
+    gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
+    assert tidy.keep_board(HACK_BOARD) == 40
+    assert len(gh.called("issue", "create")) == 1
+    assert gh.called("issue", "comment", "41")[0][-1].startswith("Closed at 0 comments; this thread goes on in #40.")
+    assert ["issue", "close", "41", "--repo", "acme/demo"] in gh.called("issue", "close")
+    assert gh.called("issue", "pin") == [["issue", "pin", "40", "--repo", "acme/demo"]]
+    assert tidy.board_now(HACK_BOARD) == 40
+
+
+def test_a_post_after_a_move_that_stopped_half_way_finishes_it_on_the_board_it_made(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7", BOARD_7)
+    gh.answer("issue create", "https://github.com/acme/demo/issues/40\n")
+    gh.answer("issue comment 7", "", code=1, once=True)  # GitHub refuses the closing note once
+    assert tidy.keep_board(HACK_BOARD) == 7
+    # The search does not list #40 yet, and the old board is still open and full: the next post finishes the move.
+    assert tidy.keep_board(HACK_BOARD) == 40
+    assert len(gh.called("issue", "create")) == 1
+    assert gh.called("issue", "close") == [["issue", "close", "7", "--repo", "acme/demo"]]
+    assert tidy.board_now(HACK_BOARD) == 40
+
+
+def test_right_after_a_move_the_closed_board_is_followed_by_its_note_before_the_search_finds_the_fresh_one(gh):  # noqa: F811
+    gh.answer("api repos/acme/demo/issues/7/comments", [{"body": "kickoff"}, moved_note(41), moved_note(40)])
+    gh.answer("api repos/acme/demo/issues/7", {**BOARD_7, "state": "closed", "comments": 302})
+    gh.answer("api repos/acme/demo/issues/40", {"state": "open", "title": "Board: demo", "comments": 1})
+    assert tidy.keep_board(HACK_BOARD) == 40
+    assert not gh.called("issue", "list")
     assert tidy.board_now(HACK_BOARD) == 40
 
 

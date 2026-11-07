@@ -35,7 +35,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 - **`tools/board`.** Setup copies a small shell script into the repo, so Codex or any agent with `gh` can read and post on the board in the same format.
 - **Board lines with a shape.** Done lines say what was not verified. Deploys name their rollback. Claims, releases and handoffs name the files or the commit. `colony merge` posts a `[merged]` line.
 - **A board that moves.** At `[limits] board_comments` (300), the board closes and a fresh pinned issue goes on. `tools/board` follows it.
-- **The push guard.** In every mode, the wait guard refuses a force push or delete of the base.
+- **The push guard.** In every mode, the wait guard refuses a force push or delete of the base or the repo's default branch.
 
 **Off:** the knowledge vault, specs, research, the card board, the browser walk and the retro. The rules are a short hack core, not a preset.
 

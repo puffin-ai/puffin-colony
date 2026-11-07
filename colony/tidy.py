@@ -42,6 +42,8 @@ OPEN_ITEM = re.compile(r"(question|blocked|urgent)\s*:", re.I)
 DECIDES = re.compile(r"\bdecides:\s*(.+?)\s+Default:", re.I)
 CARD_BRANCH = re.compile(r"[a-z0-9][a-z0-9.-]*/(\d+)")  # a card's branch, <name>/<n>
 NEEDS = re.compile(r"Needs \S+")
+MOVED = re.compile(r"Closed at \d+ comments; this thread goes on in #(\d+)")  # the note on an issue that moved on
+HOPS = 5  # closed boards a post follows, one after another, before it posts where it is
 IDEAS = "## Ideas"
 
 
@@ -255,15 +257,21 @@ def continued_body(old: str, number: int, count: int) -> str:
     return f"{text}\n\nContinues #{number}, closed at {count} comments." if text else f"Continues #{number}."
 
 
-def rotate(config: dict, number: int, info: dict) -> int:
-    """Close a full issue and open its successor with the same title; return the new number. The old issue first
-    gets a closing comment with the open items from its last SUMMARY_COMMENTS comments. A new coordination issue is
-    remembered at once, so this computer's posts and wait follow it."""
+def fresh_issue(repo: str, number: int, info: dict) -> int:
+    """Open the successor of a full issue, with its title and a body that links back to it; return its number."""
+    return issue_number(wait.gh("issue", "create", "--repo", repo, "--title", info.get("title", ""), "--body",
+                                continued_body(info.get("body", ""), number, int(info.get("comments", 0)))))
+
+
+def rotate(config: dict, number: int, info: dict, new: int | None = None) -> int:
+    """Close a full issue and open its successor with the same title, or move it to `new` when that is open already;
+    return the new number. The old issue first gets a closing comment with the open items from its last
+    SUMMARY_COMMENTS comments. A new coordination issue is remembered at once, so this computer's posts and wait follow
+    it."""
     repo, title, count = config["project"]["repo"], info.get("title", ""), int(info.get("comments", 0))
     comments = json.loads(wait.gh("issue", "view", str(number), "--repo", repo, "--json", "comments") or "{}")
     items = open_items((comments.get("comments") or [])[-SUMMARY_COMMENTS:], NEEDS.fullmatch(title) is not None)
-    new = issue_number(wait.gh("issue", "create", "--repo", repo, "--title", title, "--body",
-                               continued_body(info.get("body", ""), number, count)))
+    new = new or fresh_issue(repo, number, info)
     listed = "\n".join(f"- {item[:wait.MAX_LINE]}" for item in items) or "- none found"
     wait.gh("issue", "comment", str(number), "--repo", repo, "--body",
             f"Closed at {count} comments; this thread goes on in #{new}.\n\nOpen items from its last "
@@ -302,17 +310,86 @@ def board_now(config: dict) -> int:
     return moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > start else start
 
 
-def successor(repo: str, title: str, number: int) -> int | None:
-    """The newest open issue with this title after `number`: the fresh board a closed one moved to, or None."""
+def made_path(config: dict) -> Path:
+    """Where this computer remembers each fresh board it opened, keyed by the full board it opened it for, so a move
+    that stopped half-way is finished on the board it made, never on a second one."""
+    return wait.state_path(config["project"]["name"], "board-made")
+
+
+def notes(repo: str, number: int, count: int) -> list[int]:
+    """The issues that the moved notes on issue `number` point to, after it, lowest first. A note is near the end, so
+    this reads the last two pages of `count` comments."""
+    last, found = max(1, -(-count // 100)), set()
+    for page in range(max(1, last - 1), last + 1):
+        listed = json.loads(wait.gh("api", f"repos/{repo}/issues/{number}/comments?per_page=100&page={page}") or "[]")
+        for comment in listed if isinstance(listed, list) else []:
+            note = MOVED.match((comment.get("body") or "") if isinstance(comment, dict) else "")
+            if note and int(note[1]) > number:
+                found.add(int(note[1]))
+    return sorted(found)
+
+
+def open_after(repo: str, title: str, number: int) -> list[int]:
+    """The open issues with this title after `number`, lowest first, as GitHub's search finds them. A brand-new issue
+    can be missing for a while, so a moved note comes first wherever there is one."""
     listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{title}" in:title',
                                 "--json", "number,title", "--limit", "20") or "[]")
-    later = [issue["number"] for issue in listed if issue.get("title") == title and issue.get("number", 0) > number]
-    return max(later) if later else None
+    return sorted(issue["number"] for issue in listed
+                  if issue.get("title") == title and isinstance(issue.get("number"), int) and issue["number"] > number)
+
+
+def successor(repo: str, info: dict, number: int) -> int | None:
+    """The fresh board a full or closed one moved to, or None: the lowest issue its moved notes point to, else the
+    lowest open issue with its title after it. The lowest wins, so when two posts moved the board at once, Colony and
+    tools/board agree on one."""
+    pointed = notes(repo, number, int(info.get("comments", 0)))
+    if pointed:
+        return pointed[0]
+    later = open_after(repo, info.get("title", ""), number)
+    return later[0] if later else None
+
+
+def settle(repo: str, info: dict, number: int, new: int) -> int:
+    """After board `number` moved to `new`: when another post moved it at the same moment, keep the lowest fresh
+    board and close each other one with a note that points to it. Return the board kept."""
+    title, count = info.get("title", ""), int(info.get("comments", 0)) + 1  # rotate's own note is one more
+    found = {new, *notes(repo, number, count), *open_after(repo, title, number)}
+    keep = min(found)
+    for other in sorted(found - {keep}):
+        twin = issue_info(repo, other)
+        if twin.get("state") == "open":
+            wait.gh("issue", "comment", str(other), "--repo", repo, "--body",
+                    f"Closed at {twin['comments']} comments; this thread goes on in #{keep}. Two posts moved the board "
+                    f"at once, and #{keep} is the one kept.")
+            wait.gh("issue", "close", str(other), "--repo", repo)
+    return keep
+
+
+def move_board(config: dict, number: int, info: dict) -> int:
+    """Move a full board to a fresh pinned issue and return it. A fresh board that is open already, from another
+    post's move or from this computer's move that stopped half-way, is taken instead of opening one more."""
+    repo, made = config["project"]["repo"], wait.read_json(made_path(config), {})
+    new = made.get(str(number)) if isinstance(made, dict) else None
+    new = new if isinstance(new, int) and not isinstance(new, bool) and new > number else successor(repo, info, number)
+    if new is None:
+        new = fresh_issue(repo, number, info)
+        wait.write_json(made_path(config), {str(number): new})
+    new = rotate(config, number, info, new)
+    try:
+        new = settle(repo, info, number, new)
+    except (cli.ColonyError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME}: the board moved to #{new}, which was not checked for a twin: {e}", file=sys.stderr)
+    for action, issue in (("unpin", number), ("pin", new)):
+        try:
+            wait.gh("issue", action, str(issue), "--repo", repo)
+        except cli.ColonyError as e:
+            print(f"{cli.NAME}: #{issue} was not {action}ned, and the board works anyway: {e}", file=sys.stderr)
+    return new
 
 
 def keep_board(config: dict) -> int:
     """Before a post on the hack board: follow a closed board to the fresh one it moved to, and move a board that holds
-    [limits] board_comments comments to a fresh pinned issue with the same title (rotate), so a read stays short.
+    [limits] board_comments comments to a fresh pinned issue with the same title (move_board), so a read stays short.
     Return the issue to post on, which this computer remembers. It reads one issue, and a failure never stops the
     post."""
     from colony import transport
@@ -320,16 +397,13 @@ def keep_board(config: dict) -> int:
     repo, start, number = config["project"]["repo"], transport.board_issue(config), board_now(config)
     try:
         info = issue_info(repo, number)
-        if info.get("state") == "closed":
-            number = successor(repo, info.get("title", ""), number) or number
-        elif int(info["comments"]) >= limits(config)["board_comments"]:
-            new = rotate(config, number, info)
-            for action, issue in (("unpin", number), ("pin", new)):
-                try:
-                    wait.gh("issue", action, str(issue), "--repo", repo)
-                except cli.ColonyError as e:
-                    print(f"{cli.NAME}: #{issue} was not {action}ned, and the board works anyway: {e}", file=sys.stderr)
-            number = new
+        for _ in range(HOPS):
+            later = successor(repo, info, number) if info.get("state") == "closed" else None
+            if later is None:
+                break
+            number, info = later, issue_info(repo, later)
+        if info.get("state") == "open" and int(info["comments"]) >= limits(config)["board_comments"]:
+            number = move_board(config, number, info)
     except (cli.ColonyError, ValueError, KeyError, TypeError) as e:
         print(f"{cli.NAME}: the board #{number} was not checked: {e}", file=sys.stderr)
     if number != board_now(config):

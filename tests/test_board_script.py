@@ -332,3 +332,29 @@ def test_a_first_look_at_a_closed_board_finds_the_fresh_one_by_its_title(board):
     assert posts(run.stdout) == ["sam 5 -"]
     assert any(call[:2] == ["issue", "list"] for call in board.calls())
     assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"
+
+
+def test_a_board_moved_twice_at_once_is_followed_to_the_lowest_fresh_board_as_colony_keeps(board):
+    db = board.load()
+    db["comments"] = [comment(1, "sam", "old post"),
+                      comment(2, "ana", "Closed at 300 comments; this thread goes on in #14.\n\nOpen items: none"),
+                      comment(3, "sam", "Closed at 300 comments; this thread goes on in #13.\n\nOpen items: none")]
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(5, "sam", "kept board")], "14": [comment(6, "sam", "twin")]}
+    board.save(db)
+    run = board.run("read", "-n", "5")
+    assert posts(run.stdout) == ["sam 5 -"]
+    assert not any(call[:2] == ["issue", "list"] for call in board.calls()), "the notes name the board, no search"
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"
+
+
+def test_unread_follows_the_lowest_of_two_moved_notes(board):
+    board.add(comment(1, "sam", "kickoff"))
+    board.run("unread")
+    board.add(comment(2, "ana", "Closed at 300 comments; this thread goes on in #14."),
+              comment(3, "sam", "Closed at 300 comments; this thread goes on in #13."))
+    db = board.load()
+    db["closed"], db["boards"] = [ISSUE], {"13": [comment(4, "sam", "@all kept board")], "14": [comment(5, "ana", "x")]}
+    board.save(db)
+    run = board.run("unread")
+    assert posts(run.stdout) == ["ana 2 -", "sam 3 -", "sam 4 you"]
+    assert board.run("whoami").stdout.splitlines()[-1] == f"board: {REPO}#13"

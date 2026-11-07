@@ -93,6 +93,8 @@ REWRITES_BASE = [
     "git push --force",  # no refspec: the branch checked out, which is main
     "git push -f origin main &",  # in the background it still rewrites main
     "npm test && git push --force origin main",
+    "git push --tags -f origin main",
+    "git push -fo ci.skip origin +main",
 ]
 LEAVES_BASE = [
     "git push origin main",
@@ -102,6 +104,10 @@ LEAVES_BASE = [
     "git push origin +ana/login",
     "echo git push --force origin main",
     "git log --oneline -3",
+    "git push --tags -f",  # only tags, though the branch checked out is main
+    "git push origin --tags --force",
+    "git push -odeploy origin main",  # -o's value, not -d
+    "git push -fodeploy origin ana/login",
 ]
 
 
@@ -138,9 +144,24 @@ def test_the_guard_lets_a_push_that_leaves_the_base_alone_run(command, on_main):
 def test_the_guard_protects_the_base_colony_toml_names(on_main):
     (on_main / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[gate]\nbase = "other"\n')
     assert push_guard("git push --force origin dev", on_main).returncode == 2
-    assert push_guard("git push --force origin main", on_main).returncode == 0
+    assert push_guard("git push --force origin other", on_main).returncode == 0
     subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
     assert push_guard("git push --force", on_main).returncode == 0  # the branch checked out is not the base
+
+
+def test_the_guard_protects_the_default_branch_too_when_the_base_is_another(on_main):
+    (on_main / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n')
+    # With no origin/HEAD, main stands in for the default branch.
+    run = push_guard("git push --force origin main", on_main)
+    assert run.returncode == 2 and "this push force-pushes main" in run.stderr and "dev and main" in run.stderr
+    assert push_guard("git push origin main", on_main).returncode == 0
+    subprocess.run(["git", "-C", str(on_main), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"],
+                   check=True)
+    assert push_guard("git push --force origin trunk", on_main).returncode == 2
+    assert push_guard("git push origin :trunk", on_main).returncode == 2
+    assert push_guard("git push --force origin dev", on_main).returncode == 2
+    assert push_guard("git push --force origin main", on_main).returncode == 0  # main is neither base nor default
+    assert push_guard("git push origin trunk", on_main).returncode == 0
 
 
 @pytest.fixture

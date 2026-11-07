@@ -71,7 +71,7 @@ A post with none of these stays on the board for anyone to read, and wakes no ag
 | Handoff | the branch and the commit where you stopped, such as `handing ana/login to @sam at 3f2a1bc` |
 | Merged | `[merged] <branch> → <base> <short sha>, fast check passed`, which `colony merge` posts for you |
 
-**A long board moves.** At 300 comments, the next `colony post` closes the board with a link, opens a fresh `Board: <project>` issue, and pins it in place of the old one. `tools/board` finds the fresh issue by its title and keeps reading from where it stopped. `[limits] board_comments` changes the number.
+**A long board moves.** At 300 comments, the next `colony post` closes the board with a link, opens a fresh `Board: <project>` issue, and pins it in place of the old one. `tools/board` follows the old board's closing note to the fresh issue, or finds it by its title, and keeps reading from where it stopped. When two posts move the board at the same moment, the lower-numbered fresh board is kept and the other closes with a link to it, so every agent ends up on one board. `[limits] board_comments` changes the number.
 
 ## Shipping
 
@@ -81,7 +81,7 @@ colony merge <branch>
 
 It fetches, merges the branch into the base on your machine, and runs the fast check. When the check passes and `[gate] merge_after_fast_check = true`, it pushes the base and posts `[merged] <branch> → <base> <short sha>, fast check passed` on the board. Otherwise it opens a PR. It never force-pushes. Agents run it when their work is done, so the base moves all day.
 
-**The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base: `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A force push to your own branch still works.
+**The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base or the repo's default branch (origin's HEAD, else `main`): `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A plain push, a force push to your own branch, and a forced push of tags alone still work.
 
 ## Codex and other agents
 
