@@ -55,6 +55,14 @@ def outside_claude_code(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def outside_a_colony_session(monkeypatch):
+    """The suite may run from a lead's or a builder's terminal, whose $COLONY_SESSION, $COLONY_LEAD and the rest would
+    make a command act as that agent. A test that wants one sets it."""
+    for name in [name for name in os.environ if name.startswith("COLONY_")]:
+        monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
 def with_the_retry_watchdog(monkeypatch):
     """Every Colony session runs with CLAUDE_CODE_RETRY_WATCHDOG=1, so the prompt hook's once-a-day note stays out of
     a test that doesn't ask for it, wherever the suite runs."""
@@ -62,7 +70,7 @@ def with_the_retry_watchdog(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_usage_refresh(monkeypatch):
+def no_usage_refresh(monkeypatch, outside_a_colony_session):  # after the clearing, which would drop it
     """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")
 
