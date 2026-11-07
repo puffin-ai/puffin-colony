@@ -699,3 +699,14 @@ def test_a_named_leads_card_line_reaches_its_own_helper(home, monkeypatch, capsy
     monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
     helper = wait.builder_session(config, "builder-1")
     assert wait.taken(posted[0], helper, "12")  # the helper takes it
+
+
+def test_every_new_session_is_told_to_take_its_role_name_in_the_sidebar(home, config, github, capsys):
+    rename = "Rename this session in the app's sidebar to {}, with the app's own rename tool when you have one"
+    assert cli.main(["research", "Which queue?", "--dry-run", "--person", "ana"]) == 0
+    assert rename.format("researcher") in capsys.readouterr().out.replace("'\"'\"'", "'")  # shlex quotes each '
+    github.add(lead(name="ana-main-lead"))
+    assert cli.main(["join", "--in-session", "--person", "ana"]) == 0
+    assert rename.format("builder-1") in capsys.readouterr().out
+    assert cli.main(["claim", "web", "--person", "ana"]) == 0
+    assert rename.format("ana-web-lead") in capsys.readouterr().out
