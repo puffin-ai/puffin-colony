@@ -5,13 +5,23 @@ The command line in cli.py calls `run_batch(config, args)` and `batch_status(con
 optional `account`, `person`, `review` and `repo`. The account rules and the repository root come from cli.py. Each
 batch's reports go to `.colony/reports/<batch>/` in its worktree, and land on the batch branch.
 
-The mode's [gate] keys shape the gate: `check` is "full" ([project] checks, or web_checks for a round that may) or
-"fast" ([project] fast_check alone, hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when
-false), and `walk` walks the changed screens. Startup and solo run the full checks and the reviewer, and solo walks
-only when `walk` is true; hack runs the fast check alone. `[gate] paid_checks`, a command whose model calls cost money,
-runs once in the round that otherwise passes, only while `[budget] provider_dollars` is above 0 (paid_checks).
-`colony batch --fast` runs the full checks once, with no reviewer, walk or fixers, and opens the pull request when they
-pass, with `gate: fast` in its body.
+The mode's [gate] keys shape the gate: `check` is "full" ([project] checks) or "fast" ([project] fast_check alone,
+hack mode's), `review` runs a fresh reviewer each round (`--review` adds it when false), and `walk` walks the changed
+screens. Startup and solo run the full checks and the reviewer, and solo walks only when `walk` is true; hack runs the
+fast check alone. `[gate] paid_checks`, a command whose model calls cost money, runs once in the round that otherwise
+passes, only while `[budget] provider_dollars` is above 0 (paid_checks). `colony batch --fast` runs the full checks
+once, with no reviewer, walk or fixers, and opens the pull request when they pass, with `gate: fast` in its body.
+
+Fast batches. With `[checks] areas`, a round runs only the areas its change touched, through `{areas}` in the check
+command, and a round after a fix adds the areas that failed (round_areas). A failing test whose output names a timeout
+or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again (rerun_timeouts).
+The walk runs only when the change touches `[gate] walk_paths`, and walks only the screens the changed files feed
+(`[walk] screens`), with the browser `[walk] browser` names. minutes.md records the minutes each skip saved. A batch
+runs at most MAX_ROUNDS rounds: after the last, each finding still open becomes a card the pull request lists, while
+failing checks still stop it (carry_over). An agent that hits its account's rate limit, a 429 that lasts
+RATE_LIMIT_GRACE seconds or a message that gives up on it, is stopped and its step runs again on the person's next
+account with room (run_agent). Ctrl-C or SIGTERM stops every agent, check and rerun the batch has running, each in its
+own process group, and ends the batch at once (stop_on_signal).
 
 In hack mode, `colony batch --review --name <n>` with no `--card` reviews the demo build: one fresh reviewer reads
 origin/<base> as it stands, beside the fast check, with no fixers, and one line on the board gives the open count and
@@ -24,9 +34,12 @@ import concurrent.futures as futures
 import fnmatch
 import json
 import os
+import queue
 import re
 import shlex
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -43,20 +56,42 @@ WALK = re.compile(r"walk:\s*(pass|fail)\b", re.I)
 FINDING = re.compile(r"^\s*(?:[-*]|\d+[.)])?\s*`?(?P<path>[^\s`:]+):(?P<line>\d+)(?:[-–:]\d+)*`?\s*(?:—|–|--?)\s*(?P<text>\S.*)$")
 FIXED = re.compile(r"^\W*fixed\b|\bfixed\W*$", re.I)
 IMAGE = re.compile(r"\.(png|jpe?g|webp|gif)\b", re.I)
-PYTEST_FAILED = re.compile(r"\bFAILED\s+(\S+?\.py)::(\S+)")
+PYTEST_FAILED = re.compile(r"\b(?:FAILED|ERROR)\s+(\S+?\.py)::(\S+)")  # a failed test, or one that errored
+PYTEST_ERROR = re.compile(r"\s*ERROR\s+[^\s:]+\.py(::|\s+-\s|\s*$)")  # a test that errored, such as in collection
 JS_FAILED = re.compile(r"(?:\bFAIL\b|×|✗)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s*>\s*(.+))?")
 SPENT = re.compile(r"^\s*spent:\s*\$?(\d+(?:\.\d+)?)\s*$", re.I | re.M)  # a paid check's report of its dollars
 MINUTE = re.compile(r"^(\d{1,2}:\d{2})\s+(\S+)\s+(\d+(?:\.\d+)?)(?:\s+\$(\d+(?:\.\d+)?))?")
+SAVED = re.compile(r"^(\d{1,2}:\d{2})\s+saved\s+(\S+)\s+(\d+(?:\.\d+)?)(?:\s+\$(\d+(?:\.\d+)?))?")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's empty tree: a diff from it holds every file
 TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|e2e)/|(^|/)test_[^/]*\.py$|_test\.py$|\.(test|spec)\.[cm]?[jt]sx?$")
+MAX_ROUNDS = 3  # the most rounds a batch runs; [gate] max_rounds may lower it
+TIMING = re.compile(r"time\s?out|timed out|time limit|deadline exceeded", re.I)  # a failure the load may have caused
+SECTION = re.compile(r"^\s*([=_-])\1{2,}(.*?)[=_-]*\s*$")  # a section header, such as `=== short test summary info ===`
+DETAIL = re.compile(r"^\s*(E\s|→|\w*Error\b)")  # a failure's detail line: pytest's `E`, vitest's `→`, an `Error:`
+# A sign of a failure that names no test: make's `*** [lint] Error 1`, a compiler's `error:` or `error TS2322`, npm's
+# `npm ERR!`, or a Python traceback.
+FAILURE_SIGNAL = re.compile(r"^\S*make(\[\d+\])?: \*\*\*|\berror(\[\w+\])?:|\berror TS\d+|\bError \d+\b|npm ERR!|"
+                            r"Traceback \(most recent call last\)", re.I)
+RERUN_MAX = 10  # a run with more failing tests than this reruns none of them
+RERUN_SECONDS = 600  # one test's rerun past this counts as failed again
+RATE_LIMIT = re.compile(r"rate_limit_error|exceed your account's rate limit|\brate[ _]limit(ed)?\b", re.I)
+# A Claude subscription's limit, as Claude Code words it at the start of its message: "You've hit your limit · resets
+# 3pm", "Claude AI usage limit reached|<time>", "5-hour limit reached ∙ resets 3pm".
+SUBSCRIPTION_LIMIT = re.compile(r"^\W*(you['’]ve hit your (\w+ )?limit\b|(claude (ai )?)?usage limit reached\b|"
+                                r"[\w -]{0,30}\blimit reached\b.{0,80}\bresets?\b)", re.I)
+RATE_LIMIT_GRACE = 300  # seconds an agent may wait on its account's rate limit before the step moves accounts
+STALL_SECONDS = 1200  # an agent that prints nothing this long has hung, and its run ends as failed
+BROWSERS = ("playwright", "agent-browser")  # [walk] browser
 
 
 class Finding(NamedTuple):
-    """One problem for a fixer: the file it is in (empty when unknown), its line (0 when unknown), and what is wrong."""
+    """One problem for a fixer: the file it is in (empty when unknown), its line (0 when unknown), what is wrong, and
+    who found it (review, walk or checks; empty from the parsers, which gate fills in)."""
 
     path: str
     line: int
     text: str
+    source: str = ""
 
 
 class Stop(Exception):
@@ -207,13 +242,17 @@ def checks_env(config: dict, root: Path) -> dict:
 
 
 def minutes_table(lines) -> str:
-    """Sum `HH:MM step minutes [$cost]` lines per kind of step (the name before its first dash) into a Markdown table."""
+    """Sum `HH:MM step minutes [$cost]` lines per kind of step (the name before its first dash) into a Markdown table,
+    then the `HH:MM saved step minutes [$cost]` lines the same way below the total, as what the skipped and narrowed
+    steps saved."""
     if isinstance(lines, str):
         lines = lines.splitlines()
     rows: dict[str, list[float]] = {}
+    saved: dict[str, list[float]] = {}
     for line in lines:
-        if match := MINUTE.match(line.strip()):
-            row = rows.setdefault(match[2].split("-")[0], [0, 0.0, 0.0])
+        match = SAVED.match(line.strip()) or MINUTE.match(line.strip())
+        if match:
+            row = (saved if match.re is SAVED else rows).setdefault(match[2].split("-")[0], [0, 0.0, 0.0])
             row[0] += 1
             row[1] += float(match[3])
             row[2] += float(match[4] or 0)
@@ -221,6 +260,10 @@ def minutes_table(lines) -> str:
     table += [f"| {kind} | {runs:.0f} | {mins:.1f} | ${cost:.2f} |" for kind, (runs, mins, cost) in rows.items()]
     totals = [sum(row[i] for row in rows.values()) for i in range(3)]
     table.append(f"| **total** | {totals[0]:.0f} | {totals[1]:.1f} | ${totals[2]:.2f} |")
+    if saved:
+        table += [f"| saved: {kind} | {runs:.0f} | {mins:.1f} | ${cost:.2f} |" for kind, (runs, mins, cost) in saved.items()]
+        totals = [sum(row[i] for row in saved.values()) for i in range(3)]
+        table.append(f"| **saved** | {totals[0]:.0f} | {totals[1]:.1f} | ${totals[2]:.2f} |")
     return "\n".join(table)
 
 
@@ -240,9 +283,115 @@ def _git(cwd, *args: str, check: bool = True) -> str:
     return _run(["git", *args], cwd, check).stdout.strip()
 
 
-def _touches(paths: list[str], prefixes: list[str]) -> bool:
-    """Say whether any path starts with any of the prefixes."""
-    return any(path.startswith(prefix) for path in paths for prefix in prefixes)
+def matches(path: str, patterns) -> bool:
+    """Say whether a path matches any pattern: a glob when it holds `*`, `?` or `[`, else a path prefix."""
+    return any(fnmatch.fnmatchcase(path, p) if any(c in p for c in "*?[") else path.startswith(p) for p in patterns)
+
+
+def _touches(paths: list[str], patterns: list[str]) -> bool:
+    """Say whether any path matches any of the patterns (matches)."""
+    return any(matches(path, patterns) for path in paths)
+
+
+def check_areas(config: dict) -> dict[str, list[str]]:
+    """`[checks] areas`: each check area's name and the paths that are its, in the file's order; empty when unset."""
+    return dict(config.get("checks", {}).get("areas") or {})
+
+
+def areas_of(config: dict, paths) -> list[str]:
+    """The check areas a change to `paths` touches, in `[checks] areas` order. A path under `[checks] skip` touches
+    none, such as a docs page; a path no area names touches every area, so an unknown file never goes unchecked."""
+    areas, skip, touched = check_areas(config), config.get("checks", {}).get("skip") or [], set()
+    for path in paths:
+        if matches(path, skip):
+            continue
+        mine = {name for name, patterns in areas.items() if matches(path, patterns)}
+        touched |= mine or set(areas)
+    return [name for name in areas if name in touched]
+
+
+def check_command(config: dict, cmd: str, areas: list[str] | None) -> str:
+    """The check command with `{areas}` filled in: `[checks] all` when every area runs and it is set, else the areas'
+    names joined by spaces. A command without `{areas}`, or a batch with no areas (None), runs as it is."""
+    if areas is None or "{areas}" not in cmd:
+        return cmd
+    every = config.get("checks", {}).get("all") or ""
+    words = every if every and set(areas) == set(check_areas(config)) else " ".join(areas)
+    return cmd.replace("{areas}", words)
+
+
+def every_area(config: dict, cmd: str) -> str:
+    """A check command run for every check area (check_command), as the demo review, a retro and hack mode's merge
+    run it."""
+    return check_command(config, cmd, list(check_areas(config)))
+
+
+def test_id(finding: Finding) -> str:
+    """The test a check finding names, as its output named it (`path::name` for pytest, the file for a JS runner), or
+    an empty string for a finding that names no test."""
+    text = finding.text.removeprefix("failing test ")
+    return "" if text == finding.text else text.split(" > ")[0]
+
+
+def indent(line: str) -> int:
+    """How far a line is indented."""
+    return len(line) - len(line.lstrip())
+
+
+def failure_lines(output: str) -> tuple[list[str], dict[int, list[int]], list[str]]:
+    """Read a check run's output: its lines; each line that names a failing test (parse_check_failures' patterns),
+    with the detail lines under it; and the section header each line sits in, or "". A test's detail lines follow it,
+    indented deeper or marked as details (DETAIL), up to a blank line, a section header or the next test line, such as
+    pytest's `E   Failed: Timeout` or vitest's `→ Test timed out in 5000ms.`"""
+    lines = output.splitlines()
+    tests = [i for i, line in enumerate(lines) if PYTEST_FAILED.search(line) or JS_FAILED.search(line)]
+    headers, header, depth = [], "", 0
+    for line in lines:
+        if section := SECTION.match(line):
+            header, depth = section[2].strip(), indent(line)
+        elif line.strip() and indent(line) < depth:
+            header, depth = "", 0  # a line further out ends the section
+        headers.append(header)
+    blocks = {}
+    for i in tests:
+        block = []
+        for j in range(i + 1, len(lines)):
+            line = lines[j]
+            if PYTEST_FAILED.search(line) or JS_FAILED.search(line) or not line.strip() or \
+                    SECTION.match(line) or not (indent(line) > indent(lines[i]) or DETAIL.match(line)):
+                break
+            block.append(j)
+        blocks[i] = block
+    return lines, blocks, headers
+
+
+def other_failures(output: str, tests: set[str]) -> list[str]:
+    """The failures in a check run's output that none of `tests` explains: each top-level `FAIL <step>` line whose
+    indented lines below it name none of them, each test runner `ERROR` line, and each failure signal outside the
+    failing tests' own lines (FAILURE_SIGNAL), such as make's `*** [lint] Error 1`. Output that names no failing test
+    and no `FAIL` step can't be accounted for, so it counts as a failure of its own."""
+    lines, blocks, _ = failure_lines(output)
+    own = {i for test, block in blocks.items() for i in (test, *block)}
+    found, block, head = [], [], None
+
+    def close() -> None:
+        if head is not None and not any(test in line for line in [head, *block] for test in tests):
+            found.append(head.strip())
+
+    for i, line in enumerate(lines):
+        if PYTEST_ERROR.match(line) and not any(test in line for test in tests):
+            found.append(line.strip())
+        elif i not in own and not line.startswith(("FAIL", "PASS")) and FAILURE_SIGNAL.search(line):
+            found.append(line.strip())
+        if line[:1].isspace() or not line.strip():
+            block.append(line)
+            continue
+        close()
+        head, block = (line, []) if line.startswith("FAIL") else (None, [])
+    close()
+    if not blocks and not any(line.startswith("FAIL") for line in lines):
+        found.append("the output names no failing test or step")
+    return list(dict.fromkeys(found))
 
 
 def should_walk(settings: dict, rounds: list[dict], changed: list[str]) -> bool:
@@ -263,25 +412,117 @@ def should_walk(settings: dict, rounds: list[dict], changed: list[str]) -> bool:
     return _touches(changed, paths)
 
 
+def walk_browser(config: dict) -> str:
+    """The walker's browser, `[walk] browser`: "playwright" (Playwright MCP, the default) or "agent-browser" (the
+    agent-browser CLI)."""
+    name = config.get("walk", {}).get("browser") or BROWSERS[0]
+    if name not in BROWSERS:
+        raise cli.ColonyError(f"[walk] browser is {' or '.join(map(repr, BROWSERS))}, not {name!r}")
+    return name
+
+
+def walk_screens(config: dict, changed: list[str]) -> tuple[list[str], list[str]]:
+    """The screens a round's changed files feed, and the changed screen files no screen claims. A changed file is a
+    screen file when it is under `[gate] walk_paths` (every file when that is empty); `[walk] screens` maps each
+    screen to the paths that feed it."""
+    paths = config["gate"].get("walk_paths") or [""]
+    screens = dict(config.get("walk", {}).get("screens") or {})
+    files = [path for path in changed if matches(path, paths)]
+    fed = [name for name, patterns in screens.items() if any(matches(path, patterns) for path in files)]
+    loose = [path for path in files if not any(matches(path, patterns) for patterns in screens.values())]
+    return fed, loose
+
+
+def screens_text(config: dict, changed: list[str]) -> str:
+    """The walker prompt's line on what to walk: the screens the changed files feed (walk_screens), and the changed
+    files no screen claims, for the walker to trace to their screens. Every other screen stays unwalked."""
+    fed, loose = walk_screens(config, changed)
+    lines = []
+    if fed:
+        lines.append("Walk only these screens, which this round's changed files feed: " + ", ".join(fed) + ".")
+    if loose:
+        shown = ", ".join(f"`{path}`" for path in loose[:30]) + (f" and {len(loose) - 30} more" if len(loose) > 30 else "")
+        lines.append(("Also walk" if fed else "Walk only") + " the screens that use these changed files: " + shown + ".")
+    if not lines:
+        lines.append("This round changed no screen file: walk only the flows a previous walk failed.")
+    return " ".join(lines) + " Leave every other screen unwalked."
+
+
+def browser_text(config: dict, reports: Path, name: str) -> str:
+    """The walker prompt's line on how to drive the browser, for `[walk] browser`."""
+    if walk_browser(config) == "agent-browser":
+        session = f"colony-walk-{re.sub(r'[^A-Za-z0-9-]', '-', name)}"
+        return ("Drive the browser with the `agent-browser` CLI through Bash, and no other browser tool. Run "
+                "`agent-browser skills get core` once first for its commands. Pass `--session " + session + "` on "
+                "every command. Set the phone size with `agent-browser set device \"iPhone 14\"` (touch input) and "
+                "desktop with `set viewport 1280 800`, the theme with `set media dark` or `set media light`, and save "
+                f"screenshots under {reports}/walk-shots/. Run `agent-browser --session {session} close` at the end.")
+    return "Drive the browser through the Playwright MCP tools."
+
+
 def claude_cmd(config: dict, role: str, prompt: str, add_dirs=()) -> list[str]:
-    """Build the headless `claude -p` command for one role, with its model, effort and optional agent."""
+    """Build the headless `claude -p` command for one role, with its model, effort and optional agent. It streams its
+    events as JSON lines, which run_agent watches for a rate limit. A walker on agent-browser loads no MCP servers and
+    may run `agent-browser` without asking."""
     settings = config["roles"][role]
     cmd = ["claude", "-p", prompt, "--model", settings["model"], "--effort", settings["effort"],
-           "--permission-mode", "auto", "--output-format", "json"]
+           "--permission-mode", "auto", "--output-format", "stream-json", "--verbose"]
     if settings.get("agent"):
         cmd += ["--agent", settings["agent"]]
+    if role == "walker" and walk_browser(config) == "agent-browser":
+        cmd += ["--strict-mcp-config", "--allowedTools", "Bash(agent-browser:*)"]
     for folder in add_dirs:
         cmd += ["--add-dir", str(folder)]
     return cmd
 
 
 def _result(stdout: str) -> dict:
-    """Read the JSON result a headless claude run prints, or an empty dict when it printed none."""
+    """Read the result a headless claude run prints: the last `{"type": "result", …}` line of its stream, or an
+    empty dict when it printed none."""
+    found = {}
+    for line in stdout.splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "result":
+            found = data
+    return found
+
+
+def rate_limit_sign(line: str) -> str | None:
+    """What one line of a headless claude run says about its account's rate limit: "limited" when the run has given up
+    on it, its message carries `"error": "rate_limit"`, or its subscription's limit is reached (SUBSCRIPTION_LIMIT),
+    "waiting" when it is retrying after a 429 or the account's window is rejected, "moving" when the run made
+    progress, and None for a line that says neither. Only Claude Code's own events count, never a tool's output, so a
+    file that mentions rate limits never trips it."""
     try:
-        data = json.loads(stdout)
+        data = json.loads(line)
     except ValueError:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return "limited" if RATE_LIMIT.search(line) or SUBSCRIPTION_LIMIT.search(line) else None
+    if not isinstance(data, dict):
+        return None
+    kind = data.get("type")
+    if kind == "system" and data.get("subtype") == "api_retry":
+        return "waiting" if data.get("error_status") == 429 or "rate_limit" in str(data.get("error")) else None
+    if data.get("error") == "rate_limit":  # Claude Code's mark on a message that gave up on the limit
+        return "limited"
+    if kind == "rate_limit_event":
+        return "waiting" if (data.get("rate_limit_info") or {}).get("status") == "rejected" else "moving"
+    if kind == "result":
+        text = str(data.get("result", ""))
+        error = data.get("is_error") and (RATE_LIMIT.search(f"{text} {data.get('errors', '')}") or
+                                          SUBSCRIPTION_LIMIT.search(text))
+        return "limited" if error else None
+    if kind == "assistant":
+        content = (data.get("message") or {}).get("content") or []
+        text = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if SUBSCRIPTION_LIMIT.search(text):
+            return "limited"
+        if text.startswith("API Error") and RATE_LIMIT.search(text):
+            return "waiting"
+        return "moving"
+    return "moving" if kind in ("user", "stream_event") else None
 
 
 # One batch
@@ -301,9 +542,13 @@ class Batch:
     review: bool = True
     checks_only: bool = False  # `colony batch --fast`: the full checks once, with no reviewer, walk or fixers
     sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-lead`
+    person: str = ""  # whose accounts a rate-limited step moves to (switch_account)
+    limited: set = field(default_factory=set)  # the accounts that hit their rate limit in this batch
     lock: threading.RLock = field(default_factory=threading.RLock)
-    state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "backend_passed": False,
-                                                       "paid_spent": 0.0})
+    procs: set = field(default_factory=set)  # the agents, checks and reruns running now, each in its own group
+    stopping: bool = False  # Ctrl-C or SIGTERM came: every running process is being stopped (stop_on_signal)
+    state: dict = field(default_factory=lambda: {"round": 0, "running": {}, "rounds": [], "paid_spent": 0.0,
+                                                       "switches": []})
 
     @classmethod
     def from_args(cls, config: dict, args) -> Batch:
@@ -331,8 +576,10 @@ class Batch:
         if checks_only:
             config = {**config, "gate": {**config["gate"], "check": "full", "walk": False, "max_rounds": 1}}
             review = False
-        b = cls(config, name, cards, start, _root(config, args), _account(config, args),
-                bool(getattr(args, "dry_run", False)), review, checks_only)
+        check_settings(config)
+        account = _account(config, args)
+        b = cls(config, name, cards, start, _root(config, args), account,
+                bool(getattr(args, "dry_run", False)), review, checks_only, person=_person(config, args, account[0]))
         if demo:
             from colony import wait
 
@@ -382,6 +629,18 @@ class Batch:
         """The environment for the checks (checks_env)."""
         return checks_env(self.config, self.root)
 
+    def track(self, proc: subprocess.Popen, on: bool = True) -> None:
+        """Count a process the batch started with portable.own_group as running, or as ended. One that starts while
+        the batch is stopping on a signal is stopped at once."""
+        with self.lock:
+            if not on:
+                self.procs.discard(proc)
+                return
+            self.procs.add(proc)
+            stopping = self.stopping
+        if stopping:
+            portable.stop_group(proc)
+
     def save(self) -> None:
         """Write state.json for `colony status`."""
         with self.lock:
@@ -403,6 +662,11 @@ class Batch:
         with self.lock, (self.reports / "minutes.md").open("a") as out:
             out.write(line + "\n")
 
+    def saved(self, step: str, minutes: float, cost=None) -> None:
+        """Append `HH:MM saved step minutes [$cost]` to minutes.md: what a skipped or narrowed step saved."""
+        if minutes > 0 or (cost or 0) > 0:
+            self.minute(f"saved {step}", max(minutes, 0.0), None if cost is None else max(cost, 0.0))
+
     def shell(self, step: str, cmd: str, cwd: Path) -> None:
         """Run one of the config's shell commands (regen, install) as a timed step; stop the run when it fails."""
         started, clock = time.time(), time.strftime("%H:%M")
@@ -423,6 +687,30 @@ class Batch:
 def _root(config: dict, args=None) -> Path:
     """The host repository: --repo when given, else the checkout the command runs in."""
     return Path(getattr(args, "repo", None) or cli.repo_root()).expanduser()
+
+
+def _person(config: dict, args, account: str) -> str:
+    """Whose accounts the batch moves between when one hits its rate limit: --person, else the session's
+    COLONY_PERSON, else cli.default_person, else the person the batch's account belongs to."""
+    try:
+        return cli.person_of(config, args)
+    except cli.ColonyError:
+        return config["accounts"][account]["person"]
+
+
+def check_settings(config: dict) -> None:
+    """Refuse a colony.toml whose checks or walk settings this version can't run: `[project] web_checks`, which
+    `[checks] areas` replaced, `{areas}` in a check command with no areas named, and an unknown `[walk] browser`."""
+    project = config["project"]
+    if project.get("web_checks"):
+        raise SystemExit("[project] web_checks is gone: name each check area's paths in [checks] areas, and put "
+                         "{areas} in [project] checks where the area names go")
+    if not check_areas(config) and any("{areas}" in (project.get(key) or "") for key in ("checks", "fast_check")):
+        raise SystemExit("[project] checks has {areas}, but [checks] areas names none: add the areas and their paths")
+    try:
+        walk_browser(config)
+    except cli.ColonyError as e:
+        raise SystemExit(str(e)) from None
 
 
 def _account(config: dict, args) -> tuple[str, str]:
@@ -473,26 +761,27 @@ def reviewer_prompt(b: Batch, r: int, head: str, prev: dict | None, risks: str) 
                 rules=", ".join(f"`{rule}`" for rule in gate.get("rules", [])), report=b.reports / f"review-{r}.md")
 
 
-def walker_prompt(b: Batch, r: int, head: str) -> str:
-    """Fill the walker template for round r, pointing at the previous walk report when there is one."""
+def walker_prompt(b: Batch, r: int, head: str, changed: list[str]) -> str:
+    """Fill the walker template for round r: the screens the round's `changed` files feed (screens_text), the
+    browser to drive (browser_text), and the previous walk report when there is one."""
     earlier = b.reports / f"walk-{r - 1}.md"
     previous = f"The previous walk report is {earlier}: walk its failed flows first." if r > 1 and earlier.exists() else ""
     return fill(cli.package_file("prompts", "walker.md"), walk_checkout=b.walk_wt, head=head, busy=b.wt,
-                cards=_cards_text(b), previous=previous, report=b.reports / f"walk-{r}.md")
+                cards=_cards_text(b), screens=screens_text(b.config, changed), previous=previous,
+                browser=browser_text(b.config, b.reports, b.name), report=b.reports / f"walk-{r}.md")
 
 
 def fixer_prompt(b: Batch, r: int, items: list[Finding], checkout: Path, branch: str) -> str:
     """Fill the fixer template with one card's findings, and the gate's check: the fast check for a fast gate, else
-    the full checks when any finding is in a backend path."""
+    the full checks, each for the check areas its findings' files are in (areas_of)."""
     lines = []
     for f in items:
         place = f"{f.path}:{f.line} — " if f.path and f.line else f"{f.path} — " if f.path else ""
         lines.append(f"- {place}{f.text}")
-    backend = _touches([f.path for f in items], b.project.get("backend_paths", []))
-    if fast_gate(b.config):
-        checks = fast_check(b.project)
-    else:
-        checks = b.project["checks"] if backend or not b.project.get("web_checks") else b.project["web_checks"]
+    cmd = fast_check(b.project) if fast_gate(b.config) else b.project["checks"]
+    paths = [f.path for f in items]
+    areas = areas_of(b.config, paths) if paths and all(paths) else list(check_areas(b.config))
+    checks = check_command(b.config, cmd, areas or list(check_areas(b.config)))
     return fill(cli.package_file("prompts", "fixer.md"), project=b.tag, checkout=checkout, branch=branch, round=r,
                 batch=b.name, reports=b.reports, findings="\n".join(lines), checks=checks, trailer=b.trailer)
 
@@ -500,25 +789,105 @@ def fixer_prompt(b: Batch, r: int, items: list[Finding], checkout: Path, branch:
 # The run
 
 
+def watch_agent(proc: subprocess.Popen, log: Path) -> tuple[str, str]:
+    """Copy a headless claude run's stream to `log` as it comes, and say how the run ended: "done" when it exited,
+    "limited" when its account hit the rate limit (rate_limit_sign): at once when the run gives up on it, or after
+    RATE_LIMIT_GRACE seconds of retrying with no progress, and "stalled" after STALL_SECONDS with no line at all. A
+    limited or stalled run is stopped with every process it started. Returns (the stream, how it ended)."""
+    lines: queue.Queue = queue.Queue()
+
+    def read() -> None:
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=read, daemon=True).start()
+    kept: list[str] = []
+    waiting = None  # when the run began waiting on the rate limit
+    heard = time.monotonic()
+    with log.open("w") as out:
+        while True:
+            try:
+                line = lines.get(timeout=0.2)
+            except queue.Empty:
+                line = ""
+            now = time.monotonic()
+            if line is None:
+                proc.wait()
+                return "".join(kept), "done"
+            how = ""
+            if line:
+                out.write(line)
+                out.flush()
+                kept.append(line)
+                heard = now
+                sign = rate_limit_sign(line)
+                if sign == "limited":
+                    how = "limited"
+                elif sign == "waiting":
+                    waiting = waiting or now
+                elif sign == "moving":
+                    waiting = None
+            if not how and waiting is not None and now - waiting >= RATE_LIMIT_GRACE:
+                how = "limited"
+            if not how and now - heard >= STALL_SECONDS:
+                how = "stalled"
+            if how:
+                portable.stop_group(proc)
+                return "".join(kept), how
+
+
+def switch_account(b: Batch, name: str, step: str) -> None:
+    """Move the batch off an account that hit its rate limit: mark it limited, and when the batch still runs on it,
+    take the person's next account with room (cli.pick_with_room). Stop the batch when none has room."""
+    with b.lock:
+        b.limited.add(name)
+        if b.account[0] != name:  # another step moved the batch already
+            return
+        found = cli.pick_with_room(b.config, b.person, skip=b.limited)
+        if found is None:
+            raise Stop(f"{step} hit the rate limit on the account {name}, and no other account of {b.person}'s has "
+                       f"room: run it again once {name} resets, or add an account")
+        b.account = found[0], found[1]
+        b.state["switches"].append({"step": step, "from": name, "to": found[0], "at": time.strftime("%H:%M")})
+        b.save()
+    print(f"colony batch {b.name}: {step} hit the rate limit on {name}; it runs again on {found[2]}")
+
+
 def run_agent(b: Batch, role: str, prompt: str, cwd: Path, step: str, report: Path | None = None,
               parse=None, add_dirs=()) -> dict:
-    """Run one headless claude session and record its minutes and cost; retry once when it fails or leaves no valid report."""
+    """Run one headless claude session, watching its stream (watch_agent), and record its minutes and cost. It runs
+    once more when it fails, stalls or leaves no valid report. When its account hits the rate limit, it runs again
+    on the next account with room (switch_account), and that run is not one of its two tries."""
     cmd = claude_cmd(b.config, role, prompt, add_dirs)
-    for attempt in (1, 2):
-        label = step if attempt == 1 else f"{step}-retry"
+    attempt, label = 1, step
+    while True:
+        account = b.account[0]
         started, clock = time.time(), time.strftime("%H:%M")
         b.running(label, True)
-        proc = subprocess.run(cmd, cwd=cwd, env=b.agent_env(), capture_output=True, text=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=b.agent_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors="replace", **portable.own_group())
+        b.track(proc)
+        try:
+            stdout, how = watch_agent(proc, b.reports / f"{label}.jsonl")
+        finally:
+            b.track(proc, on=False)
         b.running(label, False)
-        (b.reports / f"{label}.json").write_text(proc.stdout or proc.stderr)
-        data = _result(proc.stdout)
+        data = _result(stdout)
         b.minute(label, data.get("duration_ms", (time.time() - started) * 1000) / 60000, data.get("total_cost_usd"), clock)
-        ok = proc.returncode == 0 and not data.get("is_error")
+        if how == "limited":
+            switch_account(b, account, step)
+            label = f"{step}{'-retry' if attempt == 2 else ''}-{b.account[0]}"
+            continue
+        ok = how == "done" and proc.returncode == 0 and not data.get("is_error")
         if ok and report is not None:
             ok = report.exists() and (parse is None or parse(report.read_text()) is not None)
         if ok:
             return data
-    raise Stop(f"{step} failed twice (exit {proc.returncode}); its log is {b.reports / f'{step}-retry.json'}")
+        if attempt == 2:
+            why = f"stalled, silent {STALL_SECONDS // 60} minutes" if how == "stalled" else f"exit {proc.returncode}"
+            raise Stop(f"{step} failed twice ({why}); its log is {b.reports / f'{label}.jsonl'}")
+        attempt, label = 2, f"{step}-retry"
 
 
 def merge_into_batch(b: Batch, ref: str) -> None:
@@ -560,85 +929,221 @@ def assemble(b: Batch) -> None:
     b.install(b.wt)
 
 
-def walk_round(b: Batch, r: int, head: str) -> None:
-    """Move the walk worktree to the round's head, making it the first time, and run the walker there."""
+def walk_round(b: Batch, r: int, head: str, changed: list[str]) -> dict:
+    """Move the walk worktree to the round's head, making it the first time, and run the walker there on the screens
+    the round's `changed` files feed; return its run's result (run_agent)."""
     if b.walk_wt.exists():
         _git(b.walk_wt, "checkout", "--detach", head)
     else:
         _git(b.root, "worktree", "add", "--detach", str(b.walk_wt), head)
         b.install(b.walk_wt)
-    run_agent(b, "walker", walker_prompt(b, r, head), b.walk_wt, f"walk-r{r}", b.reports / f"walk-{r}.md",
-              parse_walk, add_dirs=[b.reports])
+    return run_agent(b, "walker", walker_prompt(b, r, head, changed), b.walk_wt, f"walk-r{r}", b.reports / f"walk-{r}.md",
+                     parse_walk, add_dirs=[b.reports])
+
+
+def round_areas(b: Batch, prev: dict | None, changed: list[str]) -> list[str] | None:
+    """The check areas a round runs, in `[checks] areas` order: the areas its change touches (areas_of), and after a
+    fix round also the areas whose checks failed in that round; the demo review checks every area. None when the
+    batch names no areas, so the whole check command runs every round."""
+    every = list(check_areas(b.config))
+    if not every or b.demo:
+        return every or None
+    areas = set(areas_of(b.config, changed)) | set((prev or {}).get("failed_areas") or [])
+    return [name for name in every if name in areas]
+
+
+def failed_areas(b: Batch, ran: list[str] | None, failures: list[Finding]) -> list[str]:
+    """The areas among `ran` that a round's check failures are in: each failing file's areas, and every area that
+    ran for a failure that names no file or a file no area claims."""
+    if not ran:
+        return []
+    hit = set()
+    for f in failures:
+        path = _resolve(b, f.path) if f.path else ""
+        mine = set(areas_of(b.config, [path])) & set(ran) if path else set()
+        hit |= mine or set(ran)
+    return [name for name in ran if name in hit]
+
+
+def timing_tests(output: str, tests: list[str]) -> list[str]:
+    """The failing tests a timeout or a time limit explains: each test with at least one reason, every one of which
+    names a timeout or a time limit (TIMING). A test's reasons are what follows ` - ` on its own lines, its detail
+    lines (failure_lines), and the section header its line sits in when that header names a time limit. A test with
+    no reason is never a timing failure."""
+    if not TIMING.search(output):
+        return []
+    lines, blocks, headers = failure_lines(output)
+    picked = []
+    for test in tests:
+        reasons = []
+        for i, block in blocks.items():
+            if test not in lines[i]:
+                continue
+            if " - " in lines[i]:
+                reasons.append(lines[i].split(" - ", 1)[1])
+            reasons += [lines[j] for j in block]
+            if TIMING.search(headers[i]):
+                reasons.append(headers[i])
+        if reasons and all(TIMING.search(reason) for reason in reasons):
+            picked.append(test)
+    return picked
+
+
+def rerun_timeouts(b: Batch, r: int, output: str, failures: list[Finding], log: Path) -> tuple[list[Finding], list[str]]:
+    """Run each failing test a timeout or a time limit may explain (timing_tests) once more by itself with
+    `[checks] rerun`, its `{test}` filled in, appending each run to the round's log. Returns the findings that still
+    count and the tests that passed alone. Nothing reruns without `[checks] rerun`, or past RERUN_MAX failing tests."""
+    cmd = b.config.get("checks", {}).get("rerun")
+    tests = [test_id(f) for f in failures if test_id(f)]
+    if not cmd or not tests or len(tests) > RERUN_MAX:
+        return failures, []
+    timed = timing_tests(output, tests)
+    if not timed:
+        return failures, []
+    step, cleared = f"rerun-r{r}", []
+    started, clock = time.time(), time.strftime("%H:%M")
+    b.running(step, True)
+    with log.open("a") as out:
+        for test in timed:
+            out.write(f"\n=== colony: {test}, once more by itself ===\n")
+            out.flush()
+            command, shell, env = portable.shell(cmd.replace("{test}", shlex.quote(test)), b.check_env())
+            proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                    stderr=subprocess.STDOUT, **portable.own_group())
+            b.track(proc)
+            try:
+                code = proc.wait(timeout=RERUN_SECONDS)
+            except subprocess.TimeoutExpired:
+                portable.stop_group(proc)
+                code = None
+            finally:
+                b.track(proc, on=False)
+            out.write(f"=== colony: {test} {'passed alone' if code == 0 else 'failed again'} ===\n")
+            out.flush()
+            if code == 0:
+                cleared.append(test)
+    b.running(step, False)
+    b.minute(step, (time.time() - started) / 60, clock=clock)
+    return [f for f in failures if test_id(f) not in cleared], cleared
 
 
 def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, started: float, clock: str):
-    """Wait for the round's background checks and write checks-<r>.md; return (passed, result line, failures)."""
+    """Wait for the round's background checks, rerun the tests a timeout may have failed (rerun_timeouts), and write
+    checks-<r>.md; return (passed, result line, failures, the run's minutes before any rerun). The checks pass after
+    a failed run when every failing test passed alone and the output shows no other failure (other_failures)."""
     code = proc.wait()
+    b.track(proc, on=False)
+    minutes = (time.time() - started) / 60
     b.running(f"checks-r{r}", False)
-    b.minute(f"checks-r{r}", (time.time() - started) / 60, clock=clock)
+    b.minute(f"checks-r{r}", minutes, clock=clock)
     output = log.read_text(errors="replace")
     last = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "no output")
-    failures = [] if code == 0 else parse_check_failures(output)
-    summary = [f"checks: {'pass' if code == 0 else 'fail'}", "", f"`{cmd}` exited {code}: {last}", ""]
-    (b.reports / f"checks-{r}.md").write_text("\n".join(summary + [f"- {f.text}" for f in failures]) + "\n")
-    return code == 0, last, failures
+    failures, cleared = ([], []) if code == 0 else rerun_timeouts(b, r, output, parse_check_failures(output), log)
+    passed = code == 0
+    if cleared and not failures:
+        others = other_failures(output, set(cleared))
+        passed = not others
+        failures = [Finding("", 0, "checks failed: " + "; ".join(others[:5]))] if others else []
+    summary = [f"checks: {'pass' if passed else 'fail'}", "", f"`{cmd}` exited {code}: {last}", ""]
+    alone = [f"- passed alone on a rerun, so not counted: {test}" for test in cleared]
+    (b.reports / f"checks-{r}.md").write_text("\n".join(summary + alone + [f"- {f.text}" for f in failures]) + "\n")
+    return passed, last, failures, minutes
 
 
-def gate(b: Batch, r: int) -> list[Finding]:
-    """Run round r's checks, review and walk in parallel, record them, and return the findings.
+def checks_yardstick(b: Batch) -> float | None:
+    """The minutes a round's checks take with every area: `[checks] minutes`, else this batch's own run of them,
+    else None."""
+    named = b.config.get("checks", {}).get("minutes")
+    return float(named) if named else b.state.get("every_area_minutes")
 
-    The checks are the fast check alone for a fast gate (fast_gate), else the full checks. The review runs when
-    b.review is set. The round is done, and the findings empty, when the checks pass, the review reports `open: 0`
-    or was skipped, and the walk passed or was skipped.
+
+def record_saved(b: Batch, r: int, areas: list[str] | None, check_minutes: float, walk: bool, walked: dict | None) -> None:
+    """Write what round r's narrowed checks and walk saved to minutes.md, against running every check area and the
+    full walk each round: skipped checks save their yardstick (checks_yardstick), checks for some areas the yardstick
+    less their minutes; a skipped walk saves `[walk] minutes` and `cost`, and a narrowed walk those less its own."""
+    every = list(check_areas(b.config))
+    if areas is not None and set(areas) != set(every):
+        yardstick = checks_yardstick(b)
+        if yardstick:
+            b.saved(f"checks-r{r}", yardstick - (check_minutes if areas else 0))
+    settings = b.config.get("walk", {})
+    if b.config["gate"].get("walk") and settings.get("minutes"):
+        minutes, cost = float(settings["minutes"]), settings.get("cost")
+        if not walk:
+            b.saved(f"walk-r{r}", minutes, cost)
+        elif walked:
+            spent = walked.get("total_cost_usd")
+            b.saved(f"walk-r{r}", minutes - walked.get("duration_ms", 0) / 60000,
+                    None if cost is None or spent is None else float(cost) - spent)
+
+
+def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
+    """Run round r's checks, review and walk in parallel, record them, and return the findings, each marked with its
+    source (checks, review or walk).
+
+    The checks are the fast check alone for a fast gate (fast_gate), else the full checks, for the round's check
+    areas (round_areas); a round with no area to check skips them. The review runs when b.review is set, and the walk
+    when should_walk says so. The paid checks run when the checks pass and nothing else is open, or in the `last`
+    round when the checks pass. The round is done, and the findings empty, when the checks pass, the review reports
+    `open: 0` or was skipped, and the walk passed or was skipped.
     """
     project, settings = b.project, b.config["gate"]
     head = b.git("rev-parse", "HEAD")
     prev = b.state["rounds"][-1] if b.state["rounds"] else None
     changed = b.git("diff", "--name-only", f"{prev['head']}..HEAD" if prev else f"origin/{project['base']}...HEAD").splitlines()
-    if fast_gate(b.config):
-        full, cmd = False, fast_check(project)
-    else:
-        full = _touches(changed, project.get("backend_paths", [])) or not b.state["backend_passed"] or not project.get("web_checks")
-        cmd = project["checks"] if full else project["web_checks"]
+    areas = round_areas(b, prev, changed)
+    cmd = check_command(b.config, fast_check(project) if fast_gate(b.config) else project["checks"], areas)
     walk = should_walk(settings, b.state["rounds"], changed)
     b.state["round"] = r
     log = b.reports / f"checks-{r}.log"
     started, clock = time.time(), time.strftime("%H:%M")
-    b.running(f"checks-r{r}", True)
-    with log.open("wb") as out:
-        command, shell, env = portable.shell(cmd, b.check_env())
-        proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT)
+    proc = None
+    if areas != []:
+        b.running(f"checks-r{r}", True)
+        with log.open("wb") as out:
+            command, shell, env = portable.shell(cmd, b.check_env())
+            proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT,
+                                    **portable.own_group())
+            b.track(proc)
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
                              f"review-r{r}", review_report, parse_open) if b.review else None
-        walked = pool.submit(walk_round, b, r, head) if walk else None
-        passed, last, check_findings = run_checks(b, r, cmd, proc, log, started, clock)
+        walking = pool.submit(walk_round, b, r, head, changed) if walk else None
+        if proc is None:
+            passed, line, check_findings, check_minutes = True, "skipped: the change touches no check area", [], 0.0
+            (b.reports / f"checks-{r}.md").write_text(f"checks: skipped\n\n{line}\n")
+        else:
+            passed, line, check_findings, check_minutes = run_checks(b, r, cmd, proc, log, started, clock)
         if review:
             review.result()
-        if walked:
-            walked.result()
+        walked = walking.result() if walking else None
+    if proc is not None and (areas is None or set(areas) == set(check_areas(b.config))):
+        b.state.setdefault("every_area_minutes", check_minutes)
+    record_saved(b, r, areas, check_minutes, walk, walked)
     review_text = review_report.read_text() if b.review else ""
     open_count = parse_open(review_text) if b.review else 0
     walk_text = walk_report.read_text() if walk else ""
     walk_result = parse_walk(walk_text) if walk else "skipped"
     signature = sorted(re.sub(r"\d+(\.\d+)?m?s\b", "", f.text) for f in check_findings)
+    checks = "skipped" if proc is None else "pass" if passed else "fail"
     b.state["rounds"].append({"round": r, "head": head, "open": open_count if b.review else "skipped", "walk": walk_result,
-                              "checks": "pass" if passed else "fail", "checks_cmd": cmd, "checks_line": last,
-                              "checks_signature": signature})
-    b.state["backend_passed"] = b.state["backend_passed"] or (passed and full)
+                              "checks": checks, "checks_cmd": cmd if proc is not None else "", "checks_line": line,
+                              "checks_signature": signature, "areas": areas,
+                              "failed_areas": failed_areas(b, areas, check_findings)})
     b.save()
     if not passed and prev and prev["checks"] == "fail" and prev["checks_signature"] == signature:
         raise Stop(f"the checks failed the same way in rounds {r - 1} and {r}")
-    if passed and open_count == 0 and walk_result in ("pass", "skipped"):
-        return paid_checks(b, r)
     findings = []
     if open_count:
         missing = Finding("", 0, f"the review counts {open_count} open problems; read {review_report}")
-        findings += parse_findings(review_text) or [missing]
+        findings += [f._replace(source="review") for f in parse_findings(review_text) or [missing]]
     if walk_result not in ("pass", "skipped"):
-        findings += parse_walk_failures(walk_text) or [Finding("", 0, f"the walk failed; read {walk_report}")]
-    return findings + check_findings
+        failed = parse_walk_failures(walk_text) or [Finding("", 0, f"the walk failed; read {walk_report}")]
+        findings += [f._replace(source="walk") for f in failed]
+    if passed and (not findings or last):
+        findings += [f._replace(source="checks") for f in paid_checks(b, r)]
+    return findings + [f._replace(source="checks") for f in check_findings]
 
 
 def paid_checks(b: Batch, r: int) -> list[Finding]:
@@ -711,12 +1216,48 @@ def fix_round(b: Batch, r: int, findings: list[Finding]) -> None:
     head = b.git("rev-parse", "HEAD")
     groups: dict[str, list[Finding]] = {}
     for f in findings:
-        groups.setdefault(owner_of(_resolve(b, f.path), b.cards, b.wt, b.start), []).append(f)
+        f = f._replace(path=_resolve(b, f.path))
+        groups.setdefault(owner_of(f.path, b.cards, b.wt, b.start), []).append(f)
     with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
         jobs = [pool.submit(fix_card, b, r, card, items, head) for card, items in groups.items()]
     for branch, path in [job.result() for job in jobs]:
         merge_into_batch(b, branch)
         _git(b.root, "worktree", "remove", "--force", str(path))
+
+
+def carry_over(b: Batch, r: int, findings: list[Finding]) -> list[str]:
+    """Make each finding the last round leaves open into a card of its own (tidy.make_card), uncapped and sized S,
+    for the batch's lead, and return the pull request's lines for them: the new card, the open issue it duplicates,
+    or why no card was made. Hack mode has no cards, so its lines list the findings alone."""
+    from types import SimpleNamespace
+
+    from colony import tidy, wait
+
+    lead = wait.lead_name(b.config, SimpleNamespace(person=b.person))
+    lines = []
+    for f in findings:
+        place = f"{f.path}:{f.line}" if f.path and f.line else f.path
+        what = f"{f.source or 'review'}: " + (f"`{place}` — " if place else "") + f.text
+        if wait.hack(b.config):
+            lines.append(f"- {what}")
+            continue
+        words = re.sub(r"\s+", " ", f.text).strip()
+        title = f"Batch {b.name} left open: " + (words if len(words) <= 70 else words[:69].rstrip() + "…")
+        body = "\n".join([f"Colony batch `{b.name}` ran its {r} rounds and left this {f.source or 'review'} finding "
+                          f"open on `{b.branch}`, whose pull request lists this card.", "",
+                          f"- {(f'`{place}` — ' if place else '') + f.text}", "",
+                          f"The round reports are in `{REPORTS}/{b.name}/` on that branch.", "", "## Done when", "",
+                          "- The finding above is fixed, or shown not to be a problem, with a test where it is "
+                          "promised behavior."])
+        try:
+            lines.append(f"- #{tidy.make_card(b.config, title, body, 'S', lead, capped=False)} {what}")
+        except tidy.Duplicate as e:
+            lines.append(f"- #{e.number}, already open: {what}")
+        except (cli.ColonyError, OSError) as e:
+            lines.append(f"- no card made ({str(e).splitlines()[0][:160] if str(e) else type(e).__name__}): {what}")
+    b.state["carried"] = lines
+    b.save()
+    return lines
 
 
 def commit_reports(b: Batch, result: str) -> None:
@@ -726,6 +1267,8 @@ def commit_reports(b: Batch, result: str) -> None:
     b.state["result"] = result
     b.save()
     rounds = [f"- Round {x['round']}: open {x['open']}, walk {x['walk']}, checks {x['checks']}" for x in b.state["rounds"]]
+    carried = b.state.get("carried", [])
+    rounds += ["", "Left open, now cards:", *carried] if carried else []
     (b.reports / "result.md").write_text("\n".join([f"result: {result}", "", *rounds]) + "\n")
     b.git("add", "--", *sorted(str(p.relative_to(b.wt)) for p in b.reports.glob("*.md")))
     if _run(["git", "diff", "--cached", "--quiet"], b.wt, check=False).returncode:
@@ -749,19 +1292,31 @@ def card_stats(b: Batch) -> str:
         return f"The card stats could not be read: {str(e).splitlines()[0][:200] if str(e) else type(e).__name__}."
 
 
+def checks_line(x: dict) -> str:
+    """One round's line in the PR body's checks section: its command and result, or why it skipped them."""
+    if x["checks"] == "skipped":
+        return f"- Round {x['round']}: skipped, {x['checks_line'].removeprefix('skipped: ')}"
+    return f"- Round {x['round']}: `{x['checks_cmd']}` {x['checks']}: {x['checks_line']}"
+
+
 def pr_body(b: Batch) -> str:
-    """The pull request body: the cards, each as `Closes #N` so the merge closes it, the open problems by round, the
-    check results, the removed tests, the minutes, and the card stats."""
-    rounds = b.state["rounds"]
+    """The pull request body: the cards, each as `Closes #N` so the merge closes it, the findings the last round left
+    open as cards of their own (carry_over), the open problems by round, the check results, the account switches, the
+    removed tests, the minutes, and the card stats."""
+    rounds, carried, switches = b.state["rounds"], b.state.get("carried", []), b.state.get("switches", [])
     minutes = (b.reports / "minutes.md").read_text().splitlines() if (b.reports / "minutes.md").exists() else []
     return "\n".join([
         *(["gate: fast", ""] if b.checks_only else []),
         "## Cards", *[f"- Closes #{n}, from `{ref}`" for n, ref in b.cards.items()], "",
+        *(["## Left open, now cards", f"Round {len(rounds)}, the last, left these open; the merge leaves them open.",
+           *carried, ""] if carried else []),
         "## Open problems by round", " → ".join(str(x["open"]) for x in rounds), "",
         "| Round | Open | Walk | Checks |", "| --- | --- | --- | --- |",
         *[f"| {x['round']} | {x['open']} | {x['walk']} | {x['checks']} |" for x in rounds], "",
-        "## Checks", *[f"- Round {x['round']}: `{x['checks_cmd']}` {x['checks']}: {x['checks_line']}" for x in rounds], "",
+        "## Checks", *[checks_line(x) for x in rounds], "",
         "## Paid checks", *paid_lines(b), "",
+        *(["## Account switches", *[f"- {s['at']} {s['step']} hit the rate limit on {s['from']}, and ran again on "
+                                    f"{s['to']}" for s in switches], ""] if switches else []),
         "## Removed tests", *([f"- `{p}`" for p in removed_tests(b)] or ["None."]), "",
         "## Minutes", minutes_table(minutes), "",
         "## Card stats", card_stats(b), "",
@@ -790,11 +1345,27 @@ def open_pr(b: Batch) -> str:
     return _run(pr_cmd(b, body), b.wt).stdout.strip()
 
 
+def planned_changes(b: Batch) -> list[str]:
+    """The files the cards change against the start, for a dry run's walker prompt: each card branch's diff, read
+    without fetching, and empty when git can't read it."""
+    changed: list[str] = []
+    for ref in b.cards.values():
+        for name in (ref, f"origin/{ref}"):
+            try:
+                proc = _run(["git", "diff", "--name-only", f"{b.start}...{name}"], b.root, check=False)
+            except OSError:
+                return changed
+            if proc.returncode == 0:
+                changed += [path for path in proc.stdout.splitlines() if path not in changed]
+                break
+    return changed
+
+
 def plan(b: Batch) -> str:
     """Describe the run without running it: the branches, the commands, and round 1's prompts filled in."""
     project, settings = b.project, b.config["gate"]
     head = "<batch head>"
-    generated, backend = ", ".join(project.get("generated", [])), ", ".join(project.get("backend_paths", []))
+    generated = ", ".join(project.get("generated", []))
     fix_branch, fix_path = b.fix_names(next(iter(b.cards)), 1)
     lines = [f"colony batch {b.name}: dry run, nothing runs. Agents run as {b.account[0]}.", "", "Branches:",
              f"  batch  {b.branch} from {b.start}, in {b.wt}",
@@ -808,33 +1379,47 @@ def plan(b: Batch) -> str:
              f"  a conflict only in {generated}: take the card's side, then $ {project.get('regen', '')}"]
     if project.get("install"):
         lines.append(f"  in each new worktree: $ {project['install']}")
-    fast = fast_gate(b.config)
-    if fast:
-        lines.append(f"  the fast check, in the background: $ {fast_check(project)}")
+    fast, areas, checks = fast_gate(b.config), check_areas(b.config), b.config.get("checks", {})
+    cmd = fast_check(project) if fast else project["checks"]
+    what = "the fast check" if fast else "checks"
+    if areas:
+        lines += [f"  {what}, in the background, for the areas a round touches: $ {check_command(b.config, cmd, ['<areas>'])}",
+                  "    areas: " + "; ".join(f"{name} = {', '.join(paths)}" for name, paths in areas.items())
+                  + (f"; every area: {checks['all']}" if checks.get("all") else "")
+                  + (f"; a change only under {', '.join(checks['skip'])} runs none" if checks.get("skip") else ""),
+                  "    round 1 runs the areas the cards change; a later round the areas that failed and the areas its "
+                  "fixes touched"]
     else:
-        lines += [f"  checks, in the background: $ {project['checks']}",
-                  f"    or $ {project.get('web_checks')} when a round changes no {backend} file after a passing full run"]
+        lines.append(f"  {what}, in the background: $ {cmd}")
+    if checks.get("rerun"):
+        lines.append(f"  a failing test whose output names a timeout or a time limit runs once more by itself: "
+                     f"$ {checks['rerun']}")
     if settings.get("paid_checks") and provider_dollars(b.config) > 0:
         lines.append(f"  paid checks, once in the round that otherwise passes, with COLONY_SPEND_CEILING at most "
                      f"${provider_dollars(b.config):.2f}: $ {settings['paid_checks']}")
     if b.review:
         lines.append("  reviewer: $ " + shlex.join(claude_cmd(b.config, "reviewer", "<reviewer prompt>")))
     if settings.get("walk"):
-        lines.append("  walker, when a round touches " + ", ".join(settings.get("walk_paths") or ["any file"]) + ": $ "
+        lines.append("  walker, when a round touches " + ", ".join(settings.get("walk_paths") or ["any file"])
+                     + f", on {walk_browser(b.config)}: $ "
                      + shlex.join(claude_cmd(b.config, "walker", "<walker prompt>", [b.reports])))
     done = ["the fast check passes" if fast else "checks pass", *(["open: 0"] if b.review else []),
             "walk pass or skipped"]
+    rounds = min(int(settings.get("max_rounds", MAX_ROUNDS)), MAX_ROUNDS)
     if b.checks_only:
         lines.append("  no reviewer, walk or fixers: --fast stops when the checks fail")
     else:
         lines.append("  fixers, in parallel: $ " + shlex.join(claude_cmd(b.config, "fixer", "<fixer prompt>", [b.reports])))
-    lines += [f"  rounds: at most {settings.get('max_rounds', 5)}; done at {', '.join(done)}",
+    lines += [f"  rounds: at most {rounds}; done at {', '.join(done)}"
+              + ("" if b.checks_only else f"; after round {rounds}, each finding still open becomes a card and the PR "
+                 "opens, unless the checks fail"),
+              "  an agent on a rate-limited account runs again on the person's next account with room",
               "  done: $ " + shlex.join(push_cmd(b)),
               "        $ " + shlex.join(pr_cmd(b, b.reports / "pr.md")), "", "Prompts for round 1:", ""]
     if b.review:
         lines += ["--- reviewer", reviewer_prompt(b, 1, head, None, RISKS_PLACE).rstrip(), ""]
     if settings.get("walk"):
-        lines += ["--- walker", walker_prompt(b, 1, head).rstrip(), ""]
+        lines += ["--- walker", walker_prompt(b, 1, head, planned_changes(b)).rstrip(), ""]
     if b.checks_only:
         return "\n".join(lines).rstrip()
     example = [Finding("<path>", 1, "<each finding routed to this card>")]
@@ -903,19 +1488,28 @@ def tidy_at_end(b: Batch) -> None:
 
 
 def run_rounds(b: Batch) -> int:
-    """Assemble the cards, then gate and fix round by round until the PR opens or a stop rule fires."""
-    rounds = int(b.config["gate"].get("max_rounds", 5))
+    """Assemble the cards, then gate and fix round by round, at most MAX_ROUNDS rounds, until the PR opens or a stop
+    rule fires. When the last round passes its checks with findings still open, each becomes a card (carry_over) and
+    the PR opens listing them; failing checks in the last round stop the batch."""
+    rounds = min(int(b.config["gate"].get("max_rounds", MAX_ROUNDS)), MAX_ROUNDS)
     try:
         assemble(b)
         for r in range(1, rounds + 1):
-            findings = gate(b, r)
+            findings = gate(b, r, last=r == rounds)
             if not findings:
                 print(f"colony batch {b.name}: done in round {r}. {open_pr(b)}")
                 return 0
             if b.checks_only:
                 raise Stop(f"the full checks failed, and --fast runs no fixers: {findings[0].text}")
             if r == rounds:
-                raise Stop(f"round {r} of {rounds} still has {len(findings)} findings")
+                failing = [f for f in findings if f.source == "checks"]
+                if failing:
+                    raise Stop(f"round {r} of {rounds} still fails its checks ({failing[0].text}), and a failing "
+                               "check blocks the pull request")
+                carry_over(b, r, findings)
+                print(f"colony batch {b.name}: round {r} of {rounds} left {len(findings)} findings open, now cards "
+                      f"the pull request lists. {open_pr(b)}")
+                return 0
             fix_round(b, r, findings)
     except (Stop, OSError) as stop:
         try:
@@ -927,9 +1521,28 @@ def run_rounds(b: Batch) -> int:
     return 1
 
 
+def stop_on_signal(b: Batch) -> dict:
+    """Make Ctrl-C and SIGTERM stop the batch: each agent, check and rerun runs in its own process group, so the
+    terminal's Ctrl-C never reaches them. The handler stops every group the batch has running (b.procs), then exits at
+    once, 130 on Ctrl-C and 143 on SIGTERM, without waiting on the threads that watch them. Returns the handlers it
+    replaced, for signal.signal to put back."""
+
+    def stop(signum, frame) -> None:
+        with b.lock:
+            b.stopping = True
+            running = list(b.procs)
+        portable.stop_groups(running)
+        print(f"\ncolony batch {b.name}: stopped by {signal.Signals(signum).name}, with the {len(running)} processes it "
+              f"had running. Reports: {b.reports}", flush=True)
+        sys.stderr.flush()
+        os._exit(128 + signum)
+
+    return {signum: signal.signal(signum, stop) for signum in (signal.SIGINT, signal.SIGTERM)}
+
+
 def run_batch(config: dict, args) -> int:
     """Run `colony batch`: the rounds for the cards (run_rounds), or in hack mode with no cards the demo review
-    (review_demo), then `colony tidy` (tidy_at_end)."""
+    (review_demo), then `colony tidy` (tidy_at_end). Ctrl-C stops every agent the batch has running (stop_on_signal)."""
     b = Batch.from_args(config, args)
     if b.dry:
         print(demo_plan(b) if b.demo else plan(b))
@@ -937,8 +1550,13 @@ def run_batch(config: dict, args) -> int:
     if b.wt.exists() or _git(b.root, "branch", "--list", b.branch):
         print(f"colony batch {b.name}: {b.branch} or {b.wt} already exists; pick another --name")
         return 1
-    result = review_demo(b) if b.demo else run_rounds(b)
-    tidy_at_end(b)
+    replaced = stop_on_signal(b) if threading.current_thread() is threading.main_thread() else {}
+    try:
+        result = review_demo(b) if b.demo else run_rounds(b)
+        tidy_at_end(b)
+    finally:
+        for signum, handler in replaced.items():
+            signal.signal(signum, handler)
     return result
 
 

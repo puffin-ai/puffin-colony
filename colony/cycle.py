@@ -863,13 +863,14 @@ def retro_names(config: dict, name: str) -> tuple[str, Path]:
 
 def retro_prompt(config: dict, name: str, reports: Path, checkout: Path, branch: str, report: Path,
                  trailer: str) -> str:
-    """The retro agent's prompt, filled in for one batch."""
-    from colony.batch import fill
+    """The retro agent's prompt, filled in for one batch, its check commands for every check area."""
+    from colony import batch as runner
 
     project = config["project"]
     rules = ", ".join(f"`{rule}`" for rule in config.get("gate", {}).get("rules", [f"{cli.DIR}/rules/*.md"]))
-    return fill(RETRO_PROMPT, project=project["name"], batch=name, reports=reports, checkout=checkout, branch=branch,
-                rules=rules, checks=project["checks"], fast_check=project.get("fast_check") or project["checks"],
+    return runner.fill(RETRO_PROMPT, project=project["name"], batch=name, reports=reports, checkout=checkout, branch=branch,
+                rules=rules, checks=runner.every_area(config, project["checks"]),
+                fast_check=runner.every_area(config, runner.fast_check(project)),
                 trailer=trailer, report=report)
 
 

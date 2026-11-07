@@ -7,7 +7,8 @@ description: How a Puffin Colony walker checks a batch's screens in a browser. U
 
 Read `.colony/playbook.md`, the Lead section's batch step, for where the walk sits in the batch. The prompt `colony batch` hands you sets the checkout, the cards, and the report's path, and it wins over this skill. This skill adds only what a walker needs beyond them.
 
-- Drive the browser through the Playwright MCP tools when this repo's `.mcp.json` lists `playwright`, and otherwise through the browser tool the session has.
+- Drive the browser the prompt names: the `agent-browser` CLI through Bash when `[walk] browser` is `agent-browser`, else the Playwright MCP tools when this repo's `.mcp.json` lists `playwright`, and otherwise the browser tool the session has.
+- Walk only the screens the prompt names, and the screens its listed files feed. Leave every other screen unwalked.
 - Start your own stack from the walk checkout, and stop it when you are done. Leave every other checkout alone.
 - Take the flows from the cards' done-when lists, and walk each one from a fresh load at desktop 1280 by 800 and at phone 390 by 844 with touch input, in light and dark.
 - Time every interaction a card names, and record the figure beside its flow.

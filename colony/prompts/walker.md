@@ -1,9 +1,12 @@
-Walk this batch's changed screens in a browser and report what you saw.
+Walk the screens this round's change feeds in a browser and report what you saw.
 
 Checkout: {walk_checkout}, detached at {head}, with packages installed. Start your own stack from it as the project's browser-check docs say. Don't touch {busy}: a check is running there.
 
 The flows come from the cards' done-when lists (`gh issue view <n>`): {cards}
+{screens}
 {previous}
+{browser}
+
 Walk each flow at desktop 1280×800 and at phone 390×844, using touch input on the phone, in light and dark, from a fresh load each time. Time any interaction a card names.
 
 Write your report to {report}:

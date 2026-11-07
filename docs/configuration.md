@@ -18,9 +18,8 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
 | `worktrees` | yes | `"~/worktrees"` | Where batches, fixers and the retro make their worktrees. Pick a folder outside the clone. |
 | `fast_check` | no | `"npm test"` | A builder's quick check after each change. Setup writes it into the playbook. |
-| `checks` | yes | `"npm run lint && npm run typecheck && npm test"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. |
-| `web_checks` | no | `"npm run lint && npm test"` | A lighter check for a round that changed no `backend_paths` file, once a full run has passed. Empty means every round runs `checks`. |
-| `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change needs the full checks. A change there is never TINY. |
+| `checks` | yes | `"python3 tools/checks.py {areas}"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. With `[checks] areas`, `{areas}` takes the names of the areas a round runs. |
+| `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change is never TINY. |
 | `generated` | no | `["src/generated/*"]` | Globs for files a build writes. When a merge conflicts only in these, Colony takes the card's side and runs `regen`. Their lines don't count toward a tier. |
 | `regen` | no | `"npm run codegen"` | The command that rebuilds the generated files. |
 | `check_env_file` | no | `"~/.config/myapp/check.env"` | A local file of `KEY=VALUE` lines added to the checks' environment. A relative path starts at the repo root. Keep it out of git. Colony never prints its values. |
@@ -93,11 +92,33 @@ researcher = { model = "claude-opus-5-5", effort = "high" }
 | --- | --- | --- | --- |
 | `rubric` | yes | `["bugs", "security and privacy", "tests", "performance", "accessibility"]` | The reviewer's checklist. Its report gives each item's open count. It is a checklist, not a score. |
 | `rules` | no | `[".colony/core.md", ".colony/rules/*.md", "CLAUDE.md"]` | The files the reviewer and the retro check against. Setup lists the core, the preset's rules, and your own `CLAUDE.md` and `AGENTS.md`. |
-| `max_rounds` | yes | `5` | The most rounds a batch runs. A last round that still has findings stops the batch. |
+| `max_rounds` | yes | `3` | The most rounds a batch runs, at most 3. When the last round passes its checks with review or walk findings open, each becomes a card and the PR opens listing them. Failing checks in the last round stop the batch. |
 | `walk` | yes | `true` | Whether to walk the changed screens in a browser. Set `false` for a repo with no web UI. |
-| `walk_paths` | no | `["web/", "app/"]` | Path prefixes. A round that changes none of them skips the walk, unless the last walk failed. Empty walks every round. |
-| `paid_checks` | no | `"npm run eval"` | A command whose model calls cost money, such as your app's evals. A batch runs it once, in the round whose checks, review and walk pass, only while `[budget] provider_dollars` is above 0. It gets the dollars the batch has left as `COLONY_SPEND_CEILING`, must stop there, and must print `spent: $<dollars>`. The batch stops when it prints none or spends past the budget, and the PR lists what it spent. Empty by default. |
+| `walk_paths` | no | `["web/", "app/"]` | The user-facing files, as path prefixes or globs. A round that changes none of them skips the walk, unless the last walk failed. Empty walks every round. |
+| `paid_checks` | no | `"npm run eval"` | A command whose model calls cost money, such as your app's evals. A batch runs it once, in the round whose checks, review and walk pass, or in the last round when its checks pass, only while `[budget] provider_dollars` is above 0. It gets the dollars the batch has left as `COLONY_SPEND_CEILING`, must stop there, and must print `spent: $<dollars>`. The batch stops when it prints none or spends past the budget, and the PR lists what it spent. Empty by default. |
 | `merge_after_fast_check` | no | `true` | Hack only. `true` lets `colony merge <branch>` push the base after the fast check passes on the merged result. Otherwise `colony merge` opens a PR. Setup asks, with yes as the default. |
+
+## `[checks]`
+
+Optional. It lets a batch check only the areas a change touches. Without `areas`, every round runs the whole `[project] checks`.
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `areas` | no | `{ web = ["apps/web/"], backend = ["apps/backend/"] }` | Each check area and its paths, as prefixes or globs. A round runs the areas its changed paths are in; a changed path no area names runs every area. The area names fill `{areas}` in `[project] checks`. |
+| `all` | no | `"all"` | What `{areas}` takes when every area runs. Empty joins every area's name. |
+| `skip` | no | `["docs/", "*.md"]` | Paths whose change runs no check, such as docs. A round that changes only these skips the checks. |
+| `rerun` | no | `"cd apps/backend && uv run pytest {test}"` | A failing test whose every failure reason names a timeout or a time limit runs once more by itself with this command, `{test}` its id as the output named it. It counts only when it fails again, and the round passes on its reruns only when nothing else in the output failed. Empty reruns nothing. |
+| `minutes` | no | `41` | A run of every area's minutes, the yardstick for the minutes `minutes.md` says a narrowed round saved. Without it, the batch's own run of every area. |
+
+## `[walk]`
+
+Optional.
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `browser` | no | `"agent-browser"` | The walker's browser: `"playwright"`, the Playwright MCP and the default, or `"agent-browser"`, the [agent-browser](https://github.com/vercel-labs/agent-browser) CLI, which the walker runs through Bash with no MCP server loaded. |
+| `screens` | no | `{ "/calendar" = ["apps/web/src/calendar/"] }` | Each screen and the paths that feed it. A round walks only the screens its changed files feed, and the walker traces any other changed `walk_paths` file to its screens. |
+| `minutes`, `cost` | no | `27`, `6` | A full walk's minutes and dollars, the yardstick for what a skipped or narrowed walk saved in `minutes.md`. |
 
 ## `[budget]`
 

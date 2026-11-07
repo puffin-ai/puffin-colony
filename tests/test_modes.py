@@ -284,7 +284,7 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT
            "GIT_COMMITTER_EMAIL": "t@example.test", "GIT_CONFIG_NOSYSTEM": "1"}
 CLAUDE_STUB = """#!/bin/sh
 echo "$@" >> "{log}"
-echo '{{"total_cost_usd": 0, "duration_ms": 1000, "is_error": false}}'
+echo '{{"type": "result", "total_cost_usd": 0, "duration_ms": 1000, "is_error": false}}'
 """
 GH_BATCH_STUB = """#!/bin/sh
 printf '%s\\n' "$@" >> "{log}"

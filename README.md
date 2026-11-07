@@ -11,7 +11,7 @@
 1. You open your repo in Claude Code and say what you want, in plain words: "Add a dark mode switch, and fix the date picker on phones."
 2. Your **lead**, the session you talk to, splits the request into **cards** on a GitHub board and asks you only what it can't decide, each time with a default.
 3. **Helpers** take the cards and build them at the same time, each on its own branch and in its own part of the code.
-4. Colony checks the work: your tests, a fresh **reviewer** that reads the change, and, for a web app, a **walker** that clicks through it in a browser. Each problem goes back to the helper that made it, until none are left.
+4. Colony checks the work: your tests, a fresh **reviewer** that reads the change, and, for a web app, a **walker** that clicks through it in a browser. Each problem goes back to the helper that made it, for up to 3 rounds; what is still open after that becomes a new card.
 5. The lead hands you **one pull request**. You read it and merge.
 
 What the agents learn stays in your repo as pages, not in a chat that ends. [Explained simply](docs/explained-simply.md) says a bit more about each part.
@@ -65,7 +65,7 @@ Every session you type into is a lead, over its own folders when another lead is
 
 - **A team, not one helper.** Claude Code plans, builds in parallel, checks its own work, and hands you one PR.
 - **You make the decisions, not the chores.** The lead asks you only what it can't decide, each time with a default.
-- **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop until 0 problems are open.
+- **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop of up to 3 rounds, each checking only what changed. A failing test always blocks, and a finding still open becomes a card.
 - **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, subagents split each card into pieces that run at the same time, and every minute and dollar is measured.
 - **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
 - **Nothing new to run.** No servers, standard-library Python, on your own machine and your own Claude accounts.
@@ -79,7 +79,7 @@ The 3 setups are the 3 modes. Setup's first question picks one. It is `mode` in 
 | For | A team, for hours or a weekend | One person, a small project | A company's whole life cycle |
 | Leads | One per person, as peers | One | One per person, with a digest |
 | Messages | One pinned board issue, with `@login` and `@all` | Lines on cards | Lines on cards, the coordination issue, the digest |
-| Gate | The fast check, then `colony merge <branch>` | The checks and a reviewer | The checks, a reviewer and a browser walk, until 0 open |
+| Gate | The fast check, then `colony merge <branch>` | The checks and a reviewer | The checks, a reviewer and a browser walk, up to 3 rounds |
 | Vault, specs, research, retro | No | Off, can be turned on | Yes |
 
 More in [docs/modes.md](docs/modes.md).

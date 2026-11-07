@@ -511,7 +511,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
 def test_the_version_comes_from_the_package(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
-    assert capsys.readouterr().out.strip() == "Puffin Colony 0.4.0"
+    assert capsys.readouterr().out.strip() == "Puffin Colony 0.5.0"
 
 
 def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config, capsys):

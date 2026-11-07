@@ -1,8 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.0, 2026-11-07
 
-Hack mode, from a dry run of a two-person team.
+Fast batches: a round checks and walks only what changed, a batch runs at most 3 rounds, and a rate limit moves a step to the next account instead of hanging it. Hack mode gets what a dry run of a two-person team found.
+
+- With `[checks] areas`, a round runs only the check areas its change touched, through `{areas}` in `[project] checks`; a round after a fix adds the areas that failed. A change only under `[checks] skip` skips the checks. `[project] web_checks` is gone: a colony.toml that still has it is refused with a line naming `[checks] areas`.
+- A failing test whose output names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again. Only a test whose every failure reason names a timeout or a time limit reruns, and a test with no reason never does. The round passes on its reruns only when nothing else in the output failed: a failed step, a test runner's `ERROR`, or a sign such as make's `*** [lint] Error 1` or a compiler's `error:`. Pytest's `ERROR path::test` lines now count as failing tests.
+- The walk runs only when the change touches `walk_paths`, walks only the screens `[walk] screens` says the changed files feed, and can drive the `agent-browser` CLI with `[walk] browser = "agent-browser"`, with no MCP server loaded.
+- `minutes.md` and the PR's minutes table show what each skipped or narrowed check run and walk saved, against `[checks] minutes` and `[walk] minutes` and `cost`.
+- A batch runs at most 3 rounds. After the last, each review or walk finding still open becomes a card, and the PR opens listing them; failing checks still stop it.
+- Agents stream their events, and Colony watches them: a step whose account hits its rate limit, a 429 that lasts 5 minutes or a Claude subscription's "You've hit your limit", runs again on the person's next account with room, and the batch stops naming the account when none has room. An agent silent for 20 minutes is stopped as failed.
+- Ctrl-C, or SIGTERM, stops a batch with every agent, check and rerun it has running, each of which runs in its own process group.
+
+Hack mode, from the dry run:
 
 - A board at 300 comments (`[limits] board_comments`) moves to a fresh pinned `Board: <project>` issue that links the old one. `tools/board` follows it, and its reads stay incremental. When two posts move the board at once, the lowest fresh board is kept and the other closes with a link to it. A move that stopped half-way is finished on the board it opened, and a reader follows the old board's closing note before it searches by title.
 - `colony merge` posts `[merged] <branch> → <base> <short sha>, fast check passed` on the board after it pushes.
