@@ -57,7 +57,7 @@ The first time `colony` runs on a computer, it also installs the `colony-setup` 
 
 ## Publishing a release (maintainers)
 
-The workflow `.github/workflows/release.yml` runs on a pushed tag `v*`. It checks that the tag matches `colony/__init__.py` and `npm/package.json`, runs the tests, builds the sdist and the wheel, publishes them to PyPI with trusted publishing (no token), and then publishes `npm/` to npm with the `NPM_TOKEN` secret.
+A pushed tag `v*` publishes nothing by itself: the plugin and `uv tool install git+...@v<version>` install from the tag on GitHub, and the tag is the release. The workflow `.github/workflows/release.yml` publishes to PyPI and npm only when a maintainer runs it by hand, under Actions → release → Run workflow, with the tag to publish. It checks that the tag matches `colony/__init__.py`, `npm/package.json` and `.claude-plugin/plugin.json`, runs the tests, builds the sdist and the wheel, publishes them to PyPI with trusted publishing (no token), and then publishes `npm/` to npm with the `NPM_TOKEN` secret.
 
 ### One-time setup
 
@@ -83,7 +83,7 @@ The workflow `.github/workflows/release.yml` runs on a pushed tag `v*`. It check
    git tag v0.3.0 && git push --tags
    ```
 
-   Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
+   That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
 For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()` (its install line names the version), add a CHANGELOG.md entry, commit, and tag `v<version>`.
 

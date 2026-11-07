@@ -1,10 +1,15 @@
-# Publish a release: a pushed tag v* runs the tests, builds the sdist and wheel, publishes them to PyPI with trusted
-# publishing (no token), and publishes npm/ with the NPM_TOKEN secret. The one-time setup is in docs/install.md.
+# Publish a release, only when a maintainer runs it by hand (Actions > release > Run workflow) on a pushed tag v*:
+# it runs the tests, builds the sdist and wheel, publishes them to PyPI with trusted publishing (no token), and
+# publishes npm/ with the NPM_TOKEN secret. A pushed tag alone publishes nothing: the plugin installs from the tag on
+# GitHub. The one-time setup is in docs/install.md.
 name: release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The pushed tag to publish, such as v0.3.0"
+        required: true
 
 permissions:
   contents: read
@@ -14,19 +19,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: The tag matches the Python and npm versions
+      - name: The tag matches the Python, npm and plugin versions
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${TAG#v}"
           python_version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' colony/__init__.py)
           npm_version=$(node -p "require('./npm/package.json').version")
-          echo "tag $tag, colony/__init__.py $python_version, npm/package.json $npm_version"
-          test "$tag" = "$python_version" && test "$tag" = "$npm_version"
+          plugin_version=$(node -p "require('./.claude-plugin/plugin.json').version")
+          echo "tag $tag, colony/__init__.py $python_version, npm/package.json $npm_version, plugin $plugin_version"
+          test "$tag" = "$python_version" && test "$tag" = "$npm_version" && test "$tag" = "$plugin_version"
       - run: git config --global user.name ci && git config --global user.email ci@example.com
       - run: uv run --with pytest pytest -q tests
 
@@ -35,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: astral-sh/setup-uv@v6
       - run: uv build
       - uses: actions/upload-artifact@v4
@@ -64,6 +76,8 @@ jobs:
       id-token: write  # for npm's provenance statement
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
