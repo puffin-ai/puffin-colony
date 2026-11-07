@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec colony hooks asking",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks asking",
             "async": true
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec colony hooks stopped",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks stopped",
             "async": true
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && colony hooks unread; exit 0",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
             "timeout": 20
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"$COLONY_SESSION\" ] && command -v colony >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && colony hooks unread; exit 0",
+            "command": "[ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
             "timeout": 20
           }
         ]
@@ -60,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v colony >/dev/null 2>&1 || printf '%s\\n' '{\"systemMessage\": \"Puffin Colony'\"'\"'s plugin is on, but the colony command is not installed. Run: uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.3.0\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"The colony command is not on PATH, so Puffin Colony can'\"'\"'t run yet. Tell the person to run `uv tool install git+https://github.com/puffin-ai/puffin-colony@v0.3.0` themselves, and install nothing on your own.\"}}'; exit 0"
+            "command": "command -v uv >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/uv\" ] && exit 0; if command -v curl >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh; else wget -qO- https://astral.sh/uv/install.sh; fi 2>/dev/null | sh >/dev/null 2>&1; if command -v uv >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/uv\" ]; then printf '%s\\n' '{\"systemMessage\": \"Puffin Colony installed uv, which runs the colony command, with Astral'\"'\"'s installer (https://astral.sh/uv/install.sh).\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Puffin Colony installed uv, which runs the colony command, with Astral'\"'\"'s installer (https://astral.sh/uv/install.sh).\"}}'; else printf '%s\\n' '{\"systemMessage\": \"Puffin Colony could not install uv, which runs the colony command: install it from https://docs.astral.sh/uv/ and start a new session.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Puffin Colony could not install uv, which runs the colony command: install it from https://docs.astral.sh/uv/ and start a new session.\"}}'; fi; exit 0"
           }
         ]
       }

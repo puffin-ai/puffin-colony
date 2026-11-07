@@ -1,0 +1,14 @@
+#!/bin/sh
+# The plugin's `colony`: Claude Code puts the plugin's bin/ on the Bash tool's PATH, so `colony` works with nothing
+# installed. It runs Colony from the plugin's own copy through uv, on Python 3.11 or later, which uv fetches when the
+# computer has none. A `colony` the person installed comes first on PATH and wins. -P keeps a `colony` folder in the
+# current repo from shadowing the package. An active virtualenv is left out: one in uv's cache would make Colony
+# take this for a uvx run and install itself for good from PyPI.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
+uv=$(command -v uv) || uv="$HOME/.local/bin/uv"  # where Astral's installer, which the plugin's first run uses, puts it
+if [ ! -x "$uv" ]; then
+    echo "colony: uv is not installed: a new Claude Code session installs it, or see https://docs.astral.sh/uv/" >&2
+    exit 127
+fi
+unset VIRTUAL_ENV
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" exec "$uv" run -q --no-project --python ">=3.11" python -P -m colony "$@"
