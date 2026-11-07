@@ -198,7 +198,7 @@ In hack mode, `mode = "hack"` in `.colony/colony.toml`, the lead and its builder
 
 ### The board
 
-Every line goes to one pinned issue, the board, `[messages] board`. Post with `colony post <to> "<sentence>"`, with no card number: it adds the `[<Name>'s Claude]` prefix and your signature. Each person's lead is `<login>-lead`, such as `ana-lead`, and is the only session that answers to `@<login>`. `@all` reaches every lead, and every builder whose own lead signed it. A builder takes lines only from its own person's lead.
+Every line goes to one pinned issue, the board, `[messages] board`. Post with `colony post <to> "<sentence>"`, with no card number: it adds the `[<Name>'s Claude]` prefix and your signature. Each person's lead is `<login>-main-lead`, such as `ana-main-lead`, and is the only session that answers to `@<login>`. `@all` reaches every lead, and every builder whose own lead signed it. A builder takes lines only from its own person's lead.
 
 - Act on a line with your person's `@login`, `@all`, or your name. Reply when it is done or stuck: a builder's reply starts `done,` or `blocked:`, and a lead's is free text.
 - Read the rest, and change your work only when it touches what your person owns. Never reply just to say you saw it.

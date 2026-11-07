@@ -13,7 +13,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 | | Hack | Solo | Startup |
 | --- | --- | --- | --- |
 | For | A team, for hours or a weekend | One person, a small project | A company's whole life cycle |
-| Leads | One per person, as peers, each named `<login>-lead` | One | One per person, with a digest |
+| Leads | One per person, as peers, each named `<login>-main-lead` | One | One per person, with a digest |
 | Builders | Optional. Each person's lead may open them | Yes | Yes |
 | Messages | One pinned board issue, with `@login` and `@all` mentions, and the prompt hook | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, and the digest |
 | Owner table | Yes, per person, in `AGENTS.md` | No | Optional |

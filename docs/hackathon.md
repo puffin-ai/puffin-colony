@@ -26,7 +26,7 @@ Take 10 minutes for this. It saves hours of merge conflicts.
 
 1. **Split the work by folder.** Give each person folders nobody else edits, such as `web/` for one and `api/` for another. Shared files, such as `package.json`, the database schema or shared types, get one owner too.
 2. **Run setup once.** One person runs `colony` in the repo, picks `hack`, and answers: the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. Setup writes the owner table into `AGENTS.md`, opens and pins the board issue, copies `tools/board`, and opens its setup PR. Merge it.
-3. **Everyone opens a lead.** Each teammate pulls, opens Claude Code in the repo, and says hi, or runs `.colony/bin/colony` in a terminal. Your lead is `<login>-lead`. Tell it your part of the demo.
+3. **Everyone opens a lead.** Each teammate pulls, opens Claude Code in the repo, and says hi, or runs `.colony/bin/colony` in a terminal. Your lead is `<login>-main-lead`. Tell it your part of the demo.
 
 The owner table holds each person, their login and their folders, such as:
 

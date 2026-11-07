@@ -1,6 +1,6 @@
 # Hack mode's defaults: a team, for hours or a weekend. The repo's .colony/colony.toml overrides any key.
 # In hack mode a person is their GitHub login: each [accounts.<name>] table says person = "<login>", and that
-# person's lead is <login>-lead. Every line goes to the pinned board issue, [messages] board.
+# person's lead is <login>-main-lead. Every line goes to the pinned board issue, [messages] board.
 
 [project]
 base = "main"                      # the branch `colony merge` lands work on

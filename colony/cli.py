@@ -691,7 +691,7 @@ def env_line(*pairs: tuple[str, str]) -> str:
 def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str, str]:
     """Claim the lead `<person>-<stream>-lead` for this session: refuse a folder another live lead holds, and a name a
     live session already leads; write its heartbeat, its folders in .colony/leads.toml and its status comment.
-    Returns (the lead's name, its token)."""
+    Returns (the lead's name, its token). A dry run checks the same refusals, writes nothing, and returns no token."""
     from colony import presence, wait
 
     person = person_of(config, args)
@@ -706,6 +706,8 @@ def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str
         raise ColonyError(f"another live lead holds those folders: {'; '.join(clash)}. Pick other folders")
     if any(status.name == name for status in alive if status.kind == "lead" and status.computer != presence.computer()):
         raise ColonyError(f"{name} is alive on another computer: pick another stream name")
+    if getattr(args, "dry_run", False):
+        return name, ""
     token, account = wait.new_token(), current_account(config)
     try:
         wait.beat(config["project"]["name"], name, account, token, named=True)
@@ -743,6 +745,10 @@ def claim(config: dict, args) -> int:
     from colony import presence
 
     name, token = claim_lead(config, args, args.stream, args.folders)
+    if not token:
+        over = ", ".join(map(presence.folder, args.folders)) or "the rest of the repo"
+        print(f"This session would lead {name}, over {over}. Nothing ran.")
+        return 0
     print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
     print(rename_line(name))
     print(f"Start every {NAME} command with `{lead_env(config, args, name, token)}`, and start `{NAME} wait` in the "
@@ -799,6 +805,9 @@ def here(args) -> int:
     leads = [status for status in alive if status.kind == "lead"]
     if not leads:
         name, token = claim_lead(config, args, "main", [])
+        if not token:
+            print(f"No other lead is alive, so this session would lead {name}, over the whole repo. Nothing ran.")
+            return 0
         print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
         print(rename_line(name))
         print(f"Next: start every {NAME} command with `{lead_env(config, args, name, token)}`, start `{NAME} wait` in "
