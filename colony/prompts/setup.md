@@ -153,7 +153,7 @@ One person on a small project: one lead and builders, with the checks and a revi
 
 ## Hack mode
 
-A team builds fast, for hours or a weekend. Each person runs their own lead, `<login>-lead`, on their own computer. The leads are peers, talk on one pinned board issue, and merge after the fast check. Hack skips the knowledge vault, specs, research, the card board, the tools list and the retro. In hack mode a person is their GitHub login.
+A team builds fast, for hours or a weekend. Each person runs their own lead, `<login>-main-lead`, on their own computer. The leads are peers, talk on one pinned board issue, and merge after the fast check. Hack skips the knowledge vault, specs, research, the card board, the tools list and the retro. In hack mode a person is their GitHub login.
 
 1. **Read the repo, without asking.** Find only these, as step 1 does:
    - The stack, the install command and the fast check. When the repo has no check yet, take its build command; when it has none either, leave the fast check empty, and say in the closing message that the team adds one before agents merge.

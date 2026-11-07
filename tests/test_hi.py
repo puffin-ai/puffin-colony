@@ -172,6 +172,21 @@ def test_a_new_chat_with_no_lead_alive_becomes_the_main_lead_without_a_question(
     assert presence.parse(github.comments[0]["body"]).name == "ana-main-lead"  # its status comment
 
 
+
+def test_a_dry_run_names_the_lead_it_would_claim_and_claims_nothing(home, config, github, capsys):
+    import os
+    os.environ["CLAUDECODE"] = "1"
+    try:
+        assert cli.main(["--dry-run"]) == 0
+    finally:
+        del os.environ["CLAUDECODE"]
+    assert "this session would lead ana-main-lead, over the whole repo. Nothing ran." in capsys.readouterr().out
+    assert not (home / ".colony" / "demo").exists()  # no heartbeat
+    assert not presence.registry() and not github.comments  # no registry entry, no status comment
+    assert cli.claim(config, argparse.Namespace(stream="web", folders=["apps/web"], person=None, dry_run=True)) == 0
+    assert "This session would lead ana-web-lead, over apps/web/. Nothing ran." in capsys.readouterr().out
+    assert not presence.registry() and not github.comments
+
 def test_a_quiet_lead_person_hears_only_conversation_and_what_they_must_act_on(home, host, config, github, capsys):
     (host / ".colony" / "colony.toml").write_text(CONFIG + "\n[people.ana]\nquiet_lead = true\n")
     assert "ana wants a quiet lead ([people.ana] quiet_lead = true): act on notifications silently" in hi(capsys)

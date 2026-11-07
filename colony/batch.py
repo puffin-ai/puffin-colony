@@ -541,7 +541,7 @@ class Batch:
     dry: bool = False
     review: bool = True
     checks_only: bool = False  # `colony batch --fast`: the full checks once, with no reviewer, walk or fixers
-    sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-lead`
+    sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-main-lead`
     person: str = ""  # whose accounts a rate-limited step moves to (switch_account)
     limited: set = field(default_factory=set)  # the accounts that hit their rate limit in this batch
     lock: threading.RLock = field(default_factory=threading.RLock)

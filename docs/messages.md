@@ -119,7 +119,7 @@ A helper's line for `lead` reaches its own lead only. A helper that carries its 
 In Hack, every line goes to one pinned issue, `Board: <project>`, not to cards. Setup opens it, pins it, and writes its number to `[messages] board`.
 
 - A post starts with `[<name>'s <agent>]`, such as `[Ana's Claude]`. `colony post` and `tools/board` add the prefix.
-- A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead, `<login>-lead`.
+- A post reaches a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`. A post for a person goes to their lead, `<login>-main-lead`.
 - The leads are peers, so there is no coordination issue and no digest.
 - **The prompt hook.** When you send a prompt, it prints the lines in the wait's `unread` list, then empties it, with no network call. When `colony wait` isn't running, it makes one ETag-cached `gh api` call, at most once per 30 seconds. Solo uses the same hook for card lines.
 - **Any agent.** `tools/board`, a POSIX shell script that needs only `gh`, lets Codex or any other agent post and read in the same format. See [commands.md](commands.md#toolsboard).

@@ -404,7 +404,7 @@ def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_card
     hack = playbook_section("Hack")
     for part in ("### The board", "### Hack lead", "### Hack builder"):
         assert part in hack
-    for rule in ("`colony post <to> \"<sentence>\"`, with no card number", "`<login>-lead`", "`@all`",
+    for rule in ("`colony post <to> \"<sentence>\"`, with no card number", "`<login>-main-lead`", "`@all`",
                  "ask its owner on the board", "Only the team lead reassigns work", "`colony open <name>`",
                  "`colony merge <login>/<task>`", "never with `git add -A`", "never force-push", "`{fast_check}`",
                  "origin/{base}", "keep `colony wait` running", "`@all freeze: only fixes from now`"):
