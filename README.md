@@ -6,15 +6,17 @@ New here? [Explained simply](#explained-simply) says what it does in a minute. [
 
 ## Install once, then pick one of 3 setups
 
-You need Python 3.11 or later, `git`, the GitHub CLI `gh` (signed in), and [Claude Code](https://code.claude.com) (signed in). Your repo must be on GitHub.
+You need `git`, the GitHub CLI `gh` (signed in), and [Claude Code](https://code.claude.com) (signed in). Your repo must be on GitHub.
 
-Install once:
+Setup is two clicks in Claude Code: trust the repo's folder, then accept the `puffin-colony` plugin it offers. That's all, with nothing to install and no login to GitHub. The plugin puts `colony` on the session's PATH and runs it through [uv](https://docs.astral.sh/uv/), which its first session installs when the computer has none, saying so in one line. Python 3.11 or later comes with uv. [docs/install.md](docs/install.md#as-a-claude-code-plugin) shows the lines in `.claude/settings.json` that make a repo offer the plugin to every teammate.
+
+To have `colony` in your own terminal too, install it by hand:
 
 ```sh
 uv tool install git+https://github.com/puffin-ai/puffin-colony
 ```
 
-`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Colony is also a Claude Code plugin: `/plugin install puffin-colony --marketplace puffin-ai/puffin-colony` gives a session its skills and hooks, and [docs/install.md](docs/install.md#as-a-claude-code-plugin) says how a repo names it for every teammate. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works too: the first run installs Colony for good, so `colony` is on your PATH after.
+`pipx install git+https://github.com/puffin-ai/puffin-colony` works too. Once the package is published, `uvx puffin-colony` or `npx puffin-colony` works as well: the first run installs Colony for good, so `colony` is on your PATH after.
 
 There is no separate setup command. The first `colony` in a repo, or saying "hi" in the Claude app in that repo, asks which of the 3 setups you want:
 
