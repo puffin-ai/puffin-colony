@@ -80,6 +80,8 @@ class GitHub:
     def __init__(self, monkeypatch):
         self.comments: list[dict] = []
         self.calls: list[tuple] = []
+        self.unreadable = ""  # set: reading the comments fails with this error
+        self.down = ""  # set: every gh call fails with this error
         monkeypatch.setattr(presence, "where", lambda config: 5)
         monkeypatch.setattr(wait, "gh", self.gh)
 
@@ -88,7 +90,13 @@ class GitHub:
 
     def gh(self, *args: str) -> str:
         self.calls.append(args)
+        if self.down:
+            raise wait.GhError(self.down)
         if args[:2] == ("api", "--paginate"):
+            if self.unreadable:
+                raise wait.GhError(self.unreadable)
+            if "--jq" in args:  # one comment per line, as gh prints `--jq '.[]'`
+                return "".join(json.dumps(comment) + "\n" for comment in self.comments)
             return json.dumps(self.comments)
         if args[:3] == ("api", "-X", "PATCH"):
             number = int(args[3].rsplit("/", 1)[-1])
@@ -397,6 +405,37 @@ def test_keep_edits_the_one_comment_in_place_every_five_minutes(home, config, gi
     fresh: dict = {}  # a new session of the same name finds the old comment instead of adding one
     presence.keep(config, status, fresh, now=5000.0)
     assert len(github.comments) == 1 and fresh["status_id"] == state["status_id"]
+
+
+def test_a_post_holding_brackets_never_breaks_the_status_read(home, config, github):
+    github.add(lead(name="sam-main-lead", person="sam"))
+    github.comments.append({"id": 900, "body": "[Sam's Claude] [merged] sam/x → dev 1a2b3c4, fast check passed"})
+    assert [status.name for status in presence.read(config)] == ["sam-main-lead"]
+
+
+def test_a_status_is_posted_fresh_when_the_old_comments_cant_be_read(home, config, github):
+    github.unreadable = "gh api failed: HTTP 502"
+    state: dict = {}
+    assert presence.keep(config, lead(name="ana-main-lead"), state, now=1000.0)
+    assert len(github.comments) == 1 and state["status_id"] == github.comments[0]["id"]
+
+
+def test_who_says_unknown_instead_of_none_when_github_was_not_read(home, config, github, capsys):
+    github.unreadable = "gh api failed: HTTP 502"
+    assert cli.main(["who"]) == 0
+    out, err = capsys.readouterr()
+    assert "Helpers: unknown, because GitHub was not read." in out and "none alive" not in out
+    assert "GitHub was not read" in err
+
+
+def test_the_status_keeper_warns_once_per_error_not_at_every_poll(home, config, github, capsys):
+    github.down = "gh api failed: check your internet connection or https://githubstatus.com"
+    run = presence.keeper(config, argparse.Namespace(person=None), "ana-main-lead", "lead")
+    run(), run(), run()
+    assert capsys.readouterr().err.count("the status comment was not kept") == 1
+    github.down = "gh api failed: HTTP 401"
+    run()
+    assert "HTTP 401" in capsys.readouterr().err
 
 
 def test_who_lists_every_live_lead_and_helper_across_computers(home, config, github, capsys):

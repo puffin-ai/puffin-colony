@@ -101,14 +101,14 @@ def where(config: dict) -> int:
 
 
 def read(config: dict) -> list[Status]:
-    """Every status comment on the statuses' issue, newest copy per name."""
+    """Every status comment on the statuses' issue, newest copy per name. gh prints one comment per line (`--jq
+    '.[]'`), each a whole JSON object, so no text inside a comment, such as a board post's "[Ana's Claude]
+    [merged]", can cut the reading."""
     from colony import wait
 
     repo, number = config["project"]["repo"], where(config)
-    out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100")
-    comments = []
-    for chunk in re.split(r"(?<=\])\s*(?=\[)", out.strip()) if out.strip() else []:
-        comments += json.loads(chunk)
+    out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100", "--jq", ".[]")
+    comments = [json.loads(line) for line in out.splitlines() if line.strip()]
     found: dict[str, Status] = {}
     for comment in comments:
         status = parse(comment.get("body", ""), comment.get("id"))
@@ -241,7 +241,10 @@ def keep(config: dict, status: Status, state: dict, now: float | None = None) ->
     if state.get("status_issue", where(config)) != where(config):
         comment = None  # the board moved: post the status on the fresh one, where `read` looks
     if comment is None:  # find the comment a past session of this name left, before ever adding one
-        comment = next((s.comment for s in read(config) if s.name == status.name and s.comment), None)
+        try:
+            comment = next((s.comment for s in read(config) if s.name == status.name and s.comment), None)
+        except (cli.ColonyError, ValueError):
+            comment = None  # the old comments can't be read now: a fresh one beats no status at all
     if comment is not None:
         try:
             wait.gh("api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment}", "-f", f"body={text}")
@@ -259,6 +262,7 @@ def keeper(config: dict, args, name: str, kind: str, lead: str = ""):
     from colony import wait
 
     path = wait.state_path(config["project"]["name"], f"{name}-status")
+    last = {"error": ""}  # the error printed last: the same one again stays quiet, since the wait polls every 15 s
 
     def run() -> None:
         state = wait.read_json(path, {})
@@ -266,8 +270,11 @@ def keeper(config: dict, args, name: str, kind: str, lead: str = ""):
         try:
             if keep(config, mine(config, args, name, kind, lead), state):
                 wait.write_json(path, state)
+            last["error"] = ""
         except (cli.ColonyError, OSError, ValueError, KeyError) as e:
-            print(f"{cli.NAME} wait: the status comment was not kept: {e}", file=sys.stderr)
+            if str(e) != last["error"]:
+                print(f"{cli.NAME} wait: the status comment was not kept: {e}", file=sys.stderr)
+            last["error"] = str(e)
     return run
 
 
@@ -298,6 +305,13 @@ def who(config: dict, args) -> int:
         print(note, file=sys.stderr)
     leads = [s for s in alive if s.kind == "lead"]
     helpers = [s for s in alive if s.kind == "helper"]
+    if note:  # only this computer's heartbeats were read: say what is unknown, never "none alive"
+        print(f"Leads on this computer ({len(leads)}), the rest unknown, because GitHub was not read:" if leads
+              else "Leads: unknown, because GitHub was not read.")
+        for status in sorted(leads, key=lambda s: s.name):
+            print(describe(status, now))
+        print("Helpers: unknown, because GitHub was not read.")
+        return 0
     print(f"Leads ({len(leads)}):" if leads else "Leads: none alive.")
     for status in sorted(leads, key=lambda s: s.name):
         print(describe(status, now))
