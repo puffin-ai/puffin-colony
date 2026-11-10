@@ -3,7 +3,8 @@ which then looks like unmerged work, and tracks what it waits on from another le
 
 `colony share <file> [--to @<login>]` commits the file under shared/ on the colony-shared branch, which no one merges,
 pushes it, and posts its link on the board, so a teammate's agent on any computer reads it. It never shares a file
-that holds a secret's shape, and says when the repo is public.
+that holds a secret's shape, in UTF-8 or UTF-16, nor a kind of file that holds secrets, such as .env or a .pem; on a
+public repo it shares only with --public, checked before anything is pushed.
 
 `colony need <lead|@login> "<what>"` posts `@<login> need: <what> [N<n>]`, which reaches that lead at once, and
 remembers it; `colony need` lists the open ones with their age, and `colony need --done N<n>` closes one and thanks the
@@ -20,6 +21,9 @@ from pathlib import Path
 from colony import cli, transport, wait
 
 BRANCH = "colony-shared"
+# Files that hold secrets by their kind, whatever their words: never shared.
+SECRET_FILES = re.compile(r"^(\.env.*|.*\.(pem|key|p12|pfx|jks|keystore|kdbx)|id_(rsa|dsa|ecdsa|ed25519).*|"
+                          r"credentials.*|secrets?\..*|\.netrc|\.npmrc|\.pypirc|.*service[-_]account.*\.json)$", re.I)
 SHARE_LIMIT = 10_000_000  # bytes
 NEED = re.compile(r"N(\d+)$", re.I)
 
@@ -44,9 +48,18 @@ def share(config: dict, args) -> int:
         raise cli.ColonyError(f"{args.file} is not a file")
     if source.stat().st_size > SHARE_LIMIT:
         raise cli.ColonyError(f"{args.file} is over {SHARE_LIMIT // 1_000_000} MB: share a smaller copy")
+    if SECRET_FILES.match(source.name):
+        raise cli.ColonyError(f"{source.name} is a kind of file that holds secrets, and colony never shares a secret")
     data = source.read_bytes()
-    if transport.holds_secret(data.decode("utf-8", "replace")):
+    texts = [data.decode("utf-8", "replace")]
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in data[:4096]:
+        texts.append(data.decode("utf-16", "replace"))  # a secret in UTF-16 has a NUL between its letters
+    if any(transport.holds_secret(text) for text in texts):
         raise cli.ColonyError(f"{args.file} holds a secret's shape, and colony never shares a secret")
+    if is_public(config) and not getattr(args, "public", False):
+        raise cli.ColonyError(f"{config['project']['repo']} is public, so anyone could read {source.name}: add "
+                              f"--public to share it anyway, or use `{cli.NAME} say --private` for what isn't for "
+                              "strangers")
     root, name = cli.repo_root(), re.sub(r"[^\w.-]", "-", source.name)
 
     def git(*parts: str, cwd: Path = root) -> subprocess.CompletedProcess:
@@ -76,9 +89,6 @@ def share(config: dict, args) -> int:
     line = f"{to} shared: {name}, {link} (from {sender(config)})"
     transport.send(config, to, line)
     print(line)
-    if is_public(config):
-        print(f"note: {config['project']['repo']} is public: anyone can read it; for what isn't for strangers, use "
-              f"`{cli.NAME} say --private`")
     return 0
 
 

@@ -1735,6 +1735,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("share", help="put a file on the colony-shared branch, which no one merges, and post its link")
     p.add_argument("file", help="the file to share, such as docs/spec.md")
     p.add_argument("--to", default="", help="who it is for, such as @ben; @all by default")
+    p.add_argument("--public", action="store_true", help="share it though the repo is public, so anyone can read it")
     p.set_defaults(run=share_file)
     p = sub.add_parser("need", help="a lead: ask another lead for something and track it, list the open ones, or "
                                     "close one")

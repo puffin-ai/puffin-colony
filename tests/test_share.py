@@ -52,13 +52,12 @@ def clone(tmp_path, monkeypatch, lead):
 def test_a_shared_file_goes_on_the_never_merged_branch_and_the_board_gets_its_link(clone, tmp_path, board, capsys):
     notes = tmp_path / "spec.md"
     notes.write_text("# Spec\n")
-    assert share.share(CONFIG, Namespace(file=str(notes), to="@ben")) == 0
+    assert share.share(CONFIG, Namespace(file=str(notes), to="@ben", public=True)) == 0
     assert git(clone, "show", "colony-shared:shared/spec.md") == "# Spec"
     assert board == ["@ben shared: spec.md, https://github.com/acme/demo/blob/colony-shared/shared/"
                      "spec.md (from ana-main-lead)"]
-    assert "acme/demo is public: anyone can read it" in capsys.readouterr().out
     (tmp_path / "more.md").write_text("more\n")
-    assert share.share(CONFIG, Namespace(file=str(tmp_path / "more.md"), to="")) == 0  # the same branch grows
+    assert share.share(CONFIG, Namespace(file=str(tmp_path / "more.md"), to="", public=True)) == 0  # the same branch grows
     assert git(clone, "ls-tree", "--name-only", "colony-shared", "shared/").split() == [
         "shared/more.md", "shared/spec.md"]
 
@@ -67,7 +66,7 @@ def test_a_file_holding_a_secret_is_never_shared(clone, tmp_path, board):
     key = tmp_path / "creds.txt"
     key.write_text("token ghp_" + "a" * 36 + "\n")
     with pytest.raises(cli.ColonyError, match="never shares a secret"):
-        share.share(CONFIG, Namespace(file=str(key), to=""))
+        share.share(CONFIG, Namespace(file=str(key), to="", public=True))
     assert board == []
 
 
@@ -82,3 +81,25 @@ def test_a_need_is_asked_tracked_and_closed(lead, board, capsys):
     assert "No open need." in capsys.readouterr().out
     lead_session = wait.Session("lead", frozenset({"lead", "ben-main-lead"}), logins=frozenset({"ben"}))
     assert wait.taken("@ben need: the route [N2] (from ana-main-lead)", lead_session, "")[0][1]  # at once
+
+
+def test_a_public_repo_gets_a_shared_file_only_with_public_and_nothing_is_pushed_before(clone, tmp_path, board):
+    notes = tmp_path / "notes.md"
+    notes.write_text("notes\n")
+    with pytest.raises(cli.ColonyError, match="acme/demo is public.*--public"):
+        share.share(CONFIG, Namespace(file=str(notes), to="", public=False))
+    assert subprocess.run(["git", "rev-parse", "--verify", "--quiet", "colony-shared"], cwd=clone,
+                          capture_output=True).returncode != 0
+    assert board == []
+
+
+@pytest.mark.parametrize("name, body", [
+    (".env.local", b"DATABASE_URL=postgres://x\n"), ("deploy.pem", b"x\n"), ("id_ed25519", b"x\n"),
+    ("credentials.json", b"{}\n"), ("token.txt", ("ghp_" + "a" * 36).encode("utf-16")),
+])
+def test_a_secrets_file_or_an_encoded_secret_is_never_shared(clone, tmp_path, board, name, body):
+    path = tmp_path / name
+    path.write_bytes(body)
+    with pytest.raises(cli.ColonyError, match="never shares"):
+        share.share(CONFIG, Namespace(file=str(path), to="", public=True))
+    assert board == []

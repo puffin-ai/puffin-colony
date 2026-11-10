@@ -94,7 +94,7 @@ When the check fails, it runs once more: a test that fails only sometimes lands 
 
 When your work waits on another person's, such as an API route they own, ask their lead with `colony need @<login> "<what>"`. It reaches that lead at once, as `@<login> need: <what> [N3]`, and Colony remembers it: `colony need` lists what you still wait on and for how long, and `colony need --done N3` closes it and thanks them.
 
-To hand a teammate a file, such as a spec or screenshots, run `colony share <file> --to @<login>`. It goes on the `colony-shared` branch, which no one merges, and the board gets its link. On a public repo anyone can read it, so a secret's shape is refused, and anything not for strangers goes by `colony say --private`.
+To hand a teammate a file, such as a spec or screenshots, run `colony share <file> --to @<login>`. It goes on the `colony-shared` branch, which no one merges, and the board gets its link. On a public repo anyone can read it, so it needs `--public`; a secret's shape and kinds of file that hold secrets, such as `.env`, are always refused, and anything not for strangers goes by `colony say --private`.
 
 ## What is live
 
