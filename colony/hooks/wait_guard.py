@@ -19,7 +19,7 @@ It also refuses, in every mode and even in the background, a `git push` that for
 `[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
 can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec or a deletion. A force push rewrites the
 branch every teammate builds on, and makes each of them rebase. A plain push, and a forced push of tags alone, pass.
-A line whose quoting it can't read is refused when its plain text holds a push with any force or delete mark.
+A line whose quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
 """
 from __future__ import annotations
 
@@ -62,9 +62,7 @@ UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 OPERATORS = ("&&", "||", ";;", "|&", ">>", "<<", ">&", "<&", "&>", ">|", "(", ")", ";", "&", "|", "<", ">")
 PUNCTUATION = set("();<>|&")
 RAW_SLEEP = re.compile(r"(?<![\w.-])sleep\s+([0-9.]+[smhd]?)(?![\w.])")
-# A push in a line shlex can't read: its words up to the next list or pipe operator, and any mark of a force or delete.
-RAW_PUSH = re.compile(r"\bgit\b[^;&|\n]*?\bpush\b([^;&|\n]*)")
-RAW_REWRITE = re.compile(r"(?:^|\s)(?:--force\S*|--mirror|--delete|-[A-Za-z]*[fd][A-Za-z]*|\+\S+|:\S+)")
+RAW_GIT = re.compile(r"git")  # in a line shlex can't read, any git with a push is refused (pushes())
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
@@ -395,14 +393,14 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
 
 def pushes(command: str, cwd: str) -> list[str]:
     """A reason for each `git push` in the command line that force-pushes or deletes the base branch. A line whose
-    quoting can't be read is refused when its plain text holds a push with any force or delete mark, since then the
-    guard can't tell which branch it rewrites."""
+    quoting can't be read is refused whenever its text holds `git` and `push` anywhere: the guard can't tell what
+    such a push does, and quotes can hide a force flag from any plain-text search."""
     try:
         line = tokens(command)
     except ValueError:
-        text = without_heredoc_bodies(command)
-        if any(RAW_REWRITE.search(push[1]) for push in RAW_PUSH.finditer(text)):
-            return ["this push's quoting could not be read, and it may force-push or delete"]
+        if RAW_GIT.search(command) and "push" in command:
+            return ["this line's quoting could not be read and it holds a git push, so run the push as a command "
+                    "of its own"]
         return []
     found, words = [], []
     for token in [*line, ";"]:

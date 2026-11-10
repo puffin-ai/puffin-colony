@@ -83,13 +83,13 @@ def test_the_wait_guard_names_the_endless_loop_and_lets_a_background_call_or_an_
     assert guard("not json").returncode == 0
 
 
-def test_a_push_whose_quoting_cant_be_read_is_refused_when_it_may_force_or_delete():
+def test_a_line_whose_quoting_cant_be_read_is_refused_whenever_it_holds_a_push():
     unreadable = """echo "$(echo 'a"b')" """
-    for push in ("git push --force origin main", "git push origin +main", "git push -f", "git push origin :main"):
+    for push in ("git push --force origin main", "git push origin +main", "git push '--force' origin main",
+                 '"git" push -"f"', "git push -u origin ana/login", "git <<X\npush --force origin main\nX"):
         run = guard(json.dumps({"tool_input": {"command": f"{unreadable}; {push}", "run_in_background": True}}))
-        assert run.returncode == 2 and run.stderr.startswith("push guard: refused, "), push
-    plain = guard(json.dumps({"tool_input": {"command": f"{unreadable}; git push -u origin ana/login"}}))
-    assert plain.returncode == 0
+        assert run.returncode == 2 and "run the push as a command of its own" in run.stderr, push
+    assert guard(json.dumps({"tool_input": {"command": f"{unreadable}; git status"}})).returncode == 0
 
 
 def test_a_line_whose_quoting_cant_be_read_is_refused_only_for_a_long_sleep():
