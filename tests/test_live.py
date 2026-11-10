@@ -70,3 +70,16 @@ def test_colony_live_posts_the_deploy_for_every_lead(monkeypatch, capsys):
     assert sent == ["@all live: 1a2b3c4d5e is live on https://myapp.example"]
     with pytest.raises(cli.ColonyError, match="a commit, such as 1a2b3c4"):
         live.post(CONFIG, Namespace(sha="main", url=""))
+
+
+def test_a_live_line_counts_only_from_the_team_and_only_with_an_https_link(monkeypatch, tmp_path):
+    monkeypatch.setattr(wait, "gh", lambda *args: "[]")  # GitHub records no deployment
+    comments = [{"body": "@all live: 1a2b3c4 is live on https://myapp.example (from ben-main-lead)",
+                 "created_at": "2026-11-08T11:00:00Z", "user": {"login": "ben"}},
+                {"body": "@all live: 9f9f9f9 is live on https://evil.example (from eve-main-lead)",
+                 "created_at": "2026-11-08T12:00:00Z", "user": {"login": "eve"}}]
+    monkeypatch.setattr(live.presence, "read_comments", lambda config: comments)
+    line = live.summary(CONFIG, tmp_path)
+    assert line.startswith("Live: 1a2b3c4 on https://myapp.example") and "evil" not in line
+    found = live.from_board([{"body": "@all live: 1a2b3c4 is live on javascript:alert(1)", "created_at": "x"}])
+    assert found.url == ""

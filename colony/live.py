@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from colony import cli, wait
+from colony import cli, presence, wait
 
 LIVE_LINE = re.compile(r"\blive: ([0-9a-f]{7,40}) is live(?: on (\S+))?")
 SHA = re.compile(r"[0-9a-f]{7,40}")
@@ -64,7 +64,9 @@ def from_board(comments: list[dict]) -> Live | None:
     for comment in reversed(comments):
         found = LIVE_LINE.search(comment.get("body") or "")
         if found:
-            return Live(found[1], str(comment.get("created_at") or ""), found[2] or "", "a live: line on the board")
+            url = found[2] or ""
+            url = url if url.startswith("https://") else ""  # a link the person may open: https alone
+            return Live(found[1], str(comment.get("created_at") or ""), url, "a live: line on the board")
     return None
 
 
@@ -85,10 +87,10 @@ def not_live(root: Path, ref: str, sha: str) -> list[str]:
 
 def summary(config: dict, root: Path) -> str:
     """One line on what is live and what isn't yet, for `colony who` and `colony status`."""
-    from colony import presence
-
+    logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
     try:
-        comments = presence.read_comments(config)
+        # On a public repo anyone can comment: a live: line counts from the team's own logins alone.
+        comments = [comment for comment in presence.read_comments(config) if presence.by_team(comment, logins)]
     except (cli.ColonyError, OSError, ValueError):
         comments = []
     found = newest(from_deployments(config), from_board(comments))
