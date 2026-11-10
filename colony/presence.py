@@ -198,22 +198,32 @@ def write_registry(leads: dict[str, dict]) -> None:
 
 
 def folder(path: str) -> str:
-    """A folder as the registry keeps it: relative, with one trailing slash."""
-    clean = path.strip().strip("/")
-    if not clean or clean.startswith("..") or os.path.isabs(path.strip()):
-        raise cli.ColonyError(f"{path!r} is not a folder in this repo")
+    """A claimed path as the registry keeps it, relative: a folder with one trailing slash, given with one or found
+    on disk, and a file as it is, such as src/app.ts, so a lead can hold one file of a folder another lead shares."""
+    given = path.strip()
+    clean = given.removeprefix("./").strip("/")
+    if not clean or clean.startswith("..") or os.path.isabs(given):
+        raise cli.ColonyError(f"{path!r} is not a path in this repo")
+    try:
+        here = cli.repo_root() / clean
+    except cli.ColonyError:
+        here = Path(clean)
+    if given.endswith("/") or here.is_dir():
+        return clean + "/"
+    if here.is_file() or "." in clean.rsplit("/", 1)[-1]:
+        return clean  # a file, or one not made yet whose name has a dot, such as app.ts or package.json
     return clean + "/"
 
 
 def overlaps(a: str, b: str) -> bool:
-    """Whether two folders overlap: one is the other or holds it."""
-    return a.startswith(b) or b.startswith(a)
+    """Whether two claimed paths overlap: the same path, or a folder (with its slash) that holds the other."""
+    return a == b or (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b))
 
 
 def inside(path: str, folders: list[str]) -> bool:
-    """Whether a path sits in one of the folders."""
-    path = path.strip().lstrip("./")
-    return any(path == f.rstrip("/") or path.startswith(f) for f in folders)
+    """Whether a path sits in one of the claimed paths: in a folder, or the very file."""
+    path = path.strip().removeprefix("./")
+    return any(path == f.rstrip("/") or (f.endswith("/") and path.startswith(f)) for f in folders)
 
 
 def held_by_others(alive: list[Status], me: str) -> dict[str, list[str]]:

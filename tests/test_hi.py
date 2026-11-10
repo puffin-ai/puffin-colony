@@ -808,3 +808,35 @@ def test_the_hooks_run_for_a_session_whose_identity_colony_saved():
     from colony import guards
     assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.colony_command("unread")
     assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.quiet_command("unread")
+
+
+# Claims by file as well as by folder
+
+def test_a_file_claim_overlaps_only_that_file_and_the_folders_that_hold_it():
+    assert presence.overlaps("src/a.ts", "src/a.ts") and presence.overlaps("src/a.ts", "src/")
+    assert presence.overlaps("src/", "src/ui/") and presence.overlaps("src/ui/", "src/")
+    assert not presence.overlaps("src/a.ts", "src/a.tsx") and not presence.overlaps("src/a.ts", "src/b.ts")
+    assert not presence.overlaps("src/", "srcs/")
+
+
+def test_a_claimed_path_keeps_a_folders_slash_and_a_files_name(host):
+    (host / "src").mkdir()
+    assert presence.folder("src") == "src/" and presence.folder("./src/app.ts") == "src/app.ts"
+    assert presence.folder("lib/") == "lib/"
+
+
+def test_a_lead_adds_and_releases_files_and_never_takes_another_leads(home, config, github, capsys, monkeypatch):
+    def claim(stream, *paths, add=False, release=False):
+        return cli.claim(config, argparse.Namespace(stream=stream, folders=list(paths), person="ana", add=add,
+                                                    release=release, dry_run=False))
+    github.add(lead(name="sam-api-lead", person="sam", folders=["server/auth.ts"], computer="Sam-PC"))
+    assert claim("web", "src/app.ts") == 0
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-web-lead")
+    assert claim("src/b.ts", "src/c.ts", add=True) == 0
+    assert presence.claimed("ana-web-lead") == ["src/app.ts", "src/b.ts", "src/c.ts"]
+    assert claim("src/b.ts", release=True) == 0
+    assert presence.claimed("ana-web-lead") == ["src/app.ts", "src/c.ts"]
+    with pytest.raises(cli.ColonyError, match="server/auth.ts overlaps server/auth.ts of sam-api-lead"):
+        claim("server/auth.ts", add=True)
+    with pytest.raises(cli.ColonyError, match="holds at least one path"):
+        claim("src/app.ts", "src/c.ts", release=True)

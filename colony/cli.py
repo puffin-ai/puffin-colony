@@ -800,6 +800,8 @@ def claim(config: dict, args) -> int:
     which no other live lead holds. No folders: the rest of the repo."""
     from colony import presence
 
+    if getattr(args, "add", False) or getattr(args, "release", False):
+        return change_claim(config, args, [args.stream, *args.folders])
     name, token = claim_lead(config, args, args.stream, args.folders)
     if not token:
         over = ", ".join(map(presence.folder, args.folders)) or "the rest of the repo"
@@ -810,6 +812,53 @@ def claim(config: dict, args) -> int:
     print(f"{identity_note(*lead_pairs(config, args, name, token)).capitalize()}, and start `{NAME} wait` in the "
           "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
           f"{DIR}/{presence.LEADS_FILE} with your next change.")
+    return 0
+
+
+def change_claim(config: dict, args, paths: list[str]) -> int:
+    """`colony claim --add|--release <path> ...`: the lead this session holds takes more paths, which no other live
+    lead holds, or gives some back, and its status comment and, in hack mode, the board say so at once. A lead keeps
+    at least one path, since none would mean the rest of the repo."""
+    from colony import presence, transport, wait
+
+    name = os.environ.get(wait.LEAD_ENV, "").lower()
+    if not name:
+        raise ColonyError(f"claim --add and --release change the lead this session holds: first claim one, `{NAME} "
+                          "claim <stream> <path> ...`")
+    paths = list(dict.fromkeys(presence.folder(path) for path in paths))
+    leads = presence.registry()
+    held = [str(path) for path in leads.get(name, {}).get("folders", [])]
+    if args.add:
+        alive, _, note = presence.everyone(config)
+        if note:
+            print(note, file=sys.stderr)
+        clash = [f"{mine} overlaps {theirs} of {lead}" for lead, owned in presence.held_by_others(alive, name).items()
+                 for mine in paths for theirs in owned if presence.overlaps(mine, theirs)]
+        if clash:
+            raise ColonyError(f"another live lead holds those paths: {'; '.join(clash)}. Ask its owner on the board")
+        held, line = list(dict.fromkeys([*held, *paths])), f"taking {', '.join(paths)}: ask {name} before you edit them"
+    else:
+        kept = [path for path in held if path not in paths]
+        if not kept:
+            raise ColonyError(f"a lead holds at least one path, and {name} would hold none: release fewer")
+        held, line = kept, f"{', '.join(path for path in paths if path not in kept)} released"
+    leads[name] = {"person": leads.get(name, {}).get("person") or person_of(config, args), "folders": held}
+    presence.write_registry(leads)
+    print(f"{name} holds {', '.join(held)}.")
+    path = wait.state_path(config["project"]["name"], f"{name}-status")
+    state = wait.read_json(path, {})
+    state = state if isinstance(state, dict) else {}
+    state.pop("status_at", None)  # other leads see the change now, not at the next 5-minute edit
+    try:
+        presence.keep(config, presence.mine(config, args, name, "lead"), state)
+        wait.write_json(path, state)
+    except (ColonyError, OSError, ValueError, KeyError) as e:
+        print(f"{NAME}: the status comment shows it at the next `{NAME} wait`: {e}", file=sys.stderr)
+    if wait.hack(config):
+        try:
+            transport.send(config, f"@{wait.ALL}", f"@{wait.ALL} {line}")
+        except ColonyError as e:
+            print(f"{NAME}: the board didn't hear it: {e}", file=sys.stderr)
     return 0
 
 
@@ -1594,8 +1643,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=view)
     p = sub.add_parser("claim", help="this session becomes the lead <person>-<stream>-lead over folders no live lead "
                                      "holds")
-    p.add_argument("stream", help="a short name for this lead's stream of work, such as engine")
-    p.add_argument("folders", nargs="*", metavar="folder", help="the folders it holds; none for the rest of the repo")
+    p.add_argument("stream", help="a short name for this lead's stream of work, such as engine; with --add or "
+                                  "--release, the first path")
+    p.add_argument("folders", nargs="*", metavar="path", help="the folders, with a trailing slash, and files it holds, "
+                                                              "such as web/ or src/app.ts; none for the rest of the repo")
+    p.add_argument("--add", action="store_true", help="the lead this session holds takes these paths too")
+    p.add_argument("--release", action="store_true", help="the lead this session holds gives these paths back")
     p.add_argument("--person", help="whose session this is")
     p.set_defaults(run=claim)
     p = sub.add_parser("image", help="the lead: save a pasted image for a card on its branch card/<n>, for every "

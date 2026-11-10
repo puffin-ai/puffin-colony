@@ -24,7 +24,7 @@ A teammate who uses another agent, such as Codex, needs only `sh` and `gh`.
 
 Take 10 minutes for this. It saves hours of merge conflicts.
 
-1. **Split the work by folder.** Give each person folders nobody else edits, such as `web/` for one and `api/` for another. Shared files, such as `package.json`, the database schema or shared types, get one owner too.
+1. **Split the work by folder, or by file where a folder is shared.** Give each person folders nobody else edits, such as `web/` for one and `api/` for another. When two people must work in one folder, a lead claims single files in it, `colony claim --add src/app.ts`, and gives them back with `colony claim --release src/app.ts`; another lead's claim on the same file is refused. Shared files, such as `package.json`, the database schema or shared types, get one owner too.
 2. **Run setup once.** One person runs `colony` in the repo, picks `hack`, and answers: the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time, with its time zone, such as `2026-11-08 17:00 -08:00`. The demo time has no default: Colony counts down to it, `colony who` and `colony status` print the time left first, and the freeze starts an hour before it. It goes in `[hack] demo`, with `[hack] team_lead`. Setup writes the owner table into `AGENTS.md`, opens and pins the board issue, copies `tools/board`, and opens its setup PR. Merge it.
 3. **Everyone opens a lead.** Each teammate pulls, opens Claude Code in the repo, and says hi, or runs `.colony/bin/colony` in a terminal. Your lead is `<login>-main-lead`. Tell it your part of the demo.
 
