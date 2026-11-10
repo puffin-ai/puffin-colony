@@ -1638,7 +1638,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("merge", help="hack mode: merge a branch into the base after a passing fast check, "
                                      "else open its pull request")
-    p.add_argument("branch", help="the branch to land, such as ana/login-form")
+    p.add_argument("branch", nargs="+", help="the branch to land, such as ana/login-form, or several, which land "
+                                             "together with one check")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
     p = sub.add_parser("gate", help="hack mode: the person switches the fast check off or on for colony merge on this "

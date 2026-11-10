@@ -8,7 +8,9 @@ under the check twice in a row. A failed check runs once more, so a flaky test n
 whole output stays in ~/.colony/<project>/merge-logs/, and the message names the summary line and the failing tests.
 When the check fails twice, the base runs alone, unless Colony landed it green itself: a base that fails on its own
 gets no pull request, since the branch is not to blame, and one `@all urgent:` line on the board for that commit. It
-never force-pushes, and one merge runs at a time on a computer. When it lands the branch,
+never force-pushes. One merge runs at a time on a computer, and across every computer of the team: a merge takes
+the team's turn, a marker commit on origin's refs/colony/merge-lock, and waits while another holds it. Several
+branches land together with one check, and each alone when that fails. When it lands the branch,
 it posts the last good build on the board, `[merged] <branch> → <base> <short sha>, fast check passed`, so every agent
 knows which commit to go back to.
 
@@ -43,6 +45,14 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 SUMMARY = re.compile(r"\b\d+\s+(?:passed|failed|failing|passing|errors?)\b", re.I)
 FAILING = re.compile(r"^(?:FAIL(?:ED)?|✗|×|✕|●|not ok)\s+\S")
 NAMED = 5  # the failing tests a message names
+# The team's merge turn: a marker commit on origin's LOCK_REF, which a push takes only while the ref is missing, so
+# one merge runs at a time across every computer. A turn older than LOCK_STALE is taken over.
+LOCK_REF = "refs/colony/merge-lock"
+LOCK_STALE = 20 * 60
+LOCK_POLL = 15
+SLEEP = time.sleep
+TURN = re.compile(r"^colony merge turn: (\S+) (.+)$")
+LEASE_LOST = re.compile(r"\[rejected\]|stale info|fetch first|already exists", re.I)  # another turn holds the ref
 GATE_HOURS = 4  # a switched-off fast check comes back on by itself after this long, when no demo time is set
 SLOW_CHECK_SECONDS = 90  # past this, a merge notes that a hackathon's fast check should be quicker, once a day
 # A database URL in the check's env, scheme://user:password@host/...: its host alone is ever named.
@@ -311,32 +321,36 @@ def remote_databases(env: dict) -> list[str]:
     return list(dict.fromkeys(hosts))
 
 
-def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
-    """Merge the branch into origin/<base> in the merge worktree, run the install and the fast check there, and push
-    the base when the check passes. A failed check runs once more, so a flaky test never blocks a good branch; when
-    it fails again, the base runs alone, and a base that fails on its own gets no pull request, since the branch is
-    not to blame."""
+def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Landed:
+    """Merge the branches into origin/<base> in the merge worktree, one merge commit each, run the install and the
+    fast check there once, and push the base when the check passes. A failed check runs once more, so a flaky test
+    never blocks a good branch. When it fails again for one branch, the base runs alone, and a base that fails on its
+    own gets no pull request, since the branch is not to blame; for several branches, run() lands each alone."""
+    branches = [branches] if isinstance(branches, str) else list(branches)
+    branch, names = branches[0], " and ".join(branches)
     project = config["project"]
     base, env = project["base"], batch.checks_env(config, root)
     command = batch.every_area(config, batch.fast_check(project))
     for attempt in range(TRIES):
         if attempt:
             _git(root, "fetch", "origin")
-        ref = branch_ref(root, branch)
         ready(root, wt, base)
         before = _git(wt, "rev-parse", "HEAD")
-        message = f"Merge {branch} into {base}"
-        if batch._run(["git", "merge", "--no-ff", "--no-edit", "-m", message, ref], wt, check=False).returncode:
-            paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
-            _git(wt, "merge", "--abort", check=False)
-            return Landed(False, f"merging it into {base} conflicts in {', '.join(paths) or 'the merge'}")
+        for one in branches:
+            ref = branch_ref(root, one)
+            message = f"Merge {one} into {base}"
+            if batch._run(["git", "merge", "--no-ff", "--no-edit", "-m", message, ref], wt, check=False).returncode:
+                paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
+                _git(wt, "merge", "--abort", check=False)
+                return Landed(False, f"merging {'it' if len(branches) == 1 else one} into {base} conflicts in "
+                                     f"{', '.join(paths) or 'the merge'}")
         head = _git(wt, "rev-parse", "HEAD")
         if head == before:
-            return Landed(True, f"{branch} is already in {base}: nothing to push")
+            return Landed(True, f"{names} {'is' if len(branches) == 1 else 'are'} already in {base}: nothing to push")
         if (off := gate_off(config)) is not None:
             push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
             if push.returncode == 0:
-                return Landed(True, f"merged {branch} into {base} at {head[:9]}: the fast check is off: "
+                return Landed(True, f"merged {names} into {base} at {head[:9]}: the fast check is off: "
                                     f"{off.get('by')} switched it off at {off.get('at')}", head, checked=False)
             if not REJECTED.search(push.stderr):
                 raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
@@ -349,13 +363,16 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
             note_once(config, "database", f"the fast check's env names a database on {', '.join(hosts)}, which isn't "
                       "on this computer: every check writes to it, and a shared one slows as checks pile up; give the "
                       "checks a database of their own")
-        first = run_check(command, wt, env, log_path(config, branch, "check"))
+        first = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together", "check"))
         if first.seconds > SLOW_CHECK_SECONDS:
             note_once(config, "slow", f"the fast check took {int(first.seconds)} s; in a hackathon keep it under a "
                       "minute, and move slow tests, such as ones that use a database, to [project] checks")
         passed, note = f"({first.summary})", ""
         if not first.passed:
-            second = run_check(command, wt, env, log_path(config, branch, "again"))
+            second = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together",
+                                                          "again"))
+            if not second.passed and len(branches) > 1:
+                return Landed(False, second.failed("twice on the merged result"), log=second.log, pr=False)
             if not second.passed:
                 red = base_fails(config, root, wt, base, before, env, command)
                 if red is not None:
@@ -370,11 +387,13 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
         push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
         if push.returncode == 0:
             remember_green(config, head)
-            return Landed(True, f"merged {branch} into {base} at {head[:9]}: the fast check passed {passed}{note}",
+            return Landed(True, f"merged {names} into {base} at {head[:9]}: the fast check passed {passed}{note}",
                           head)
         if not REJECTED.search(push.stderr):
             raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
-    return Landed(False, f"{base} moved on {TRIES} times while the fast check ran")
+    # Someone pushed to the base outside the team's merge turn: no branch is to blame, so no pull request.
+    return Landed(False, f"{base} moved on {TRIES} times while the fast check ran: run `{cli.NAME} merge "
+                         f"{' '.join(branches)}` again", pr=False)
 
 
 def post_landed(config: dict, branch: str, head: str, checked: bool = True) -> None:
@@ -432,6 +451,82 @@ def open_pr(config: dict, root: Path, branch: str, reason: str) -> str:
     body = f"`{cli.NAME} merge` didn't land `{branch}` on `{base}`: {reason}.\n\n{batch.trailer(config)}\n"
     return wait.gh("pr", "create", "--repo", repo, "--base", base, "--head", branch, "--title",
                    f"{project['name']}: {branch} into {base}", "--body", body).strip()
+
+
+def turn_marker(root: Path, who: str, branches: list[str]) -> str:
+    """A commit that names whose merge turn it is, for origin's LOCK_REF: an empty tree, made here, pushed nowhere
+    else."""
+    def git(*args: str, text: str | None = None) -> str:
+        run = subprocess.run(["git", "-c", "user.name=Colony", "-c", "user.email=colony@localhost", *args], cwd=root,
+                             input=text, capture_output=True, text=True)
+        if run.returncode:
+            raise cli.ColonyError(f"git {args[0]} failed: {run.stderr.strip()[:200]}")
+        return run.stdout.strip()
+
+    tree = git("hash-object", "-w", "-t", "tree", "--stdin", text="")
+    return git("commit-tree", tree, "-m", f"colony merge turn: {who} {' '.join(branches)}")
+
+
+def push_turn(root: Path, sha: str, expect: str = "") -> tuple[bool, str]:
+    """Point origin's LOCK_REF at `sha` only while it is at `expect`, "" meaning missing: git checks it on the server,
+    so two computers never both hold the turn. Returns whether it took, and git's words."""
+    run = batch._run(["git", "push", "--porcelain", f"--force-with-lease={LOCK_REF}:{expect}", "origin",
+                      f"{sha}:{LOCK_REF}"], root, check=False)
+    return run.returncode == 0, f"{run.stdout}\n{run.stderr}"
+
+
+def turn_holder(root: Path) -> tuple[str, str, float] | None:
+    """Whose merge turn origin holds: its commit, its words, such as `bo is merging bo/export`, and when it was
+    taken; None when no one holds it."""
+    found = _git(root, "ls-remote", "origin", LOCK_REF, check=False).split()
+    if not found:
+        return None
+    if batch._run(["git", "fetch", "-q", "origin", f"+{LOCK_REF}:refs/colony/merge-lock-seen"], root,
+                  check=False).returncode:
+        return None  # given back meanwhile
+    stamp, _, subject = _git(root, "log", "-1", "--format=%ct%x09%s", "refs/colony/merge-lock-seen",
+                             check=False).partition("\t")
+    named = TURN.match(subject)
+    words = f"{named[1]} is merging {named[2]}" if named else "another merge"
+    return found[0], words, float(stamp or 0)
+
+
+@contextlib.contextmanager
+def team_turn(config: dict, root: Path, branches: list[str]):
+    """Hold the team's merge turn on origin while this merge runs, so merges from every computer go one at a time and
+    no one has to announce them on the board; give it back afterwards, whatever happened. When origin refuses the
+    ref, only this computer's lock holds, and it says so."""
+    who = os.environ.get(cli.PERSON_ENV) or cli.default_person(config)
+    sha, held, told = turn_marker(root, who, branches), False, False
+    while not held:
+        held, why = push_turn(root, sha)
+        if held:
+            break
+        if not LEASE_LOST.search(why):
+            print(f"{cli.NAME} merge: origin keeps no merge turn ({why.strip().splitlines()[-1][:160]}), so only this "
+                  "computer's lock holds: announce merges on the board", file=sys.stderr)
+            break
+        found = turn_holder(root)
+        if found is None:
+            continue  # given back between the push and the look
+        other, words, taken = found
+        if time.time() - taken > LOCK_STALE:
+            held, _ = push_turn(root, sha, expect=other)
+            if held:
+                print(f"took over the team's merge turn from {words.split(' is ', 1)[0]}, whose turn on "
+                      f"{words.split(' merging ', 1)[-1]} was over {LOCK_STALE // 60} minutes old")
+            continue
+        if not told:
+            print(f"waiting for the team's merge turn: {words} since "
+                  f"{time.strftime('%H:%M UTC', time.gmtime(taken))}")
+            told = True
+        SLEEP(LOCK_POLL)
+    try:
+        yield
+    finally:
+        if held:
+            batch._run(["git", "push", "--porcelain", f"--force-with-lease={LOCK_REF}:{sha}", "origin",
+                        f":{LOCK_REF}"], root, check=False)
 
 
 @contextlib.contextmanager
@@ -545,12 +640,15 @@ def sync(config: dict, args) -> int:
 
 
 def run(config: dict, args) -> int:
-    """`colony merge <branch>`: land the branch on the base after a passing fast check in hack mode, else open its
-    pull request (see the module's docstring)."""
+    """`colony merge <branch> [<branch> ...]`: land the branches on the base after a passing fast check in hack mode,
+    taking the team's merge turn, else open their pull requests (see the module's docstring). Several branches land
+    together with one check, and each alone when that fails."""
     project = config["project"]
-    base, branch = project["base"], args.branch.strip()
-    if not branch or branch.startswith("-") or branch in (base, f"origin/{base}"):
-        raise cli.ColonyError(f"merge needs a branch to land on {base}, other than {base} itself")
+    base = project["base"]
+    branches = [b.strip() for b in (args.branch if isinstance(args.branch, list) else [args.branch])]
+    for branch in branches:
+        if not branch or branch.startswith("-") or branch in (base, f"origin/{base}"):
+            raise cli.ColonyError(f"merge needs a branch to land on {base}, other than {base} itself")
     if not wait.hack(config):
         why = f"{cli.mode(config)} mode lands work through pull requests and `{cli.NAME} batch`"
     elif not config["gate"].get("merge_after_fast_check"):
@@ -559,26 +657,44 @@ def run(config: dict, args) -> int:
         why = None
     root, wt = cli.repo_root(), worktree(config)
     if args.dry_run:
-        print(plan(config, branch, wt, why))
+        for branch in branches:
+            print(plan(config, branch, wt, why))
         return 0
     _git(root, "fetch", "origin")
-    branch_ref(root, branch)
+    for branch in branches:
+        branch_ref(root, branch)
     if why:
-        print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
+        for branch in branches:
+            print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
-    with one_at_a_time(config):
-        result = land(config, root, wt, branch)
-    if result.landed:
-        print(result.what)
-        if result.head:
-            post_landed(config, branch, result.head, result.checked)
-            _git(root, "fetch", "origin", check=False)
-            drop_merged_worktrees(config, root)
-        return 0
-    log = f"; full log: {result.log}" if result.log else ""
-    if not result.pr:
-        print(f"not merged: {result.what}{log}.")
-        return 1
-    # The pull request gets the reason alone: a path on this computer means nothing on GitHub.
-    print(f"not merged: {result.what}{log}. Pull request: {open_pr(config, root, branch, result.what)}")
-    return 1
+    results: list[tuple[str, Landed]] = []
+    with one_at_a_time(config), team_turn(config, root, branches):
+        if len(branches) > 1:
+            together = land(config, root, wt, branches)
+            if together.landed:
+                results = [(branch, together) for branch in branches]
+            else:
+                print(f"{' and '.join(branches)} together: {together.what}, so each lands alone")
+        if not results:
+            results = [(branch, land(config, root, wt, branch)) for branch in branches]
+    code, printed, landed_any = 0, set(), False
+    for branch, result in results:
+        if result.landed:
+            if id(result) not in printed:
+                print(result.what)
+                printed.add(id(result))
+            if result.head:
+                post_landed(config, branch, result.head, result.checked)
+                landed_any = True
+            continue
+        code = 1
+        log = f"; full log: {result.log}" if result.log else ""
+        if not result.pr:
+            print(f"not merged: {result.what}{log}.")
+            continue
+        # The pull request gets the reason alone: a path on this computer means nothing on GitHub.
+        print(f"not merged: {result.what}{log}. Pull request: {open_pr(config, root, branch, result.what)}")
+    if landed_any:
+        _git(root, "fetch", "origin", check=False)
+        drop_merged_worktrees(config, root)
+    return code

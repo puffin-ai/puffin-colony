@@ -268,7 +268,7 @@ def test_the_base_moving_under_the_check_is_merged_again_and_never_forced(world,
     assert world.on_origin_main("a.txt") == "good"
 
 
-def test_a_base_that_keeps_moving_opens_a_pr(world, capsys, monkeypatch):
+def test_a_base_that_keeps_moving_asks_for_another_merge_and_opens_no_pr(world, capsys, monkeypatch):
     world.branch("ana/login", {"a.txt": "good\n"})
     monkeypatch.setattr(merge, "TRIES", 1)
     teammate = world.teammate.as_posix()  # a shell command's path, in TOML too
@@ -276,7 +276,9 @@ def test_a_base_that_keeps_moving_opens_a_pr(world, capsys, monkeypatch):
                      f'git -C "{teammate}" commit -qm teammate; git -C "{teammate}" push -q origin main; '
                      f'{PASSES}')
     assert land(world.config(fast_check=teammate_push), "ana/login") == 1
-    assert "main moved on 1 times while the fast check ran" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "main moved on 1 times while the fast check ran: run `colony merge ana/login` again" in out
+    assert not any(call[:2] == ["pr", "create"] for call in world.gh_calls())  # a collision is no reason for a PR
 
 
 def test_a_branch_already_on_the_base_has_nothing_to_push(world, capsys):
@@ -361,7 +363,7 @@ def test_merge_needs_a_branch_that_exists_and_is_not_the_base(world, branch, err
 
 def test_merge_is_a_command_on_the_command_line():
     args = cli.build_parser().parse_args(["merge", "ana/login", "--dry-run"])
-    assert (args.branch, args.dry_run, args.run) == ("ana/login", True, cli.merge)
+    assert (args.branch, args.dry_run, args.run) == (["ana/login"], True, cli.merge)
 
 
 SYNC = HACK.replace('fast_check = "{fast_check}"\n',
@@ -543,3 +545,80 @@ def test_a_check_env_that_names_a_remote_database_gets_a_note_with_its_host_alon
     out = capsys.readouterr().out
     assert "note: the fast check's env names a database on ep-cool-1.neon.tech" in out
     assert "s3cret" not in out and "localhost" not in out
+
+
+# The team's merge turn: one merge at a time across every computer, held on origin
+
+LOCK = "refs/colony/merge-lock"
+
+
+def hold_the_turn(world, who="bo", branch="bo/export", age_seconds=0) -> str:
+    """Another computer holds the team's merge turn: its marker commit on origin's lock ref."""
+    env = dict(os.environ)
+    if age_seconds:
+        stamp = f"{int(time.time()) - age_seconds} +0000"
+        env.update(GIT_COMMITTER_DATE=stamp, GIT_AUTHOR_DATE=stamp)
+    tree = subprocess.run(["git", "hash-object", "-w", "-t", "tree", "--stdin"], cwd=world.teammate, input="",
+                          capture_output=True, text=True, check=True).stdout.strip()
+    sha = subprocess.run(["git", "commit-tree", tree, "-m", f"colony merge turn: {who} {branch}"], cwd=world.teammate,
+                         env=env, capture_output=True, text=True, check=True).stdout.strip()
+    git(world.teammate, "push", "-q", "origin", f"{sha}:{LOCK}")
+    return sha
+
+
+def turn_on_origin(world) -> str:
+    return subprocess.run(["git", "rev-parse", "--verify", "--quiet", LOCK], cwd=world.origin,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_a_merge_waits_for_the_teams_turn_and_gives_it_back(world, capsys, monkeypatch):
+    hold_the_turn(world)
+    naps = []
+
+    def nap(seconds):
+        naps.append(seconds)
+        git(world.origin, "update-ref", "-d", LOCK)  # the other computer's merge finishes
+    monkeypatch.setattr(merge, "SLEEP", nap)
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(world.config(), "ana/login") == 0
+    out = capsys.readouterr().out
+    assert "waiting for the team's merge turn: bo is merging bo/export" in out and naps == [merge.LOCK_POLL]
+    assert turn_on_origin(world) == ""  # given back
+
+
+def test_a_turn_held_past_its_time_is_taken_over(world, capsys, monkeypatch):
+    hold_the_turn(world, age_seconds=3 * 3600)
+    monkeypatch.setattr(merge, "SLEEP", lambda seconds: pytest.fail("a stale turn needs no wait"))
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(world.config(), "ana/login") == 0
+    assert "took over the team's merge turn from bo" in capsys.readouterr().out
+    assert turn_on_origin(world) == ""
+
+
+def test_the_turn_is_given_back_when_the_merge_fails(world, capsys):
+    world.branch("ana/broken", {"a.txt": "bad\n"})
+    assert land(world.config(fast_check=BRANCH_FAILS), "ana/broken") == 1
+    assert turn_on_origin(world) == ""
+
+
+def test_several_branches_land_together_with_one_check(world, capsys):
+    runs = world.tmp / "runs"
+    config = world.config(fast_check=f"echo run >> {runs.as_posix()}; " + PASSES)
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/notes", {"b.txt": "notes\n"})
+    assert merge.run(config, Namespace(branch=["ana/login", "ana/notes"], dry_run=False)) == 0
+    assert runs.read_text().count("run") == 1
+    assert world.on_origin_main("a.txt") == "good" and world.on_origin_main("b.txt") == "notes"
+    posts = [call[-1] for call in world.gh_calls() if call[:2] == ["issue", "comment"]]
+    assert len(posts) == 2 and "[merged] ana/login" in posts[0] and "[merged] ana/notes" in posts[1]
+    assert cli.build_parser().parse_args(["merge", "a/1", "b/2"]).branch == ["a/1", "b/2"]
+
+
+def test_several_branches_that_fail_together_land_one_at_a_time(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/broken", {"b.txt": "bad\n"})
+    assert merge.run(world.config(fast_check=BRANCH_FAILS), Namespace(branch=["ana/login", "ana/broken"],
+                                                                     dry_run=False)) == 1
+    out = capsys.readouterr().out
+    assert "ana/login and ana/broken together: the fast check failed" in out and "so each lands alone" in out
+    assert world.on_origin_main("a.txt") == "good"  # the good one landed alone
