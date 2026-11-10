@@ -783,3 +783,28 @@ def test_the_account_label_follows_the_person_when_two_people_share_a_settings_f
     assert cli.current_account(shared) == "ana"
     monkeypatch.delenv(cli.PERSON_ENV)
     assert cli.current_account(shared) == "sam"  # no person known: the first, as before
+
+
+def test_a_lead_a_person_opened_keeps_its_identity_for_its_claude_code_session(home, config, github, capsys,
+                                                                                monkeypatch):
+    monkeypatch.setenv(cli.CLAUDE_SESSION_ENV, "0f1e2d3c")
+    out = hi(capsys)
+    assert "this session leads ana-main-lead" in out and "run colony commands as they are" in out
+    assert wait.TOKEN_ENV not in out  # no token to copy into every command
+    saved = home / ".colony" / "sessions" / "0f1e2d3c.json"
+    assert saved.stat().st_mode & 0o777 == 0o600
+    held = json.loads(saved.read_text())
+    assert (held[cli.SESSION_ENV], held[wait.LEAD_ENV], held[cli.PERSON_ENV]) == ("lead", "ana-main-lead", "ana")
+    # A later command in the same session, with no env before it, is that lead.
+    for key in (cli.SESSION_ENV, wait.LEAD_ENV, cli.PERSON_ENV, wait.TOKEN_ENV):
+        monkeypatch.setenv(key, "x")
+        monkeypatch.delenv(key)
+    cli.load_identity()
+    assert whoami(config) == 0
+    assert "session: lead\nkind: lead\nlead: ana-main-lead\nperson: ana" in capsys.readouterr().out
+
+
+def test_the_hooks_run_for_a_session_whose_identity_colony_saved():
+    from colony import guards
+    assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.colony_command("unread")
+    assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.quiet_command("unread")

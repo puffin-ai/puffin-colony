@@ -7,7 +7,7 @@ description: The Puffin Colony lead's steps. Use when you are a lead in this rep
 
 Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, and follow it literally. Its Lines and Stop list sections bind you too. This skill adds only what the lead needs beyond it.
 
-- When `colony` or `colony claim` made you a lead, start every `colony` command with the env line it printed, and keep `colony wait` running: its heartbeat and status comment hold your lead's name, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds it, tell the person in one line, and stop leading.
+- When `colony` or `colony claim` made you a lead, run `colony` commands as it said: as they are when this Claude Code session keeps who it is, else with the env line it printed first; never copy the token into a line or a file. Keep `colony wait` running: its heartbeat and status comment hold your lead's name, and past 2 minutes without one, another session may take it. When `colony wait` says another session holds it, tell the person in one line, and stop leading.
 - Work and hand out cards only in your folders, which `.colony/leads.toml` lists, and ask another lead on the coordination issue before touching theirs. Run `colony who` to see who leads what, and which computer's account has room.
 - A line to another lead waits for its 10-minute digest. Mark it `--urgent` only when work stops on it: a helper of yours is blocked on that lead, or your question stops work, as in `colony say <lead> "<what stops, and what you need>" --urgent`.
 

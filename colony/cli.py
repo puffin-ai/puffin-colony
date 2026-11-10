@@ -34,6 +34,8 @@ DISPLAY = "Puffin Colony"
 DIR = f".{NAME}"  # the folder a host repo keeps Colony's files in: the config, rules, playbook and reports
 CONFIG_NAME = f"{NAME}.toml"
 SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
+CLAUDE_SESSION_ENV = "CLAUDE_CODE_SESSION_ID"  # Claude Code gives each command and hook its session's id
+CLAUDE_SESSION_ID = re.compile(r"[A-Za-z0-9-]{1,100}")
 LEAD = "lead"
 LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
@@ -689,6 +691,50 @@ def lead_line(config: dict) -> str:
     return "\n".join(lines) or "lead: none running on this computer (no heartbeat)"
 
 
+def identity_path(session: str) -> Path:
+    """Where a Claude Code session's Colony identity is kept: ~/.colony/sessions/<its id>.json."""
+    return Path.home() / f".{NAME}" / "sessions" / f"{session}.json"
+
+
+def remember_identity(*pairs: tuple[str, str]) -> bool:
+    """Keep this session's identity, its $COLONY_SESSION, $COLONY_LEAD, $COLONY_PERSON and token, in a file only its
+    owner reads, named after the Claude Code session ($CLAUDE_CODE_SESSION_ID), so its later commands and hooks
+    load it (load_identity) and no command carries the token. False outside a Claude Code session that names
+    itself, where the env line stays the way."""
+    session = os.environ.get(CLAUDE_SESSION_ENV, "")
+    if not CLAUDE_SESSION_ID.fullmatch(session):
+        return False
+    path = identity_path(session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(f".{path.name}.{os.getpid()}")
+    with os.fdopen(os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as held:
+        json.dump({key: value for key, value in pairs if value}, held)
+    os.replace(part, path)
+    return True
+
+
+def load_identity() -> None:
+    """Put this Claude Code session's saved identity (remember_identity) into the environment, under any value the
+    environment already holds, which wins."""
+    session = os.environ.get(CLAUDE_SESSION_ENV, "")
+    if not CLAUDE_SESSION_ID.fullmatch(session):
+        return
+    try:
+        held = json.loads(identity_path(session).read_text())
+    except (OSError, ValueError):
+        return
+    for key, value in held.items() if isinstance(held, dict) else ():
+        if key.startswith(f"{NAME.upper()}_") and isinstance(value, str):
+            os.environ.setdefault(key, value)
+
+
+def identity_note(*pairs: tuple[str, str]) -> str:
+    """How this session runs its commands as itself: kept for its Claude Code session, or the env line to put first."""
+    if remember_identity(*pairs):
+        return f"this Claude Code session keeps who it is, so run {NAME} commands as they are, with no env before them"
+    return f"start every {NAME} command with `{env_line(*pairs)}`"
+
+
 def env_line(*pairs: tuple[str, str]) -> str:
     """The env a session puts before every colony command, such as `COLONY_SESSION=lead COLONY_LEAD=…`."""
     return " ".join(f"{key}={value}" for key, value in pairs if value)
@@ -737,12 +783,16 @@ def rename_line(name: str) -> str:
     return RENAME.replace("{name}", name)
 
 
-def lead_env(config: dict, args, name: str, token: str) -> str:
-    """The env line a claimed lead starts every colony command with."""
+def lead_pairs(config: dict, args, name: str, token: str) -> list[tuple[str, str]]:
+    """A claimed lead's identity: its session, name, person and token."""
     from colony import wait
 
-    return env_line((SESSION_ENV, LEAD), (wait.LEAD_ENV, name), (PERSON_ENV, person_of(config, args)),
-                    (wait.TOKEN_ENV, token))
+    return [(SESSION_ENV, LEAD), (wait.LEAD_ENV, name), (PERSON_ENV, person_of(config, args)), (wait.TOKEN_ENV, token)]
+
+
+def lead_env(config: dict, args, name: str, token: str) -> str:
+    """The env line a claimed lead starts every colony command with."""
+    return env_line(*lead_pairs(config, args, name, token))
 
 
 def claim(config: dict, args) -> int:
@@ -757,7 +807,7 @@ def claim(config: dict, args) -> int:
         return 0
     print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
     print(rename_line(name))
-    print(f"Start every {NAME} command with `{lead_env(config, args, name, token)}`, and start `{NAME} wait` in the "
+    print(f"{identity_note(*lead_pairs(config, args, name, token)).capitalize()}, and start `{NAME} wait` in the "
           "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
           f"{DIR}/{presence.LEADS_FILE} with your next change.")
     return 0
@@ -816,7 +866,7 @@ def here(args) -> int:
             return 0
         print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
         print(rename_line(name))
-        print(f"Next: start every {NAME} command with `{lead_env(config, args, name, token)}`, start `{NAME} wait` in "
+        print(f"Next: {identity_note(*lead_pairs(config, args, name, token))}; start `{NAME} wait` in "
               "the background within 2 minutes, load the colony-lead skill, and ask the person what they want.")
         return 0
     held = sorted({folder for status in leads for folder in status.folders})
@@ -1311,11 +1361,11 @@ def join(config: dict, args) -> int:
             wait.write_json(wait.state_path(config["project"]["name"], f"{name}-status"), state)
         except (ColonyError, OSError, ValueError, KeyError) as e:
             print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
-        env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
+        how = identity_note((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
         tell_lead_joined(config, args.lead_name, name)
         print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
         print(rename_line(name))
-        print(f"Next: start every {NAME} command with `{env}`, start `{NAME} wait` in the background now, which tells "
+        print(f"Next: {how}; start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
               f"{section(config, 'Builder')} section. Never ask the person anything: your lead gives you cards.")
         return 0
@@ -1616,6 +1666,7 @@ def main(argv=None) -> int:
     if portable.needs_utf8():
         return portable.relaunch_in_utf8(sys.argv[1:] if argv is None else list(argv))
     args = build_parser().parse_args(argv)
+    load_identity()
     if not getattr(args, "dry_run", False):
         first_run()
     try:

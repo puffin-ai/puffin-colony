@@ -50,8 +50,10 @@ def no_cmux_app(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def outside_claude_code(monkeypatch):
     """The suite may run inside a Claude Code session, whose $CLAUDECODE would make plain `colony` take the
-    in-session path. A test that wants that path sets it."""
+    in-session path, and whose $CLAUDE_CODE_SESSION_ID would save and load a session's identity. A test that wants that
+    path sets them."""
     monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)
