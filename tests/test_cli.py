@@ -526,7 +526,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "stop", "handoff", "live", "gate", "sync", "tier",
+COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "merge", "stop", "handoff", "live", "gate", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
             "tidy", "idea", "card", "release", "setup", "skill-install", "tools")
 

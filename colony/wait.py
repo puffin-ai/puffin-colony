@@ -773,6 +773,10 @@ def say(config: dict, args) -> int:
     lines = [compose(to, sentence, me) for sentence in said]
     if getattr(args, "dry_run", False):
         return dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
+    if getattr(args, "private", False):
+        from colony import private
+
+        return private.send(config, to, lines, me)
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
     number = transport.send(config, to, "\n".join(lines))  # one comment: every line goes out, or none does
@@ -829,6 +833,13 @@ def post(config: dict, args) -> int:
     if me != cli.LEAD and card is not None and any(DONE.match(sentence) for sentence in said):
         in_review(config, card)
     return 0
+
+
+def read_private(config: dict, args) -> int:
+    """`colony private`: the private lines for this session (private.read)."""
+    from colony import private
+
+    return private.read(config, args)
 
 
 def board_number(config: dict) -> str:
@@ -900,7 +911,12 @@ def add_commands(sub, wait_parser) -> None:
                    help="start the sentence with urgent:, so the other lead gets it at once instead of in its digest")
     p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
                    help="print the lines it would post, and post nothing")
+    p.add_argument("--private", action="store_true",
+                   help="on a public repo, post on the private board in [messages] private_repo, with a pointer alone "
+                        "on the public board: for a security finding, a key's whereabouts, or anything not for strangers")
     p.set_defaults(run=say)
+    p = sub.add_parser("private", help="a lead: print the private lines for this session that colony hasn't shown yet")
+    p.set_defaults(run=read_private)
     p = sub.add_parser("post", help="post a line for another session on a card (the board in hack mode), through "
                                     "the transport")
     p.add_argument("words", nargs="+", action=PostWords, metavar="[card] name sentence",

@@ -58,7 +58,7 @@ A lead gathers the lines for it for 2 minutes, `[messages] lead_digest_minutes`,
 
 **How it arrives.** Each lead keeps `colony wait` running in the background. When you send your lead a prompt, the prompt hook first prints the new posts addressed to it. An `@login` is a real GitHub mention too, so the person gets GitHub's notification.
 
-**Good posts** say what changed and where, ask for one thing, or warn the team. You can post yourself, from GitHub on any device. Never paste a key or a token: the board is an issue, and anyone with access to the repo reads it.
+**Good posts** say what changed and where, ask for one thing, or warn the team. You can post yourself, from GitHub on any device. Never paste a key or a token: the board is an issue, and anyone with access to the repo reads it. On a public repo that is everyone: for a security finding, or where a key is kept, a lead runs `colony say --private <lead> "..."`, which needs `[messages] private_repo`, a private repo the team owns; the board then shows a pointer alone, and the other lead reads the line with `colony private`.
 
 **Lines with a fixed shape.** `AGENTS.md` asks every agent for these:
 
