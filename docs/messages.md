@@ -71,7 +71,7 @@ Each session keeps one `colony wait` running in the background, all session. The
 3. sends the last ETag with each request, so a quiet poll comes back as `304 Not Modified` and costs nothing against GitHub's rate limit;
 4. prints the lines that are due, each as `#<issue> <line>`, and exits.
 
-The agent reads what it printed, starts the wait again at once, and then acts on the lines. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
+The agent reads what it printed, starts the wait again at once, and then acts on the lines. A session keeps one wait: a newer one takes over, and the older one stops at its next poll, printing that a newer wait runs, so the agent starts no other. When a full issue moves to a fresh one, its closing note copies the open lines as `carried: …`, which wake no one a second time. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
 
 A session's first wait reads the last hour, so a start line the lead posted while the builder was opening still counts. The wait keeps its read time, its ETag, the lines it has gathered and the lines it has already printed in `~/.colony/<project>/<session>.json`. Its `unread` key lists the lines for this session it hasn't printed yet, each as `{card, author, body, url}`, for the prompt hook. Gathered lines stay there until they print, so a restart loses none. After 40 failed polls in a row, about 10 minutes, the wait prints the error and exits. A 401 from GitHub adds the hint `run: gh auth login`.
 

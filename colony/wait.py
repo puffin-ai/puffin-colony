@@ -67,6 +67,7 @@ PREFIX = re.compile(r"^\[[^\[\]\n]{1,80}'s [^\[\]\n]{1,40}\]\s*")  # a board pos
 MENTION = re.compile(r"(?<![\w@./+-])@([A-Za-z0-9][A-Za-z0-9-]*)")  # @<login>, never the middle of an email
 LEADING_MENTIONS = re.compile(r"^(?:@[A-Za-z0-9][A-Za-z0-9-]*[\s,:]*)+")
 ALL = "all"  # @all reaches every lead, and every builder whose lead signed it
+CARRIED = "carried: "  # before a line a board move copied into its closing note, which every wait read already
 REDIRECTED = "redirected: "  # before a line for one of the lead's helpers that the lead didn't sign
 AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
@@ -212,6 +213,8 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     for raw in body.splitlines():
         line = MARKUP.sub("", raw)
         text = MARKUP.sub("", PREFIX.sub("", line))
+        if text.startswith(CARRIED):
+            continue  # a copy a board move carried over: its first posting woke whoever it was for
         found = LINE.match(text)
         signed = SIGNED.search(text)
         sender = signed[1].lower() if signed else ""
@@ -485,6 +488,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     state.setdefault("unread", [])
     state.setdefault("listed", [])
     failures, digest_at = 0, clock.now() + digest
+    listener = claim_listener(project, me.name)
     add_stale(state, stale)
     while True:
         listed = set(state["listed"])  # what the file's cache holds since the last write, unless the hook took it
@@ -496,6 +500,11 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             if failures >= GIVE_UP:
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
                 return 1
+        if not still_listening(project, me.name, listener):
+            # Another wait for this session started since: it reads every line itself, so this one stops without
+            # writing the state they share, and says so, so its session starts no third one.
+            print(f"{cli.NAME} wait: a newer {cli.NAME} wait for {me.name} runs, so this one stopped: start no other")
+            return 0
         state["polled_at"] = time.time()
         if heartbeat is not None:
             keep_beat(heartbeat)
@@ -519,6 +528,20 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         write_json(path, state)
         if not more:
             clock.sleep(INTERVAL)
+
+
+def claim_listener(project: str, name: str) -> str:
+    """Make this wait the one that listens for session `name`, and return its token: a session keeps one wait, and
+    a second one, such as an orphan left from before, would deliver each line twice."""
+    token = uuid.uuid4().hex
+    write_json(state_path(project, f"{name}-listener"), {"pid": os.getpid(), "token": token})
+    return token
+
+
+def still_listening(project: str, name: str, token: str) -> bool:
+    """Whether this wait is still the one that listens for `name`: false once a newer wait claimed it."""
+    held = read_json(state_path(project, f"{name}-listener"), None)
+    return not isinstance(held, dict) or held.get("token") in (token, None)
 
 
 def lead_name(config: dict, args) -> str:

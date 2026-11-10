@@ -116,7 +116,7 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 In hack mode, follow the Hack section instead.
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
+You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, unless it said a newer `colony wait` runs, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 How much you tell the person is their setting. When `colony` prints that they want a quiet lead, `[people.<person>] quiet_lead = true`, act on notifications silently, and write to the person only to converse or when they must act; your own status lines go on the board, never in chat. By default, `quiet_lead = false`, keep the person posted on progress as cards start, finish and merge.
 
@@ -154,7 +154,7 @@ In hack mode, follow the Hack section instead.
 
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
-1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
+1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
 2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add {worktrees}/{project}-<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 4. Run `{fast_check}` once, when the change and its tests are done, and fix what it reports; run it again only after a fix.
@@ -209,7 +209,7 @@ Other agents, such as Codex, use `tools/board`. `tools/board unread` prints ever
 
 ### Hack lead
 
-You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
+You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, unless it said a newer `colony wait` runs, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
 
 1. Turn your person's request into tasks of one concern each, inside your person's folders. Before a task edits a folder another person owns, ask its owner on the board, `colony post @<login> "<what you need there>"`, and wait for their yes. Only the team lead reassigns work or moves a folder.
 2. Do a small task yourself. For the rest, open builders, up to `max_builders` (default 4): `colony open <name>`.
@@ -223,7 +223,7 @@ You talk with your person, split their part of the demo into tasks inside the fo
 
 You build one task at a time for your own person's lead. Your name is the one you were given.
 
-1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start:` line from your lead gives you a task.
+1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start:` line from your lead gives you a task.
 2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add {worktrees}/{project}-<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. When the branch lands, the next `colony merge` removes the worktree if it is clean, so finish each task by committing or dropping what it holds. Run the install command there. Work only there.
 3. Run `{fast_check}`, and fix what it reports. Write a test for a bug fix or for new logic.
 4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass.

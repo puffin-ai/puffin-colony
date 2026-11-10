@@ -275,9 +275,12 @@ def test_tidy_rotates_the_coordination_issue_at_200_comments_and_the_watcher_fol
     assert create[create.index("--body") + 1].endswith("Continues #5, closed at 200 comments.")
     closing = gh.called("issue", "comment", "5")[0][-1]
     assert closing.startswith("Closed at 200 comments; this thread goes on in #31.")
-    assert ("- for ana-lead: question: can you take #12? (from sam-lead)\n"
-            "- for sam-lead: blocked: main is red (from bo-lead)\n"
-            "- for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    assert ("- carried: for ana-lead: question: can you take #12? (from sam-lead)\n"
+            "- carried: for sam-lead: blocked: main is red (from bo-lead)\n"
+            "- carried: for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    # A copied line wakes no one a second time: every wait read it on the old issue already.
+    ana = wait.lead_session({"project": {"name": "demo"}}, "ana-lead")
+    assert wait.taken(closing, ana, "5") == []
     assert "note 1 " not in closing and "an old question" not in closing
     assert gh.called("issue", "close") == [["issue", "close", "5", "--repo", "acme/demo"]]
     assert not gh.called("issue", "create", "--repo", "acme/demo", "--title", "Needs Ana")

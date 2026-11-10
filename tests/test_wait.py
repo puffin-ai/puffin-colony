@@ -560,3 +560,17 @@ def test_a_line_between_leads_waits_for_the_digest_unless_it_is_urgent(gh, monke
     assert hurried == "for ana-web-lead: urgent: builder-7 waits on your API (from ana-main-lead)"
     web = wait.Session(cli.LEAD, frozenset({"ana-web-lead"}))
     assert wait.taken(calm, web, "5") == [(calm, False)] and wait.taken(hurried, web, "5") == [(hurried, True)]
+
+
+def test_a_newer_wait_for_the_same_session_makes_the_older_one_stop(gh, monkeypatch, capsys):
+    me = wait.Session(name="builder-2", names=frozenset({"builder-2"}), leads=frozenset({"lead"}))
+
+    def a_second_wait_starts(repo, state, session):
+        wait.write_json(wait.state_path("demo", "builder-2-listener"), {"pid": -1, "token": "newer"})
+        state["pending"].append(["for builder-2: start: card 4 (from lead)", True])
+        return False
+    monkeypatch.setattr(wait, "poll", a_second_wait_starts)
+    assert wait.wait("acme/demo", "demo", me, clock=Clock()) == 0
+    out = capsys.readouterr().out
+    assert out == "colony wait: a newer colony wait for builder-2 runs, so this one stopped: start no other\n"
+    assert not wait.state_path("demo", "builder-2").exists()  # the newer wait reads the line itself

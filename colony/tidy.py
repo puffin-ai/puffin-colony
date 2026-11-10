@@ -287,7 +287,8 @@ def rotate(config: dict, number: int, info: dict, new: int | None = None) -> int
     comments = json.loads(wait.gh("issue", "view", str(number), "--repo", repo, "--json", "comments") or "{}")
     items = open_items((comments.get("comments") or [])[-SUMMARY_COMMENTS:], NEEDS.fullmatch(title) is not None)
     new = new or fresh_issue(repo, number, info)
-    listed = "\n".join(f"- {item[:wait.MAX_LINE]}" for item in items) or "- none found"
+    # Each copy starts `carried:`, so no wait takes it a second time: every wait read it on the old issue.
+    listed = "\n".join(f"- {wait.CARRIED}{item[:wait.MAX_LINE]}" for item in items) or "- none found"
     wait.gh("issue", "comment", str(number), "--repo", repo, "--body",
             f"Closed at {count} comments; this thread goes on in #{new}.\n\nOpen items from its last "
             f"{SUMMARY_COMMENTS} comments:\n{listed}")
