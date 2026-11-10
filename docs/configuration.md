@@ -22,7 +22,7 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change is never TINY. |
 | `generated` | no | `["src/generated/*"]` | Globs for files a build writes. When a merge conflicts only in these, Colony takes the card's side and runs `regen`. Their lines don't count toward a tier. |
 | `regen` | no | `"npm run codegen"` | The command that rebuilds the generated files. |
-| `check_env_file` | no | `"~/.config/myapp/check.env"` | A local file of `KEY=VALUE` lines added to the checks' environment. A relative path starts at the repo root. Keep it out of git. Colony never prints its values. |
+| `check_env_file` | no | `"~/.config/myapp/check.env"` | A local file of `KEY=VALUE` lines added to the checks' environment. A relative path starts at the checkout the command runs in, and when the file isn't there, at the repo's main checkout, so a helper's worktree and the merge worktree use the main checkout's `.env.local`. Keep it out of git. Colony never prints its values. |
 | `install` | no | `"npm ci"` | Runs in each new worktree: the batch's, the walker's and each fixer's. |
 | `trailer` | no | `"Assisted-by: claude-code:claude-opus-5-5"` | The line every batch, fixer and retro commit ends with. Default: `Assisted-by: claude-code:<the fixer's model>`. |
 

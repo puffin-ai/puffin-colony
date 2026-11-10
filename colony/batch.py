@@ -226,12 +226,40 @@ def trailer(config: dict) -> str:
     return config["project"].get("trailer") or f"Assisted-by: claude-code:{config['roles']['fixer']['model']}"
 
 
+def main_checkout(root: Path) -> Path | None:
+    """The repo's main checkout, which every worktree of it shares: the folder that holds its .git."""
+    run = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=root, capture_output=True, text=True)
+    if run.returncode or not run.stdout.strip():
+        return None
+    common = Path(run.stdout.strip())
+    common = common if common.is_absolute() else (root / common).resolve()
+    return common.parent if common.name == ".git" else None
+
+
+def env_file(config: dict, root: Path) -> Path | None:
+    """[project] check_env_file: an absolute path, else the file in `root`, else in the repo's main checkout, since
+    a worktree, such as a helper's or the merge's, has no copy of an untracked file such as .env.local. None when
+    the setting is empty; a ColonyError when no such file is found."""
+    named = config["project"].get("check_env_file")
+    if not named:
+        return None
+    path = Path(named).expanduser()
+    main = main_checkout(root)
+    places = [path] if path.is_absolute() else list(dict.fromkeys([root / path, *([main / path] if main else [])]))
+    found = next((place for place in places if place.is_file()), None)
+    if found is None:
+        raise cli.ColonyError(f"[project] check_env_file names {named}, which is in neither "
+                              f"{' nor '.join(str(place.parent) for place in places)}: put it there, or clear the "
+                              "setting")
+    return found
+
+
 def checks_env(config: dict, root: Path) -> dict:
-    """The environment for the checks: check_env_file's values (a path from the repo `root`) added, and provider keys
-    dropped at a zero budget."""
+    """The environment for the checks: check_env_file's values (env_file) added, and provider keys dropped at a zero
+    budget."""
     project, env = config["project"], dict(os.environ)
-    if project.get("check_env_file"):
-        for line in (root / Path(project["check_env_file"]).expanduser()).read_text().splitlines():
+    if (found := env_file(config, root)) is not None:
+        for line in found.read_text().splitlines():
             key, sep, value = line.strip().removeprefix("export ").partition("=")
             if sep and key and not key.startswith("#"):
                 env[key.strip()] = value.strip().strip("'\"")

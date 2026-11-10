@@ -423,3 +423,24 @@ def test_sync_stops_on_a_conflict_outside_the_generated_files(world, capsys):
 def test_sync_is_a_command_on_the_command_line():
     args = cli.build_parser().parse_args(["sync", "lead/integration"])
     assert (args.branch, args.run) == ("lead/integration", cli.sync)
+
+
+ENV_HACK = HACK.replace('fast_check = "{fast_check}"\n', 'fast_check = "{fast_check}"\ncheck_env_file = ".env.local"\n')
+
+
+def test_a_merge_from_a_helpers_worktree_reads_the_env_file_of_the_main_checkout(world, capsys, monkeypatch):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    (world.clone / ".env.local").write_text("CHECK_TOKEN=yes\n")  # untracked, so no worktree has a copy
+    helper = world.tmp / "ana-login"
+    git(world.clone, "worktree", "add", "-q", str(helper), "ana/login")
+    monkeypatch.chdir(helper)
+    config = world.config(fast_check='test "$CHECK_TOKEN" = yes && grep -q good a.txt', template=ENV_HACK)
+    assert land(config, "ana/login") == 0, capsys.readouterr()
+    assert world.on_origin_main("a.txt") == "good"
+
+
+def test_an_env_file_nowhere_says_where_it_looked(world, monkeypatch):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    config = world.config(template=ENV_HACK)
+    with pytest.raises(cli.ColonyError, match=r"check_env_file names \.env\.local, which is in neither"):
+        land(config, "ana/login")
