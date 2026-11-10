@@ -18,13 +18,14 @@ class GitHub:
 
     def __init__(self, monkeypatch, visibility="PUBLIC"):
         self.visibility, self.calls, self.comments, self.pointers = visibility, [], [], []
+        self.private_visibility = "PRIVATE"
         monkeypatch.setattr(wait, "gh", self.gh)
         monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: self.pointers.append(line) or 7)
 
     def gh(self, *args: str) -> str:
         self.calls.append(args)
         if args[:2] == ("repo", "view"):
-            return self.visibility + "\n"
+            return (self.private_visibility if args[2] == "acme/team-private" else self.visibility) + "\n"
         if args[:2] == ("issue", "list"):
             return json.dumps([{"number": 3, "title": "Private board: demo"}])
         if args[:2] == ("issue", "comment"):
@@ -76,3 +77,20 @@ def test_colony_private_prints_the_lines_for_this_session_once(lead, monkeypatch
     assert capsys.readouterr().out == "for ana-main-lead: the staff token is in 1Password (from ben-main-lead)\n"
     assert private.read(PRIVATE, Namespace(person=None)) == 0
     assert capsys.readouterr().out == "No new private line for ana-main-lead.\n"
+
+
+def test_a_private_repo_that_is_public_gets_no_private_line(lead, monkeypatch):
+    github = GitHub(monkeypatch)
+    github.private_visibility = "PUBLIC"
+    with pytest.raises(cli.ColonyError, match="acme/team-private is not private"):
+        wait.say(PRIVATE, Namespace(person=None, to="ben-main-lead", sentence="the flaw", private=True))
+    assert github.comments == [] and github.pointers == []
+
+
+def test_visibility_is_read_live_for_each_private_line(lead, monkeypatch):
+    github = GitHub(monkeypatch, visibility="PRIVATE")
+    assert wait.say(CONFIG, Namespace(person=None, to="ben-main-lead", sentence="one", private=True)) == 0
+    github.visibility = "PUBLIC"  # made public meanwhile
+    with pytest.raises(cli.ColonyError, match="set \\[messages\\] private_repo"):
+        wait.say(CONFIG, Namespace(person=None, to="ben-main-lead", sentence="two", private=True))
+    assert github.pointers == ["for ben-main-lead: one (from ana-main-lead)"]

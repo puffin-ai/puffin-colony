@@ -11,28 +11,25 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
 from colony import cli, presence, wait
 
 TITLE = "Private board: {project}"
-VISIBILITY_EVERY = 24 * 3600  # how long the repo's visibility is remembered
 
 
-def is_public(config: dict) -> bool:
-    """Whether the project's repo is public, as GitHub says, remembered for a day; unknown counts as public."""
-    project, repo = config["project"]["name"], config["project"]["repo"]
-    path = wait.state_path(project, "visibility")
-    held = wait.read_json(path, {})
-    if isinstance(held, dict) and time.time() - float(held.get("at", 0)) < VISIBILITY_EVERY:
-        return bool(held.get("public", True))
+def private(repo: str) -> bool:
+    """Whether GitHub says, now, that a repo is private or internal; an error or any other answer counts as public,
+    since a private line must never reach a public issue, and a repo can be made public at any time."""
     try:
         seen = wait.gh("repo", "view", repo, "--json", "visibility", "-q", ".visibility").strip().upper()
     except wait.GhError:
-        return True
-    public = seen not in ("PRIVATE", "INTERNAL")
-    wait.write_json(path, {"public": public, "at": time.time()})
-    return public
+        return False
+    return seen in ("PRIVATE", "INTERNAL")
+
+
+def is_public(config: dict) -> bool:
+    """Whether the project's repo is public, as GitHub says now."""
+    return not private(config["project"]["repo"])
 
 
 def board(config: dict) -> tuple[str, int]:
@@ -43,6 +40,9 @@ def board(config: dict) -> tuple[str, int]:
         raise cli.ColonyError(f"{config['project']['repo']} is public, so its board is too: set [messages] "
                               f"private_repo = \"<owner>/<a private repo the team owns>\" in {cli.DIR}/{cli.CONFIG_NAME} "
                               "for private lines")
+    if not private(repo):
+        raise cli.ColonyError(f"[messages] private_repo = {repo!r}, and {repo} is not private, as GitHub says now: "
+                              "make it private, or name a private repo, before any private line goes there")
     title = TITLE.format(project=config["project"]["name"])
     listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{title}" in:title',
                                 "--json", "number,title") or "[]")
