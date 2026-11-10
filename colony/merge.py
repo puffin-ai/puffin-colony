@@ -3,8 +3,12 @@
 Only in hack mode, and only when `[gate] merge_after_fast_check = true`, it fetches, merges the branch into the
 base in Colony's own merge worktree, `<worktrees>/<project>-merge`, runs the fast check there on the merged result,
 and pushes the base only when the check passes. Otherwise it pushes the branch and opens a pull request into the
-base: in another mode, when merging is off, or when the merge conflicts, the check fails, or the base moved on under
-the check twice in a row. It never force-pushes, and one merge runs at a time on a computer. When it lands the branch,
+base: in another mode, when merging is off, or when the merge conflicts, the check fails twice, or the base moved on
+under the check twice in a row. A failed check runs once more, so a flaky test never blocks a good branch; each run's
+whole output stays in ~/.colony/<project>/merge-logs/, and the message names the summary line and the failing tests.
+When the check fails twice, the base runs alone, unless Colony landed it green itself: a base that fails on its own
+gets no pull request, since the branch is not to blame, and one `@all urgent:` line on the board for that commit. It
+never force-pushes, and one merge runs at a time on a computer. When it lands the branch,
 it posts the last good build on the board, `[merged] <branch> → <base> <short sha>, fast check passed`, so every agent
 knows which commit to go back to.
 
@@ -23,12 +27,22 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from colony import batch, cli, portable, transport, wait
 
 TRIES = 2  # merges in a row before a base that keeps moving under the check sends the branch to a pull request
 REJECTED = re.compile(r"\[rejected\]|non-fast-forward|fetch first", re.I)
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# A test runner's summary, such as `Tests 1464 passed (1464)`, `=== 1 failed, 821 passed in 3s ===` or
+# `Tests: 1 failed, 4 passed`, and the lines that name a failing test, such as `FAIL src/a.test.ts > reads a`,
+# pytest's `FAILED tests/test_a.py::test_b`, jest's `● reads a` or TAP's `not ok 3 reads a`.
+SUMMARY = re.compile(r"\b\d+\s+(?:passed|failed|failing|passing|errors?)\b", re.I)
+FAILING = re.compile(r"^(?:FAIL(?:ED)?|✗|×|✕|●|not ok)\s+\S")
+NAMED = 5  # the failing tests a message names
+LOGS_KEPT = 50
 
 
 def _git(cwd, *args: str, check: bool = True) -> str:
@@ -80,24 +94,131 @@ def ready(root: Path, wt: Path, base: str) -> None:
         _git(root, "worktree", "add", "--detach", str(wt), f"origin/{base}")
 
 
+def readable(output: str) -> list[str]:
+    """The output's lines without colour codes, blank lines, or rule lines such as ⎯⎯⎯⎯ or ====, each squeezed."""
+    lines = (" ".join(ANSI.sub("", raw).split()) for raw in output.splitlines())
+    return [line for line in lines if any(ch.isalnum() for ch in line)]
+
+
+def safe(line: str, what: str = "line") -> str:
+    """The line, or a note in its place when it looks like a secret."""
+    return f"its {what} looked like a secret, so it stays out" if transport.holds_secret(line) else line
+
+
 def _shell(cmd: str, cwd: Path, env: dict) -> tuple[bool, str]:
-    """Run one of the config's command strings, and say whether it passed, with its last line of output. A last
-    line that looks like a secret stays out."""
+    """Run one of the config's command strings, and say whether it passed, with its last readable line of output. A
+    last line that looks like a secret stays out."""
     command, shell, env = portable.shell(cmd, env)
     run = subprocess.run(command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
+    lines = readable(f"{run.stdout}\n{run.stderr}")
+    return run.returncode == 0, safe((lines[-1] if lines else "no output")[:200], "last line")
+
+
+@dataclass
+class Check:
+    """One run of the fast check: whether it passed, the test runner's summary line, the failing tests it named,
+    and the file that holds its whole output."""
+    passed: bool
+    summary: str
+    failing: list[str]
+    log: Path
+
+    def failed(self, where: str) -> str:
+        named = f"; failing: {', '.join(self.failing)}" if self.failing else ""
+        return f"the fast check failed {where}: {self.summary}{named}"
+
+
+def log_path(config: dict, name: str, run: str) -> Path:
+    """Where one run's whole output goes: ~/.colony/<project>/merge-logs/<name>-<time>-<run>.log, the newest
+    LOGS_KEPT of them kept."""
+    folder = wait.state_path(config["project"]["name"], "merge-logs").with_suffix("")
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in sorted(folder.glob("*.log"), key=lambda path: path.stat().st_mtime)[:-LOGS_KEPT]:
+        old.unlink(missing_ok=True)
+    return folder / f"{re.sub(r'[^\w.-]', '-', name)}-{time.strftime('%Y%m%d-%H%M%S')}-{run}.log"
+
+
+def run_check(command: str, cwd: Path, env: dict, log: Path) -> Check:
+    """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests."""
+    shell_command, shell, env = portable.shell(command, env)
+    run = subprocess.run(shell_command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
     output = f"{run.stdout}\n{run.stderr}"
-    last = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "no output")[:200]
-    if transport.holds_secret(last):
-        last = "its last line looked like a secret, so it stays out"
-    return run.returncode == 0, last
+    log.write_text(output)
+    lines = readable(output)
+    summaries = [line for line in lines if SUMMARY.search(line)]
+    summary = (summaries[-1] if summaries else lines[-1] if lines else "no output")[:200]
+    failing = list(dict.fromkeys(line[:120] for line in lines if FAILING.match(line) and not transport.holds_secret(line)))
+    return Check(run.returncode == 0, safe(summary, "summary line"), failing[:NAMED], log)
 
 
-def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str, str]:
+def checked_bases(config: dict) -> tuple[Path, dict]:
+    """The file that remembers the base commit Colony last landed green, and the red ones it warned the team of."""
+    path = wait.state_path(config["project"]["name"], "merge-checks")
+    found = wait.read_json(path, {})
+    return path, found if isinstance(found, dict) else {}
+
+
+def remember_green(config: dict, head: str) -> None:
+    """Remember the commit Colony just pushed to the base: it passed the fast check, so a later merge whose check
+    fails needs no run on the base to know the base is green."""
+    path, found = checked_bases(config)
+    found["green"] = head
+    wait.write_json(path, found)
+
+
+def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dict, command: str) -> Check | None:
+    """The fast check's run on origin/<base> alone, at `sha`, when it fails there too, else None. A base Colony
+    landed green itself, or one whose install fails here, isn't run."""
+    path, found = checked_bases(config)
+    if found.get("green") == sha:
+        return None
+    ready(root, wt, base)
+    if config["project"].get("install") and not _shell(config["project"]["install"], wt, env)[0]:
+        return None
+    result = run_check(command, wt, env, log_path(config, base, "base"))
+    if result.passed:
+        remember_green(config, sha)
+        return None
+    return result
+
+
+def warn_red_base(config: dict, base: str, sha: str, red: Check) -> None:
+    """Post once per red base commit, for every agent: `@all urgent: <base> <sha> fails the fast check on its own`."""
+    path, found = checked_bases(config)
+    warned = [s for s in found.get("red", []) if isinstance(s, str)]
+    if sha in warned:
+        return
+    named = f": {', '.join(red.failing[:2])}" if red.failing else ""
+    line = (f"@all urgent: {base} {sha[:7]} fails the fast check on its own ({red.summary}){named}; every merge "
+            "waits until a fix lands")
+    try:
+        transport.send(config, f"@{wait.ALL}", line)
+    except cli.ColonyError as e:
+        print(f"{cli.NAME} merge: the board didn't get the warning that {base} is red: {e}", file=sys.stderr)
+        return
+    found["red"] = [*warned, sha][-20:]
+    wait.write_json(path, found)
+
+
+@dataclass
+class Landed:
+    """What a merge did: whether the branch is on the base, what happened, the commit it pushed or "", the log to
+    read, and whether a pull request should follow a failure."""
+    landed: bool
+    what: str
+    head: str = ""
+    log: Path | None = None
+    pr: bool = True
+
+
+def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
     """Merge the branch into origin/<base> in the merge worktree, run the install and the fast check there, and push
-    the base when the check passes. Return whether the branch is on the base, what happened, and the commit it pushed,
-    or "" when it pushed none."""
+    the base when the check passes. A failed check runs once more, so a flaky test never blocks a good branch; when
+    it fails again, the base runs alone, and a base that fails on its own gets no pull request, since the branch is
+    not to blame."""
     project = config["project"]
     base, env = project["base"], batch.checks_env(config, root)
+    command = batch.every_area(config, batch.fast_check(project))
     for attempt in range(TRIES):
         if attempt:
             _git(root, "fetch", "origin")
@@ -108,23 +229,37 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> tuple[bool, str, st
         if batch._run(["git", "merge", "--no-ff", "--no-edit", "-m", message, ref], wt, check=False).returncode:
             paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
             _git(wt, "merge", "--abort", check=False)
-            return False, f"merging it into {base} conflicts in {', '.join(paths) or 'the merge'}", ""
+            return Landed(False, f"merging it into {base} conflicts in {', '.join(paths) or 'the merge'}")
         head = _git(wt, "rev-parse", "HEAD")
         if head == before:
-            return True, f"{branch} is already in {base}: nothing to push", ""
+            return Landed(True, f"{branch} is already in {base}: nothing to push")
         if project.get("install"):
             installed, last = _shell(project["install"], wt, env)
             if not installed:
-                return False, f"the install failed in the merge worktree: {last}", ""
-        passed, last = _shell(batch.every_area(config, batch.fast_check(project)), wt, env)
-        if not passed:
-            return False, f"the fast check failed on the merged result: {last}", ""
+                return Landed(False, f"the install failed in the merge worktree: {last}")
+        first = run_check(command, wt, env, log_path(config, branch, "check"))
+        passed, note = f"({first.summary})", ""
+        if not first.passed:
+            second = run_check(command, wt, env, log_path(config, branch, "again"))
+            if not second.passed:
+                red = base_fails(config, root, wt, base, before, env, command)
+                if red is not None:
+                    warn_red_base(config, base, before, red)
+                    return Landed(False, f"{base} itself fails the fast check at {before[:9]}, so {branch} is not "
+                                         f"to blame: {red.failed('on its own')}. Run `{cli.NAME} merge {branch}` "
+                                         f"again once a fix lands", log=red.log, pr=False)
+                return Landed(False, second.failed("twice on the merged result"), log=second.log)
+            failing = ", ".join(first.failing) or first.summary
+            passed = f"on its second run ({second.summary})"
+            note = f"; its first run failed ({failing}), so a test there is flaky: its log is {first.log}"
         push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
         if push.returncode == 0:
-            return True, f"merged {branch} into {base} at {head[:9]}: the fast check passed ({last})", head
+            remember_green(config, head)
+            return Landed(True, f"merged {branch} into {base} at {head[:9]}: the fast check passed {passed}{note}",
+                          head)
         if not REJECTED.search(push.stderr):
             raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
-    return False, f"{base} moved on {TRIES} times while the fast check ran", ""
+    return Landed(False, f"{base} moved on {TRIES} times while the fast check ran")
 
 
 def post_landed(config: dict, branch: str, head: str) -> None:
@@ -287,11 +422,16 @@ def run(config: dict, args) -> int:
         print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
     with one_at_a_time(config):
-        landed, what, head = land(config, root, wt, branch)
-    if landed:
-        print(what)
-        if head:
-            post_landed(config, branch, head)
+        result = land(config, root, wt, branch)
+    if result.landed:
+        print(result.what)
+        if result.head:
+            post_landed(config, branch, result.head)
         return 0
-    print(f"not merged: {what}. Pull request: {open_pr(config, root, branch, what)}")
+    log = f"; full log: {result.log}" if result.log else ""
+    if not result.pr:
+        print(f"not merged: {result.what}{log}.")
+        return 1
+    # The pull request gets the reason alone: a path on this computer means nothing on GitHub.
+    print(f"not merged: {result.what}{log}. Pull request: {open_pr(config, root, branch, result.what)}")
     return 1

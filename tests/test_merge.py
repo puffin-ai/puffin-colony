@@ -1,6 +1,7 @@
 """Tests for `colony merge <branch>`: real git repositories (a bare origin, the person's clone and a teammate's clone)
 and a stand-in `gh` that logs its calls, so nothing reaches GitHub."""
 import json
+import re
 import os
 import subprocess
 import sys
@@ -64,6 +65,9 @@ merge_after_fast_check = {allowed}
 provider_dollars = 0
 """
 PASSES = "grep -q good a.txt"
+# A check that fails only on a change holding "bad", printing what a test runner prints, rule lines last.
+BRANCH_FAILS = ("if grep -qs bad a.txt b.txt; then echo 'FAIL src/a.test.ts > reads a'; echo ' Tests  1 failed | 4 passed';"
+                " echo '⎯⎯⎯⎯⎯⎯⎯⎯'; exit 1; fi; echo ' Tests  5 passed'")
 
 
 def git(cwd, *args) -> str:
@@ -172,9 +176,9 @@ def test_a_second_merge_reuses_the_merge_worktree(world, capsys):
 def test_a_failing_fast_check_opens_a_pr_and_leaves_the_base(world, capsys):
     world.branch("ana/broken", {"a.txt": "bad\n"})
     before = world.origin_main()
-    assert land(world.config(fast_check="echo 3 failed; false"), "ana/broken") == 1
+    assert land(world.config(fast_check=BRANCH_FAILS), "ana/broken") == 1
     out = capsys.readouterr().out
-    assert "not merged: the fast check failed on the merged result: 3 failed." in out
+    assert "not merged: the fast check failed twice on the merged result: Tests 1 failed | 4 passed" in out
     assert out.strip().endswith("Pull request: https://github.com/acme/demo/pull/7")
     assert world.origin_main() == before
     assert git(world.origin, "rev-parse", "ana/broken") == git(world.clone, "rev-parse", "ana/broken")  # pushed
@@ -182,7 +186,53 @@ def test_a_failing_fast_check_opens_a_pr_and_leaves_the_base(world, capsys):
     assert len(create) == 1
     args = create[0]
     assert (args[args.index("--base") + 1], args[args.index("--head") + 1]) == ("main", "ana/broken")
-    assert "the fast check failed on the merged result: 3 failed" in args[args.index("--body") + 1]
+    body = args[args.index("--body") + 1]
+    assert "the fast check failed twice on the merged result: Tests 1 failed | 4 passed" in body
+    assert "full log" not in body  # a path on this computer means nothing on GitHub
+
+
+def test_a_failed_check_names_its_failing_tests_and_keeps_the_whole_log(world, capsys):
+    world.branch("ana/broken", {"a.txt": "bad\n"})
+    land(world.config(fast_check=BRANCH_FAILS), "ana/broken")
+    out = capsys.readouterr().out
+    assert "failing: FAIL src/a.test.ts > reads a" in out and "⎯" not in out
+    log = Path(re.search(r"full log: (\S+\.log)", out)[1])
+    assert "Tests  1 failed | 4 passed" in log.read_text()
+
+
+def test_a_check_that_fails_once_then_passes_lands_and_names_the_flaky_test(world, capsys):
+    ran = (world.tmp / "ran").as_posix()
+    flaky = f"if [ -f {ran} ]; then echo 'Tests 5 passed'; else touch {ran}; echo 'FAIL src/t.test.ts > timer'; exit 1; fi"
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(world.config(fast_check=flaky), "ana/login") == 0
+    out = capsys.readouterr().out
+    assert "the fast check passed on its second run (Tests 5 passed)" in out
+    assert "FAIL src/t.test.ts > timer" in out and "flaky" in out
+    assert world.on_origin_main("a.txt") == "good"
+
+
+def test_a_base_that_fails_on_its_own_opens_no_pr_and_warns_the_team_once(world, capsys):
+    always = "echo 'FAIL src/old.test.ts > was red'; echo 'Tests 1 failed'; exit 1"
+    world.branch("ana/login", {"a.txt": "good\n"})
+    config = world.config(fast_check=always)
+    assert land(config, "ana/login") == 1
+    out = capsys.readouterr().out
+    assert "main itself fails the fast check" in out and "ana/login is not to blame" in out
+    assert not any(call[:2] == ["pr", "create"] for call in world.gh_calls())
+    posts = [call for call in world.gh_calls() if call[:2] == ["issue", "comment"]]
+    assert len(posts) == 1 and "@all urgent: main " in posts[0][-1] and "src/old.test.ts" in posts[0][-1]
+    assert land(config, "ana/login") == 1  # the same red base: no second post
+    assert len([call for call in world.gh_calls() if call[:2] == ["issue", "comment"]]) == 1
+
+
+def test_a_base_colony_landed_green_is_never_checked_again(world, capsys):
+    runs = world.tmp / "runs"
+    config = world.config(fast_check=f"echo run >> {runs.as_posix()}; " + BRANCH_FAILS)
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/broken", {"b.txt": "bad\n"})
+    assert land(config, "ana/login") == 0
+    assert land(config, "ana/broken") == 1
+    assert runs.read_text().count("run") == 3  # one pass, then two failing runs, and no run of the base
 
 
 def test_a_conflict_opens_a_pr_and_leaves_the_base(world, capsys):
@@ -199,7 +249,7 @@ def test_a_conflict_opens_a_pr_and_leaves_the_base(world, capsys):
 def test_an_open_pr_for_the_branch_is_reused(world, capsys):
     world.branch("ana/broken", {"a.txt": "bad\n"})
     (world.bin / "open-prs.json").write_text('[{"url": "https://github.com/acme/demo/pull/3"}]')
-    assert land(world.config(), "ana/broken") == 1
+    assert land(world.config(fast_check=BRANCH_FAILS), "ana/broken") == 1
     assert capsys.readouterr().out.strip().endswith("Pull request: https://github.com/acme/demo/pull/3")
     assert not any(call[:2] == ["pr", "create"] for call in world.gh_calls())
 
