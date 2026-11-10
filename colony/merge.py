@@ -509,7 +509,7 @@ def team_turn(config: dict, root: Path, branches: list[str]):
     no one has to announce them on the board; give it back afterwards, whatever happened. When origin refuses the
     ref, only this computer's lock holds, and it says so."""
     who = os.environ.get(cli.PERSON_ENV) or cli.default_person(config)
-    sha, held, told = turn_marker(root, who, branches), False, False
+    sha, held, told, unknown, unknown_since = turn_marker(root, who, branches), False, False, 0, 0.0
     while not held:
         held, why = push_turn(root, sha)
         if held:
@@ -520,7 +520,22 @@ def team_turn(config: dict, root: Path, branches: list[str]):
             break
         found = turn_holder(root)
         if found is None:
-            continue  # given back between the push and the look
+            # Given back between the push and the look, once: try again at once. Held by a turn that can't be read:
+            # wait like any other, never spin, and take it over once it has been unreadable past LOCK_STALE.
+            unknown += 1
+            unknown_since = unknown_since or time.time()
+            if unknown == 1:
+                continue
+            listed = _git(root, "ls-remote", "origin", LOCK_REF, check=False).split()
+            if listed and time.time() - unknown_since > LOCK_STALE:
+                held, _ = push_turn(root, sha, expect=listed[0])
+                continue
+            if not told:
+                print("waiting for the team's merge turn: another merge holds it")
+                told = True
+            SLEEP(LOCK_POLL)
+            continue
+        unknown, unknown_since = 0, 0.0
         other, words, taken = found
         if time.time() - taken > LOCK_STALE:
             held, _ = push_turn(root, sha, expect=other)

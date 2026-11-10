@@ -634,3 +634,18 @@ def test_several_branches_that_fail_together_land_one_at_a_time(world, capsys):
     out = capsys.readouterr().out
     assert "ana/login and ana/broken together: the fast check failed" in out and "so each lands alone" in out
     assert world.on_origin_main("a.txt") == "good"  # the good one landed alone
+
+
+def test_a_turn_whose_holder_cant_be_read_is_waited_on_never_spun_on(world, capsys, monkeypatch):
+    hold_the_turn(world)
+    monkeypatch.setattr(merge, "turn_holder", lambda root: None)  # listed on origin, but never read
+    naps = []
+
+    def nap(seconds):
+        naps.append(seconds)
+        if len(naps) == 3:
+            git(world.origin, "update-ref", "-d", LOCK)  # given back at last
+    monkeypatch.setattr(merge, "SLEEP", nap)
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(world.config(), "ana/login") == 0
+    assert naps == [merge.LOCK_POLL] * 3
