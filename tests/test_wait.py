@@ -395,7 +395,7 @@ def test_say_posts_a_line_for_another_lead_on_the_coordination_issue(gh, tmp_pat
 
 @pytest.mark.parametrize("session, to, why", [
     ("builder-1", "sam-lead", "say is for leads"),
-    ("lead", "sam", "another lead's name"),
+    ("lead", "sam", "say is for another lead.*use colony post sam"),
     ("lead", "ana-lead", "another lead's name"),
 ])
 def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, why):
@@ -574,3 +574,19 @@ def test_a_newer_wait_for_the_same_session_makes_the_older_one_stop(gh, monkeypa
     out = capsys.readouterr().out
     assert out == "colony wait: a newer colony wait for builder-2 runs, so this one stopped: start no other\n"
     assert not wait.state_path("demo", "builder-2").exists()  # the newer wait reads the line itself
+
+
+def test_a_mention_in_a_line_for_another_session_wakes_no_lead():
+    ana = wait.Session("lead", frozenset({"lead", "ana-main-lead"}), logins=frozenset({"ana"}))
+    assert wait.taken("[Sam's Claude] @ana can you take the export? (from sam-main-lead)", ana, "")
+    assert wait.taken("@all main is green (from sam-main-lead)", ana, "")
+    assert not wait.taken("for builder-1: start: the form, then tell @ana on the board (from sam-main-lead)", ana, "")
+    assert not wait.taken("for sam-main-lead: question: should I ask @ana first? (from builder-1)", ana, "")
+
+
+def test_post_all_means_at_all_and_say_to_a_helper_points_to_post(gh, monkeypatch, capsys):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    assert wait.post(CONFIG, Namespace(person=None, card=41, to="all", sentence="main is red", urgent=False)) == 0
+    assert "@all main is red" in capsys.readouterr().out
+    with pytest.raises(cli.ColonyError, match="for one of your helpers, use colony post builder-2"):
+        wait.say(CONFIG, Namespace(person=None, to="builder-2", sentence="hello"))

@@ -12,5 +12,5 @@ Read `.colony/playbook.md`, the Builder section, or the Hack section in hack mod
 - When you are unsure how a library behaves, read `.colony/rules/docs.md` when it exists, and look the call up before you guess.
 - Keep the change inside the card's folders. Anything else you find goes to the lead as a question with your default: `colony post <n> lead "question: <what you found>? I'm going with <your default>"`.
 - On a `stop:` line from your lead, commit and push what you have, post `done` with the branch and commit, and start nothing new until the next `start:`.
-- Your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`. Progress goes on the board, `colony board set <n> Last_update=now`, never in a line.
+- Your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`. To ask another person's lead directly, such as about an API they own, post `colony post @<their login> "question: …"`. When their answer changes your task, tell your own lead in your next `done` or `question:` line. Progress goes on the board, `colony board set <n> Last_update=now`, never in a line.
 - You belong to one lead, `$COLONY_LEAD`. Take a card with `colony take <n>`, which refuses one outside your lead's folders, and work only there. Never ask the person anything.

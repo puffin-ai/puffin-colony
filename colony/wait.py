@@ -224,7 +224,9 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
             continue  # another lead's helper: the line is for that lead
         if found and (to in me.names or (to == cli.LEAD and me.name == cli.LEAD and sender in me.helpers)):
             sentence = found[2]
-        elif mentions(text) & (me.logins | {ALL} if me.name == cli.LEAD else {ALL}):
+        elif not found and mentions(text) & (me.logins | {ALL} if me.name == cli.LEAD else {ALL}):
+            # A line `for <name>:` is that session's: a mention in it, such as "tell @ana on the board" in a builder's
+            # task, is talk about a person, and wakes no lead.
             sentence = LEADING_MENTIONS.sub("", text)
         elif me.name == cli.LEAD and found and found[1].lower() in me.helpers:
             sentence, redirected = found[2], True
@@ -734,7 +736,12 @@ def say(config: dict, args) -> int:
         said = [sentence if CANT_WAIT.match(sentence) else f"urgent: {sentence}" for sentence in said]
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
-    elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
+    elif not to.endswith(f"-{cli.LEAD}") and cli.SESSION_NAME.fullmatch(to) and to != ALL:
+        raise cli.ColonyError(f"say is for another lead, such as sam-lead, or @login; for one of your helpers, use "
+                              f"{cli.NAME} post {to} (you are {me})")
+    elif to == ALL:
+        to = f"@{ALL}"
+    elif to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
     lines = [compose(to, sentence, me) for sentence in said]
     if not hack(config):
@@ -766,6 +773,7 @@ def post(config: dict, args) -> int:
     # a named lead signs with its name, which its helpers take lines from; so does every lead on the hack board
     sender = lead_name(config, args) if me == cli.LEAD and (on_board or named()) else me
     to, said = args.to.lower(), sentences(args)
+    to = f"@{ALL}" if to == ALL else to  # `all` is everyone, as @all is
     if to.startswith("@"):
         own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
         check_mention(config, to, own, me)
