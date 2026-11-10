@@ -522,3 +522,13 @@ def test_the_leads_wait_runs_the_freeze_check_at_each_poll(tmp_path, monkeypatch
     me = wait.Session(name=cli.LEAD, names=frozenset({cli.LEAD}))
     assert wait.wait("acme/demo", "demo", me, freeze=lambda: checks.append(1)) == 0
     assert checks == [1]
+
+
+def test_the_hack_rules_let_the_person_trade_checks_for_speed_and_put_building_first():
+    text = CORE.read_text()
+    assert "even an hour before the demo" not in text  # a line that makes a lead refuse its person
+    assert "Your person may trade checks for speed" in text and "name what went unchecked" in text
+    assert "Build first" in text and "only when your person asks, or after the freeze" in text
+    assert "a teammate's yes to the same package counts" in text
+    hack = playbook_section("Hack")
+    assert "don't write to me" in hack and "until they write to you again" in hack

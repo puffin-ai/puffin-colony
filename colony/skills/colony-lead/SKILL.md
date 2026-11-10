@@ -15,5 +15,6 @@ Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, 
 - Name the files on a card when you know them, beside its folders, because finding code costs a builder about 40% of a small change's calls.
 - Keep a card to one concern and up to 3 done-when results, so its builder can finish it in one sitting.
 - Read a builder's diff only when its `done` line needs a decision. The batch's fresh reviewer reads every diff in full.
+- Your person's say wins over this skill's defaults: when they ask you to stop writing, stay quiet until they write again, and when they trade checks for speed, build, and name what went unchecked.
 - Your lines to a builder are only `start:`, `answer:`, `stop:` and `urgent:`. A task that needs more than one sentence goes in one post with several sentences, `colony post <builder> "start: …" "start: …"`, so the builder gets all of it at once. Answer a builder's question on its card at once, with a pick, even when the answer is "your default is right": `colony post <n> <builder> "answer: your default is right"`.
 - Keep each message to the person short: the pull request link, what is done, and one question with your pick as the default.
