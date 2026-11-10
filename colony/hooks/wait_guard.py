@@ -11,7 +11,9 @@ an endless `while true`, `while :` or `until false` loop; watch, `gh pr checks -
 `python -c` program that sleeps long or sleeps in a loop. A call made with run_in_background passes, and so does a
 command, loop or group the line ends with &. A `wait` on the jobs the same line started passes, and those jobs'
 waits become its own, so `sleep 600 & wait` is refused. A sleep whose length it can't read, such as `sleep $DELAY`,
-passes. It drops here-document bodies first, because a body is text a command reads, not a command.
+passes. It drops here-document bodies first, because a body is text a command reads, not a command. A line whose
+quoting Python's shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell reads
+fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
 It also refuses, in every mode and even in the background, a `git push` that force-pushes or deletes the base branch,
 `[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
@@ -54,6 +56,11 @@ HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 DURATION = re.compile(r"^(\d+(?:\.\d*)?|\.\d+)([smhd]?)$")
 UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+# The shell's operators, longest first. shlex reads a run of punctuation as one token, such as `);` after a $(...),
+# so tokens() splits a run into these.
+OPERATORS = ("&&", "||", ";;", "|&", ">>", "<<", ">&", "<&", "&>", ">|", "(", ")", ";", "&", "|", "<", ">")
+PUNCTUATION = set("();<>|&")
+RAW_SLEEP = re.compile(r"(?<![\w.-])sleep\s+([0-9.]+[smhd]?)(?![\w.])")
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
@@ -184,14 +191,44 @@ class Frame:
         self.words: list[str] = []
 
 
-def waits(command: str, in_loop: bool = False) -> list[str]:
-    """A reason for each foreground wait a command line holds, or none when it never waits in the foreground."""
+def operators(run: str) -> list[str]:
+    """A run of punctuation, such as `);` or `)|`, as the shell's operators in it."""
+    found = []
+    while run:
+        operator = next((op for op in OPERATORS if run.startswith(op)), run[0])
+        found.append(operator)
+        run = run[len(operator):]
+    return found
+
+
+def tokens(command: str) -> list[str]:
+    """The command line's words and operators. Raises ValueError when its quoting can't be read."""
     lexer = shlex.shlex(without_heredoc_bodies(command).replace("\n", ";"), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    found: list[str] = []
+    for token in lexer:
+        found += operators(token) if token and set(token) <= PUNCTUATION else [token]
+    return found
+
+
+def raw_sleeps(command: str) -> list[str]:
+    """The long sleeps in a line whose quoting can't be read, found in its plain text."""
+    found = []
+    for argument in RAW_SLEEP.findall(without_heredoc_bodies(command)):
+        seconds = sleep_seconds([argument])
+        if seconds is not None and seconds > MAX_SLEEP_SECONDS:
+            found.append(f"`sleep {argument}` waits {seconds:g} seconds in the foreground")
+    return found
+
+
+def waits(command: str, in_loop: bool = False) -> list[str]:
+    """A reason for each foreground wait a command line holds, or none when it never waits in the foreground. A line
+    whose quoting shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell
+    reads fine, runs, unless its plain text holds a long sleep."""
     try:
-        tokens = list(lexer)
-    except ValueError as error:
-        return [f"the command's quoting could not be read ({error})"]
+        words = tokens(command)
+    except ValueError:
+        return raw_sleeps(command)
     stack = [Frame("top")]
     jobs: list[str] = []  # the waits of the jobs the line started in the background that no wait has blocked on yet
 
@@ -229,7 +266,7 @@ def waits(command: str, in_loop: bool = False) -> list[str]:
         stack[-1].pipeline += closed.found  # the closed loop or group joins the parent's pipeline, so & covers it
 
     skip_next = False
-    for token in tokens:
+    for token in words:
         frame = stack[-1]
         if skip_next:
             skip_next = False
@@ -354,14 +391,12 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
 
 def pushes(command: str, cwd: str) -> list[str]:
     """A reason for each `git push` in the command line that force-pushes or deletes the base branch."""
-    lexer = shlex.shlex(without_heredoc_bodies(command).replace("\n", ";"), posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
     try:
-        tokens = list(lexer)
+        line = tokens(command)
     except ValueError:
         return []
     found, words = [], []
-    for token in [*tokens, ";"]:
+    for token in [*line, ";"]:
         if token and set(token) <= set(";&|(){}<>"):
             program = program_words(words)
             words = []

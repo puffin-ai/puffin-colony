@@ -37,6 +37,7 @@ REFUSED = [
     'bash -c "while true; do date; done"',
     "timeout 100 sleep 60",
     'python3 -c "import time; time.sleep(60)"',
+    "for p in $(pgrep -f merge); do sleep 1; done",
 ]
 ALLOWED = [
     "npm test",
@@ -49,6 +50,11 @@ ALLOWED = [
     "cat <<EOF > notes.txt\nwhile true; do sleep 600; done\nEOF",
     "gh api a > a.json & gh api b > b.json & wait",
     "echo watch this",
+    # Two lines the guard used to refuse: a $(...) holding quotes inside a double-quoted word, and a loop
+    # over a $(...) whose `);` shlex reads as one token.
+    """colony post board "the 'updates every 15 seconds' line"; echo "live: $(curl -s https://x/ | grep -o 'assets/index-[^"]*\\.js' | head -1)\"""",
+    'for p in $(pgrep -f merge); do echo "merging: $(ps -o etime= -p $p)"; done; colony wait > out & sleep 0; kill %1',
+    "echo $(date)| cat; sleep 1",
 ]
 
 
@@ -75,6 +81,13 @@ def test_the_wait_guard_names_the_endless_loop_and_lets_a_background_call_or_an_
     assert "an endless `while true` loop" in guard(json.dumps({"tool_input": {"command": "while true; do date; done"}})).stderr
     assert guard(json.dumps({"tool_input": {"command": "sleep 600", "run_in_background": True}})).returncode == 0
     assert guard("not json").returncode == 0
+
+
+def test_a_line_whose_quoting_cant_be_read_is_refused_only_for_a_long_sleep():
+    unreadable = """echo "$(echo 'a"b')" """
+    assert guard(json.dumps({"tool_input": {"command": unreadable}})).returncode == 0
+    run = guard(json.dumps({"tool_input": {"command": unreadable + "; sleep 600"}}))
+    assert run.returncode == 2 and "`sleep 600` waits 600 seconds in the foreground" in run.stderr
 
 
 REWRITES_BASE = [
