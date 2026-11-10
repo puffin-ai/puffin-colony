@@ -252,10 +252,12 @@ def learn_helpers(state: dict, comments: list) -> None:
     from colony import presence
 
     known, heard = state.setdefault("helpers", {}), state.setdefault("heard", {})
+    waiting = state.setdefault("waiting", {})
     for comment in comments:
         status = presence.parse(comment.get("body") or "")
         if status and status.kind == "helper" and status.lead:
             known[status.name.lower()] = status.lead.lower()
+            waiting[status.name.lower()] = [status.lead.lower(), status.waiting, status.waiting_since, status.computer]
             heard[status.name.lower()] = max(heard.get(status.name.lower(), ""), comment.get("updated_at") or "")
 
 
@@ -493,6 +495,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     state.setdefault("listed", [])
     failures, digest_at = 0, clock.now() + digest
     listener = claim_listener(project, me.name)
+    last_wall, last_mono = time.time(), time.monotonic()
     add_stale(state, stale)
     while True:
         listed = set(state["listed"])  # what the file's cache holds since the last write, unless the hook took it
@@ -504,6 +507,13 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             if failures >= GIVE_UP:
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
                 return 1
+        if me.name == cli.LEAD:
+            from colony import watch
+
+            wall, mono = time.time(), time.monotonic()
+            if gap := watch.slept(last_wall, last_mono, wall, mono):
+                state["pending"].append([gap, True])
+            last_wall, last_mono = wall, mono
         if not still_listening(project, me.name, listener):
             # Another wait for this session started since: it reads every line itself, so this one stops without
             # writing the state they share, and says so, so its session starts no third one.
@@ -676,7 +686,13 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
-    silent = silent_check(project, name) if named() else None  # only a named lead's helpers post a status
+    silent = None
+    if named():  # only a named lead's helpers post a status
+        from colony import watch
+
+        quiet, stuck = silent_check(project, name), watch.stuck_check(name)
+        silent = lambda state: quiet(state) + stuck(state, time.time())  # noqa: E731
+        watch.keep_awake(project, os.environ.get("CLAUDE_PID", ""))
     freeze = None
     if hack(config):
         from colony import demo

@@ -126,7 +126,7 @@ To stop the loop, press Ctrl-C, or set `BOARD_WAIT=off` in that shell: `tools/bo
 
 Colony starts each lead with Claude Code's Remote Control. Open the Claude app on your phone, or claude.ai/code, and the lead's session is there under its title. Type to it as you would at the laptop: answer its questions, ask what it is doing, or tell it to merge.
 
-The session runs on your laptop, and the phone only talks to it. Keep the laptop plugged in, awake, online and open. On a Mac, `caffeinate -is` in a spare terminal stops it from sleeping.
+The session runs on your laptop, and the phone only talks to it. Keep the laptop plugged in, online and open. On a Mac, a lead's `colony wait` keeps it awake for the life of the lead's Claude Code session, with `caffeinate`; elsewhere, keep it awake yourself. When the computer sleeps anyway, the lead's next wait says for how long, so you know what stopped.
 
 ## The last hour before the demo
 

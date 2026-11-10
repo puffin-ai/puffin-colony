@@ -47,6 +47,10 @@ class Status:
     room: list[str] = field(default_factory=list)
     folders: list[str] = field(default_factory=list)
     at: float = 0.0  # Unix time of the last update
+    work: str = ""  # a helper's folder, from its transcript (watch.activity)
+    branch: str = ""  # the branch checked out there
+    waiting: str = ""  # the tool call its session waits on for an answer, such as Bash, or ""
+    waiting_since: float = 0.0
     comment: int | None = None  # the status comment's id, when it came from one
 
 
@@ -228,8 +232,15 @@ def mine(config: dict, args, name: str, kind: str, lead: str = "") -> Status:
                 if a.get("person") in (person, "any") and Path(a["config_dir"]).expanduser().is_dir()]
     cli.refresh_usage([folder for _, folder in accounts])
     rooms = [cli.room_text(account, folder) for account, folder in accounts]
-    return Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
-                  room=rooms, folders=claimed(lead or name), at=time.time())
+    status = Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
+                    room=rooms, folders=claimed(lead or name), at=time.time())
+    if kind == "helper":
+        from colony import watch
+
+        doing = watch.activity()
+        status.work, status.waiting = doing.get("work", ""), doing.get("waiting", "")
+        status.waiting_since, status.branch = doing.get("waiting_since", 0.0), watch.branch(status.work)
+    return status
 
 
 def keep(config: dict, status: Status, state: dict, now: float | None = None) -> bool:
@@ -296,8 +307,11 @@ def describe(status: Status, now: float) -> str:
     who = f"{status.name}" + (f" (helper of {status.lead})" if status.kind == "helper" else "")
     room = f" Room: {'; '.join(status.room)}." if status.room else ""
     folders = f" Folders: {held}." if status.kind == "lead" else ""
+    work = f" Works in {status.work}" + (f" on {status.branch}" if status.branch else "") + "." if status.work else ""
+    waiting = (f" Its {status.waiting} call has waited {int((now - status.waiting_since) // 60)} minutes for an "
+               "answer." if status.waiting and status.waiting_since and now - status.waiting_since >= 120 else "")
     return f"- {who}: {status.person or 'unknown person'} on {where_}, account {status.account or 'unknown'}, " \
-           f"{ago(status.at, now)}.{folders}{room}"
+           f"{ago(status.at, now)}.{folders}{work}{waiting}{room}"
 
 
 def who(config: dict, args) -> int:
