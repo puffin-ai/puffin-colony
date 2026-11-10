@@ -774,3 +774,12 @@ def test_every_new_session_is_told_to_take_its_role_name_in_the_sidebar(home, co
     assert rename.format("builder-1") in capsys.readouterr().out
     assert cli.main(["claim", "web", "--person", "ana"]) == 0
     assert rename.format("ana-web-lead") in capsys.readouterr().out
+
+
+def test_the_account_label_follows_the_person_when_two_people_share_a_settings_folder(home, monkeypatch):
+    shared = {"accounts": {"sam": {"config_dir": "~/.claude", "person": "sam"},
+                           "ana": {"config_dir": "~/.claude", "person": "ana"}}}
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    assert cli.current_account(shared) == "ana"
+    monkeypatch.delenv(cli.PERSON_ENV)
+    assert cli.current_account(shared) == "sam"  # no person known: the first, as before

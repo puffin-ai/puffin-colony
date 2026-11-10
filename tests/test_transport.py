@@ -187,3 +187,15 @@ def test_a_board_that_fails_leaves_the_done_line_sent(gh, monkeypatch, capsys):
     assert wait.post(GITHUB, Namespace(card=41, to="lead", sentence="done, pushed", urgent=False)) == 0
     assert gh()[0][:3] == ["issue", "comment", "41"]
     assert "#41 stays as it was on the board: this repo has no board yet" in capsys.readouterr().err
+
+
+def test_a_dry_run_of_post_or_say_prints_the_lines_and_posts_nothing(gh, monkeypatch, capsys):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    parse = cli.build_parser().parse_args
+    assert parse(["--dry-run", "post", "41", "lead", "done"]).dry_run
+    assert parse(["post", "41", "lead", "done", "--dry-run"]).dry_run
+    assert parse(["say", "sam-lead", "hello", "--dry-run"]).dry_run
+    assert wait.post(GITHUB, Namespace(card=41, to="builder-2", sentence="start: the form", urgent=False,
+                                       dry_run=True)) == 0
+    assert capsys.readouterr().out == "dry run, nothing posted: #41 for builder-2: start: the form (from lead)\n"
+    assert gh() == []

@@ -744,6 +744,8 @@ def say(config: dict, args) -> int:
     elif to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
     lines = [compose(to, sentence, me) for sentence in said]
+    if getattr(args, "dry_run", False):
+        return dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
     number = transport.send(config, to, "\n".join(lines))  # one comment: every line goes out, or none does
@@ -791,12 +793,26 @@ def post(config: dict, args) -> int:
         tidy.check_kind(me == cli.LEAD, to, sentence)
     about = f" (#{card})" if on_board and card is not None else ""
     lines = [compose(to, sentence + about, sender) for sentence in said]
+    if getattr(args, "dry_run", False):
+        return dry_post(lines, f"#{board_number(config) if on_board else card}")
     # One comment: every line goes out, or none does.
     number = transport.send(config, to, "\n".join(lines), card=None if on_board else card)
     for line in lines:
         print(f"#{number} {line}")
     if me != cli.LEAD and card is not None and any(DONE.match(sentence) for sentence in said):
         in_review(config, card)
+    return 0
+
+
+def board_number(config: dict) -> str:
+    """The hack board's issue number from colony.toml, for a dry run, which reads nothing from GitHub."""
+    return str(config.get("messages", {}).get("board", "?"))
+
+
+def dry_post(lines: list[str], where: str) -> int:
+    """A dry run's output: the lines a post or say would send, and where, with nothing posted."""
+    for line in lines:
+        print(f"dry run, nothing posted: {where} {line}")
     return 0
 
 
@@ -855,6 +871,8 @@ def add_commands(sub, wait_parser) -> None:
                                                "its own line, which go out together in one comment")
     p.add_argument("--urgent", action="store_true",
                    help="start the sentence with urgent:, so the other lead gets it at once instead of in its digest")
+    p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
+                   help="print the lines it would post, and post nothing")
     p.set_defaults(run=say)
     p = sub.add_parser("post", help="post a line for another session on a card (the board in hack mode), through "
                                     "the transport")
@@ -863,4 +881,6 @@ def add_commands(sub, wait_parser) -> None:
                         "lead or builder-2, or @login for that person's lead, or @all; then one sentence of at most "
                         f"{MAX_LINE} characters, or several, each its own line, which go out together in one comment")
     p.add_argument("--urgent", action="store_true", help="start the sentence with urgent:, so it can't wait")
+    p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
+                   help="print the lines it would post, and post nothing")
     p.set_defaults(run=post)

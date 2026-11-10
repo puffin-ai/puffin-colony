@@ -661,10 +661,15 @@ def current_account(config: dict) -> str:
     """The account this process runs on: the one whose folder is $CLAUDE_CONFIG_DIR, or the default folder's when it
     is unset, else the folder's own name."""
     folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-    for name, account in config.get("accounts", {}).items():
-        if (is_default_dir(account["config_dir"]) and not folder) or (
-                folder and Path(account["config_dir"]).expanduser() == Path(folder).expanduser()):
-            return name
+    found = [name for name, account in config.get("accounts", {}).items()
+             if (is_default_dir(account["config_dir"]) and not folder) or (
+                 folder and Path(account["config_dir"]).expanduser() == Path(folder).expanduser())]
+    # Two people can share a settings folder, such as ~/.claude on a team's computer: then this session's person,
+    # $COLONY_PERSON, picks between them, so a lead is never labeled with the other person's account.
+    person = os.environ.get(PERSON_ENV, "").lower()
+    mine = [name for name in found if str(config["accounts"][name].get("person", "")).lower() == person]
+    if mine or found:
+        return (mine or found)[0]
     return Path(folder).name if folder else "default"
 
 
