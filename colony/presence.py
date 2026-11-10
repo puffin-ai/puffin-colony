@@ -382,7 +382,11 @@ def who(config: dict, args) -> int:
     except cli.ColonyError as e:
         print(f"{cli.NAME}: {e}", file=sys.stderr)
     if wait.hack(config):
+        from colony import share
+
         print(live.summary(config, cli.repo_root()))
+        if needs := share.open_needs(config):
+            print(needs)
     alive, gone, note = everyone(config, now)
     if note:
         print(note, file=sys.stderr)

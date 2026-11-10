@@ -90,6 +90,12 @@ When the check fails, it runs once more: a test that fails only sometimes lands 
 
 **The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base or the repo's default branch (origin's HEAD, else `main`): `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A plain push, a force push to your own branch, and a forced push of tags alone still work.
 
+## Asking and sharing across leads
+
+When your work waits on another person's, such as an API route they own, ask their lead with `colony need @<login> "<what>"`. It reaches that lead at once, as `@<login> need: <what> [N3]`, and Colony remembers it: `colony need` lists what you still wait on and for how long, and `colony need --done N3` closes it and thanks them.
+
+To hand a teammate a file, such as a spec or screenshots, run `colony share <file> --to @<login>`. It goes on the `colony-shared` branch, which no one merges, and the board gets its link. On a public repo anyone can read it, so a secret's shape is refused, and anything not for strangers goes by `colony say --private`.
+
 ## What is live
 
 The demo is the live app, so `colony who` and `colony status` print which commit is live, and which branches merged into the base since then aren't live yet:

@@ -1545,6 +1545,20 @@ def status(config: dict, args) -> int:
     return runner.batch_status(config, args)
 
 
+def share_file(config: dict, args) -> int:
+    """Share a file on the colony-shared branch (share.share)."""
+    from colony import share
+
+    return share.share(config, args)
+
+
+def need(config: dict, args) -> int:
+    """Ask another lead for something and track it (share.need)."""
+    from colony import share
+
+    return share.need(config, args)
+
+
 def stop_sessions(config: dict, args) -> int:
     """Stop this project's Colony sessions on this computer (stop.stop)."""
     from colony import stop
@@ -1718,6 +1732,16 @@ def build_parser() -> argparse.ArgumentParser:
                                              "together with one check")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+    p = sub.add_parser("share", help="put a file on the colony-shared branch, which no one merges, and post its link")
+    p.add_argument("file", help="the file to share, such as docs/spec.md")
+    p.add_argument("--to", default="", help="who it is for, such as @ben; @all by default")
+    p.set_defaults(run=share_file)
+    p = sub.add_parser("need", help="a lead: ask another lead for something and track it, list the open ones, or "
+                                    "close one")
+    p.add_argument("to", nargs="?", help="the other lead, such as ben-main-lead, or @ben")
+    p.add_argument("what", nargs="*", help="what you need, in one sentence")
+    p.add_argument("--done", metavar="N<n>", help="close an open need, such as N3, and thank the other lead")
+    p.set_defaults(run=need)
     p = sub.add_parser("stop", help="stop this project's Colony sessions on this computer, never this one, and tell "
                                     "the board")
     p.add_argument("names", nargs="*", metavar="name", help="the sessions to stop, such as staff; none for all of them")
