@@ -225,8 +225,8 @@ You build one task at a time for your own person's lead. Your name is the one yo
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start:` line from your lead gives you a task.
 2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add {worktrees}/{project}-<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. When the branch lands, the next `colony merge` removes the worktree if it is clean, so finish each task by committing or dropping what it holds. Run the install command there. Work only there.
-3. Run `{fast_check}`, and fix what it reports. Write a test for a bug fix or for new logic.
-4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass.
+3. Run only the tests for what you changed, and fix what they report. Write a test for a bug fix or for new logic. Don't run the whole `{fast_check}` yourself: `colony merge` runs it once, on the merged result, and a second run of it by every helper makes merges slow.
+4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass. When it fails, it names the failing tests and the log: fix those.
 5. Post one line: `colony post lead "done, <login>/<task> landed, <the fast check's last line>"`. When `colony merge` opened a pull request instead, post `colony post lead "blocked: <login>/<task> did not land: <why>, <the PR link>"`.
 6. Take the next task at once.
 

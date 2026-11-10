@@ -470,3 +470,41 @@ def test_a_landed_merge_removes_the_clean_worktrees_of_merged_branches(world, ca
     assert (trees / "demo-ana-fresh").exists()  # clean, and its tip is on main, but no merge took it: a task just begun
     assert world.clone.exists() and (trees / "demo-merge").exists()
     assert "removed the worktree" in out
+
+
+def test_the_person_can_switch_the_fast_check_off_and_on_and_the_board_hears_each(world, capsys, monkeypatch):
+    monkeypatch.setenv("COLONY_PERSON", "ana")
+    config = world.config(fast_check="false")
+    assert merge.gate(config, Namespace(state="off", person=None)) == 0
+    world.branch("ana/login", {"a.txt": "good\n"})
+    assert land(config, "ana/login") == 0
+    out = capsys.readouterr().out
+    assert "the fast check is off: ana switched it off at " in out
+    posts = [call[-1] for call in world.gh_calls() if call[:2] == ["issue", "comment"]]
+    assert "@all gate: ana switched the fast check off" in posts[0]
+    assert posts[-1].endswith(", fast check off")
+    assert merge.gate(config, Namespace(state="on", person=None)) == 0
+    assert "@all gate: ana switched the fast check back on" in world.gh_calls()[-1][-1]
+    world.branch("ana/notes", {"b.txt": "notes\n"})
+    assert land(config, "ana/notes") == 1  # the check runs again, and `false` fails
+
+
+def test_a_slow_fast_check_gets_a_note_once_a_day(world, capsys, monkeypatch):
+    monkeypatch.setattr(merge, "SLOW_CHECK_SECONDS", 0)
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/notes", {"b.txt": "notes\n"})
+    config = world.config()
+    assert land(config, "ana/login") == 0
+    assert "note: the fast check took" in capsys.readouterr().out
+    assert land(config, "ana/notes") == 0
+    assert "note: the fast check took" not in capsys.readouterr().out
+
+
+def test_a_check_env_that_names_a_remote_database_gets_a_note_with_its_host_alone(world, capsys):
+    world.branch("ana/login", {"a.txt": "good\n"})
+    (world.clone / ".env.local").write_text("DATABASE_URL=postgres://app:s3cret@ep-cool-1.neon.tech/db\n"
+                                            "TEST_DB=postgres://localhost:5432/test\n")
+    assert land(world.config(template=ENV_HACK), "ana/login") == 0
+    out = capsys.readouterr().out
+    assert "note: the fast check's env names a database on ep-cool-1.neon.tech" in out
+    assert "s3cret" not in out and "localhost" not in out

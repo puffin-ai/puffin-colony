@@ -23,7 +23,7 @@ You are one of several agents building {project} with a team, fast, before a dem
 
 ## Before any merge
 
-1. Fetch, and bring your branch up to date with `{base}`.
-2. Run the fast check, `{fast_check}`, and read its result.
-3. Merge only on a pass: `colony merge <branch>` does all three, and pushes `{base}` only when the check passes. On a failure, fix it or post that you're blocked.
+1. Commit, and run only the tests for what you changed.
+2. Run the fast check, `{fast_check}`, through `colony merge <branch>`: it updates your branch from `{base}`, runs the check once on the merged result, and pushes `{base}` on a pass. Never run the whole check yourself first.
+3. Merge only on a pass. On a failure, fix the tests it names, or post that you're blocked.
 4. Post on the board what landed.

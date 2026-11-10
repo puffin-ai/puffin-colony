@@ -1494,6 +1494,13 @@ def status(config: dict, args) -> int:
     return runner.batch_status(config, args)
 
 
+def gate(config: dict, args) -> int:
+    """Switch the fast check off or on for colony merge on this computer (merge.gate)."""
+    from colony import merge as merger
+
+    return merger.gate(config, args)
+
+
 def wait(config: dict, args) -> int:
     """Wait for the lines addressed to this session (wait.run)."""
     from colony import wait as watcher
@@ -1634,6 +1641,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("branch", help="the branch to land, such as ana/login-form")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+    p = sub.add_parser("gate", help="hack mode: the person switches the fast check off or on for colony merge on this "
+                                    "computer, and the board hears it")
+    p.add_argument("state", choices=("off", "on", "status"), help="off, on, or status to see which")
+    p.add_argument("--person", help="who switches it, when this session doesn't say")
+    p.set_defaults(run=gate)
 
     p = sub.add_parser("sync", help="merge origin/<base> into a branch; a conflict only in generated files is rebuilt "
                                     "with regen, any other stops it")

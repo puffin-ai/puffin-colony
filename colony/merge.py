@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -42,6 +43,11 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 SUMMARY = re.compile(r"\b\d+\s+(?:passed|failed|failing|passing|errors?)\b", re.I)
 FAILING = re.compile(r"^(?:FAIL(?:ED)?|✗|×|✕|●|not ok)\s+\S")
 NAMED = 5  # the failing tests a message names
+SLOW_CHECK_SECONDS = 90  # past this, a merge notes that a hackathon's fast check should be quicker, once a day
+# A database URL in the check's env, scheme://user:password@host/...: its host alone is ever named.
+DATABASE_URL = re.compile(r"^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|sqlserver|mssql|cockroachdb)"
+                          r"://(?:[^@/\s]*@)?([^/:?\s]+)", re.I)
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
 LOGS_KEPT = 50
 MERGES_READ = 500  # the merge commits on the base read to tell which worktrees' branches landed
 
@@ -123,6 +129,7 @@ class Check:
     summary: str
     failing: list[str]
     log: Path
+    seconds: float = 0.0
 
     def failed(self, where: str) -> str:
         named = f"; failing: {', '.join(self.failing)}" if self.failing else ""
@@ -142,14 +149,16 @@ def log_path(config: dict, name: str, run: str) -> Path:
 def run_check(command: str, cwd: Path, env: dict, log: Path) -> Check:
     """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests."""
     shell_command, shell, env = portable.shell(command, env)
+    started = time.monotonic()
     run = subprocess.run(shell_command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
+    seconds = time.monotonic() - started
     output = f"{run.stdout}\n{run.stderr}"
     log.write_text(output)
     lines = readable(output)
     summaries = [line for line in lines if SUMMARY.search(line)]
     summary = (summaries[-1] if summaries else lines[-1] if lines else "no output")[:200]
     failing = list(dict.fromkeys(line[:120] for line in lines if FAILING.match(line) and not transport.holds_secret(line)))
-    return Check(run.returncode == 0, safe(summary, "summary line"), failing[:NAMED], log)
+    return Check(run.returncode == 0, safe(summary, "summary line"), failing[:NAMED], log, seconds)
 
 
 def checked_bases(config: dict) -> tuple[Path, dict]:
@@ -204,12 +213,78 @@ def warn_red_base(config: dict, base: str, sha: str, red: Check) -> None:
 @dataclass
 class Landed:
     """What a merge did: whether the branch is on the base, what happened, the commit it pushed or "", the log to
-    read, and whether a pull request should follow a failure."""
+    read, whether a pull request should follow a failure, and whether the fast check ran."""
     landed: bool
     what: str
     head: str = ""
     log: Path | None = None
     pr: bool = True
+    checked: bool = True
+
+
+def gate_path(config: dict) -> Path:
+    """Where this computer keeps whether the person switched the fast check off (`colony gate off`)."""
+    return wait.state_path(config["project"]["name"], "gate")
+
+
+def gate_off(config: dict) -> dict | None:
+    """Who switched the fast check off on this computer, and when, or None while it is on."""
+    held = wait.read_json(gate_path(config), None)
+    return held if isinstance(held, dict) and held.get("off") else None
+
+
+def gate(config: dict, args) -> int:
+    """`colony gate off|on|status`: the person switches the fast check off or on for `colony merge` on this computer,
+    and the board hears it. Off, a merge lands without the install and the check, and its [merged] line says so."""
+    from colony import presence
+
+    if args.state == "status":
+        held = gate_off(config)
+        print(f"the fast check is off: {held.get('by')} switched it off at {held.get('at')}" if held
+              else "the fast check is on")
+        return 0
+    person = cli.person_of(config, args)
+    if args.state == "off":
+        at = time.strftime("%H:%M UTC", time.gmtime())
+        wait.write_json(gate_path(config), {"off": True, "by": person, "at": at})
+        line = (f"@{wait.ALL} gate: {person} switched the fast check off at {at}: colony merge on "
+                f"{presence.computer()} lands without it until `{cli.NAME} gate on`")
+    else:
+        gate_path(config).unlink(missing_ok=True)
+        line = f"@{wait.ALL} gate: {person} switched the fast check back on: colony merge runs it again"
+    print(line.removeprefix(f"@{wait.ALL} "))
+    if wait.hack(config):
+        try:
+            transport.send(config, f"@{wait.ALL}", line)
+        except cli.ColonyError as e:
+            print(f"{cli.NAME} gate: the board didn't hear it: {e}", file=sys.stderr)
+    return 0
+
+
+def note_once(config: dict, kind: str, text: str) -> None:
+    """Print a note about the fast check at most once a day per kind, so it reaches the session without nagging."""
+    path = wait.state_path(config["project"]["name"], "merge-notes")
+    held = wait.read_json(path, {})
+    held = held if isinstance(held, dict) else {}
+    today = time.strftime("%Y-%m-%d")
+    if held.get(kind) == today:
+        return
+    print(f"note: {text}")
+    held[kind] = today
+    wait.write_json(path, held)
+
+
+def remote_databases(env: dict) -> list[str]:
+    """The hosts of the database URLs the check's env file adds, other than this computer's."""
+    hosts = []
+    for key, value in env.items():
+        if os.environ.get(key) == value:
+            continue  # the shell's own, not the check's env file
+        found = DATABASE_URL.match(str(value).strip())
+        host = found[1].lower() if found else ""
+        if host and host not in LOCAL_HOSTS and not host.endswith((".local", ".localhost")):
+            hosts.append(host)
+    return list(dict.fromkeys(hosts))
 
 
 def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
@@ -234,11 +309,26 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
         head = _git(wt, "rev-parse", "HEAD")
         if head == before:
             return Landed(True, f"{branch} is already in {base}: nothing to push")
+        if (off := gate_off(config)) is not None:
+            push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
+            if push.returncode == 0:
+                return Landed(True, f"merged {branch} into {base} at {head[:9]}: the fast check is off: "
+                                    f"{off.get('by')} switched it off at {off.get('at')}", head, checked=False)
+            if not REJECTED.search(push.stderr):
+                raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
+            continue
         if project.get("install"):
             installed, last = _shell(project["install"], wt, env)
             if not installed:
                 return Landed(False, f"the install failed in the merge worktree: {last}")
+        if hosts := remote_databases(env):
+            note_once(config, "database", f"the fast check's env names a database on {', '.join(hosts)}, which isn't "
+                      "on this computer: every check writes to it, and a shared one slows as checks pile up; give the "
+                      "checks a database of their own")
         first = run_check(command, wt, env, log_path(config, branch, "check"))
+        if first.seconds > SLOW_CHECK_SECONDS:
+            note_once(config, "slow", f"the fast check took {int(first.seconds)} s; in a hackathon keep it under a "
+                      "minute, and move slow tests, such as ones that use a database, to [project] checks")
         passed, note = f"({first.summary})", ""
         if not first.passed:
             second = run_check(command, wt, env, log_path(config, branch, "again"))
@@ -263,10 +353,11 @@ def land(config: dict, root: Path, wt: Path, branch: str) -> Landed:
     return Landed(False, f"{base} moved on {TRIES} times while the fast check ran")
 
 
-def post_landed(config: dict, branch: str, head: str) -> None:
-    """Post the last good build on the board: `[merged] <branch> → <base> <short sha>, fast check passed`. It wakes
-    no agent, and a post that fails says so on stderr alone, since the branch has landed."""
-    line = f"[merged] {branch} → {config['project']['base']} {head[:7]}, fast check passed"
+def post_landed(config: dict, branch: str, head: str, checked: bool = True) -> None:
+    """Post the last good build on the board: `[merged] <branch> → <base> <short sha>, fast check passed`, or `fast
+    check off` when the person switched it off. It wakes no agent, and a post that fails says so on stderr alone,
+    since the branch has landed."""
+    line = f"[merged] {branch} → {config['project']['base']} {head[:7]}, fast check {'passed' if checked else 'off'}"
     try:
         print(f"posted on the board #{transport.send(config, '', line)}: {line}")
     except cli.ColonyError as e:
@@ -456,7 +547,7 @@ def run(config: dict, args) -> int:
     if result.landed:
         print(result.what)
         if result.head:
-            post_landed(config, branch, result.head)
+            post_landed(config, branch, result.head, result.checked)
             _git(root, "fetch", "origin", check=False)
             drop_merged_worktrees(config, root)
         return 0
