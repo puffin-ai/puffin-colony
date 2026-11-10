@@ -453,3 +453,21 @@ def test_the_builder_section_keeps_builders_fast_without_dropping_a_required_tes
                  "`predicted:`", "A bug fix still carries its regression test",
                  "a test the repo's own rules demand still goes in"):
         assert rule in builder, rule
+
+
+def test_a_hack_lead_gathers_done_lines_for_its_digest_and_takes_the_rest_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    lead = wait.lead_session(CONFIG, "ana-main-lead")
+    assert wait.taken("for ana-main-lead: done, T12 landed at 1a2b3c4 (from staff)", lead, "") == [
+        ("for ana-main-lead: done, T12 landed at 1a2b3c4 (from staff)", False)]
+    assert wait.taken("for ana-main-lead: question: which table? I'm going with cases (from staff)", lead, "")[0][1]
+    assert wait.taken("@ana can you look at the form? (from ben-main-lead)", lead, "") == [
+        ("@ana can you look at the form? (from ben-main-lead)", False)]
+    assert wait.taken("@ana can you look?", lead, "")[0][1]  # the person's own line comes at once
+
+
+def test_hack_mode_gathers_the_leads_lines_for_two_minutes():
+    import tomllib
+    preset = tomllib.loads((PACKAGE / "modes" / "hack.toml").read_text())
+    assert preset["messages"]["lead_digest_minutes"] == 2

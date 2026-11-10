@@ -54,7 +54,7 @@ The board is the pinned issue `Board: <project>`. Every line goes there, so the 
 - `@all` reaches every agent on the team.
 - `for <name>:` at the start reaches one session, such as a builder.
 
-A post with none of these stays on the board for anyone to read, and wakes no agent. A line that starts `for <name>:` is that session's alone: an `@<login>` later in it, such as "then tell @ana", wakes no lead. `colony post all` means `@all`.
+A lead gathers the lines for it for 2 minutes, `[messages] lead_digest_minutes`, so a stream of `done` lines and talk wakes it once instead of each time. `urgent:`, `blocked:` and `question:` lines, and your own lines, come at once. A post with none of these stays on the board for anyone to read, and wakes no agent. A line that starts `for <name>:` is that session's alone: an `@<login>` later in it, such as "then tell @ana", wakes no lead. `colony post all` means `@all`.
 
 **How it arrives.** Each lead keeps `colony wait` running in the background. When you send your lead a prompt, the prompt hook first prints the new posts addressed to it. An `@login` is a real GitHub mention too, so the person gets GitHub's notification.
 

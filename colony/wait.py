@@ -100,6 +100,7 @@ class Session:
     leads: frozenset[str] = frozenset({cli.LEAD})
     helpers: frozenset[str] = frozenset()
     others: frozenset[str] = frozenset()
+    done_waits: bool = False  # hack mode: a helper's done line waits for the digest, since no batch waits on it
 
 
 def state_path(project: str, name: str) -> Path:
@@ -236,7 +237,8 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
             if sender in me.leads:
                 lines.append((line, True))
         elif sender not in me.names and not (redirected and sender == cli.LEAD):
-            done = DONE.match(sentence) is not None and (card in me.waiting or not me.waiting) and not redirected
+            done = DONE.match(sentence) is not None and (card in me.waiting or not me.waiting) and not redirected \
+                and not me.done_waits
             cant_wait = bool(CANT_WAIT.match(sentence) or JOINED.match(sentence)) or not sender or \
                 sender in me.people or done
             lines.append((REDIRECTED + line if redirected else line, cant_wait))
@@ -617,7 +619,7 @@ def lead_session(config: dict, name: str) -> Session:
     project = config["project"].get("name", "")
     helpers = local_helpers(project) if project and not (hack(config) or named()) else frozenset()
     return Session(cli.LEAD, frozenset(names), people, frozenset(str(card) for card in cards), logins,
-                   helpers=helpers)
+                   helpers=helpers, done_waits=hack(config))
 
 
 def builder_session(config: dict, name: str, person: str = "") -> Session:
