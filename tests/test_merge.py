@@ -526,6 +526,18 @@ def test_a_switched_off_check_comes_back_on_by_itself_after_four_hours(world, mo
     assert merge.gate_off(config) is None
 
 
+def test_a_gate_file_edited_by_hand_never_holds_the_check_off_past_four_hours(world):
+    config, now = world.config(), time.time()
+    for forged in ({"off": True, "since": now - 60, "until": now + 30 * 24 * 3600},  # a month
+                   {"off": True, "since": now + 3600, "until": now + 7200},  # switched off in the future
+                   {"off": True, "until": now + 600},  # no time it was switched off
+                   {"off": True, "since": now - 60, "until": float("inf")}):
+        merge.wait.write_json(merge.gate_path(config), forged)
+        assert merge.gate_off(config) is None, forged
+    merge.wait.write_json(merge.gate_path(config), {"off": True, "since": now - 60, "until": now + 3 * 3600})
+    assert merge.gate_off(config)
+
+
 def test_a_slow_fast_check_gets_a_note_once_a_day(world, capsys, monkeypatch):
     monkeypatch.setattr(merge, "SLOW_CHECK_SECONDS", 0)
     world.branch("ana/login", {"a.txt": "good\n"})

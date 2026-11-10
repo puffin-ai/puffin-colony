@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import re
 import shlex
@@ -243,7 +244,16 @@ def gate_off(config: dict) -> dict | None:
     held = wait.read_json(gate_path(config), None)
     if not isinstance(held, dict) or not held.get("off"):
         return None
-    return held if time.time() < float(held.get("until") or 0) else None
+    try:
+        since, until, now = float(held["since"]), float(held["until"]), time.time()
+    except (KeyError, TypeError, ValueError):
+        return None
+    # A file edited by hand never holds the check off for long: it was switched off in the past, and it ends within
+    # GATE_HOURS of that. An agent at the same user can still bypass `colony merge` with a plain push; this keeps the
+    # gate honest against a stale or careless file, and every merge without the check says so on the board.
+    if not (math.isfinite(since) and math.isfinite(until) and since <= now < until <= since + GATE_HOURS * 3600):
+        return None
+    return held
 
 
 def terminal_login() -> str:
@@ -260,7 +270,7 @@ def gate(config: dict, args) -> int:
 
     Only the person switches it off: at their own terminal, outside any Colony session, typing `off` to confirm, so
     no agent can drop the gate by itself. It comes back on by itself at the demo time, or after GATE_HOURS without
-    one. Anyone may switch it back on."""
+    one, whichever comes first. Anyone may switch it back on."""
     from colony import demo, presence
 
     if not wait.hack(config):
@@ -277,10 +287,12 @@ def gate(config: dict, args) -> int:
         if input("Switch the fast check off for colony merge on this computer? Type off: ").strip() != "off":
             print("the fast check stays on")
             return 1
-        by, at = terminal_login(), time.strftime("%H:%M UTC", time.gmtime())
+        by, at, since = terminal_login(), time.strftime("%H:%M UTC", time.gmtime()), time.time()
         due = demo.demo_at(config)
-        until = due.timestamp() if due and due.timestamp() > time.time() else time.time() + GATE_HOURS * 3600
-        wait.write_json(gate_path(config), {"off": True, "by": by, "at": at, "until": until})
+        until = since + GATE_HOURS * 3600
+        if due and since < due.timestamp() < until:
+            until = due.timestamp()  # the demo comes first: the check is back on for whatever comes after it
+        wait.write_json(gate_path(config), {"off": True, "by": by, "at": at, "since": since, "until": until})
         line = (f"@{wait.ALL} gate: {by} switched the fast check off at {at}: colony merge on {presence.computer()} "
                 f"lands without it until `{cli.NAME} gate on`, or {time.strftime('%H:%M UTC', time.gmtime(until))}")
     else:
