@@ -245,7 +245,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     return lines
 
 
-def learn_helpers(state: dict, comments: list) -> None:
+def learn_helpers(state: dict, comments: list, people: frozenset[str] = frozenset()) -> None:
     """Remember, in state["helpers"], each helper's lead from the status comments among these comments: a helper
     belongs to the lead its $COLONY_LEAD names, which its status carries (presence.py). state["heard"] keeps when each
     helper's status last changed, which silent_check reads."""
@@ -254,6 +254,8 @@ def learn_helpers(state: dict, comments: list) -> None:
     known, heard = state.setdefault("helpers", {}), state.setdefault("heard", {})
     waiting = state.setdefault("waiting", {})
     for comment in comments:
+        if not presence.by_team(comment, people):
+            continue  # on a public repo anyone can comment: a status counts from the team's own logins alone
         status = presence.parse(comment.get("body") or "")
         if status and status.kind == "helper" and status.lead:
             known[status.name.lower()] = status.lead.lower()
@@ -369,7 +371,7 @@ def poll(repo: str, state: dict, me: Session) -> bool:
     path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
     _, state["etag"], comments = gh_get(path, state.get("etag"))
     if me.name == cli.LEAD:
-        learn_helpers(state, comments)
+        learn_helpers(state, comments, me.people)
         me = with_helpers(me, state)
     seen = state.setdefault("seen", [])
     for comment in comments:

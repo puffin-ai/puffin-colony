@@ -88,6 +88,8 @@ def stuck_check(lead: str):
             if not isinstance(held, list) or len(held) != 4:
                 continue
             owner, tool, since, where = held
+            if not isinstance(since, (int, float)) or isinstance(since, bool):
+                continue
             if owner != lead or not tool or not since or now - since < STUCK_AFTER or raised.get(name) == since:
                 continue
             raised[name] = since

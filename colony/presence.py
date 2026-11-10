@@ -13,6 +13,7 @@ The lead registry, .colony/leads.toml, keeps each lead's person and claimed fold
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -79,20 +80,59 @@ def body(status: Status) -> str:
     return "\n".join(lines) + f"\n\n<!-- {MARK} {json.dumps(data, separators=(',', ':'))} -->"
 
 
+TOOL = re.compile(r"[A-Za-z0-9_.:-]{1,64}")  # a tool's name, such as Bash or mcp__x__y
+HOST = re.compile(r"[A-Za-z0-9_.-]{1,60}")  # a computer's short name
+TEXT_MAX, LIST_MAX = 200, 30
+
+
+def clean_text(value, pattern: re.Pattern | None = None) -> str:
+    """A field from a comment anyone could write, as one short line, or "" when it isn't text or fails `pattern`:
+    never a newline into a line a lead reads."""
+    if not isinstance(value, str):
+        return ""
+    value = " ".join(value.split())[:TEXT_MAX]
+    return value if pattern is None or pattern.fullmatch(value) else ""
+
+
+def clean_number(value) -> float:
+    """A time from a comment anyone could write, or 0.0 when it isn't a finite number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0.0
+    return float(value)
+
+
 def parse(text: str, comment: int | None = None) -> Status | None:
-    """The status a comment holds, or None when it holds none or a broken one."""
+    """The status a comment holds, or None when it holds none or a broken one. On a public repo anyone can comment,
+    so each field is checked: a wrong type falls back to its default, text is one short line, a tool or computer
+    name keeps its pattern, and a name that isn't a session's drops the status."""
     found = HIDDEN.search(text or "")
     if not found:
         return None
     try:
         data = json.loads(found[1])
-        status = Status(**{key: data[key] for key in vars(Status("", "")) if key in data and key != "comment"})
-    except (ValueError, TypeError):
+    except ValueError:
         return None
-    if not status.name or status.kind not in ("lead", "helper"):
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         return None
+    status = Status(clean_text(data["name"]), clean_text(data.get("kind")))
+    if not cli.SESSION_NAME.fullmatch(status.name) or status.kind not in ("lead", "helper"):
+        return None
+    for key in ("person", "lead", "account", "work", "branch"):
+        setattr(status, key, clean_text(data.get(key)))
+    status.computer, status.waiting = clean_text(data.get("computer"), HOST), clean_text(data.get("waiting"), TOOL)
+    for key in ("room", "folders"):
+        given = data.get(key)
+        setattr(status, key, [text for item in (given if isinstance(given, list) else [])[:LIST_MAX]
+                              if (text := clean_text(item))])
+    status.at, status.waiting_since = clean_number(data.get("at")), clean_number(data.get("waiting_since"))
     status.comment = comment
     return status
+
+
+def by_team(comment: dict, logins: frozenset[str]) -> bool:
+    """Whether a comment's author is one of the team's logins; with none configured, every author counts."""
+    author = str((comment.get("user") or {}).get("login") or "").lower()
+    return not logins or author in logins
 
 
 def where(config: dict) -> int:
@@ -115,8 +155,9 @@ def read_comments(config: dict) -> list[dict]:
 
 
 def read(config: dict) -> list[Status]:
-    """Every status comment on the statuses' issue, newest copy per name."""
-    comments = read_comments(config)
+    """Every status comment on the statuses' issue that one of the team's logins wrote, newest copy per name."""
+    logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+    comments = [comment for comment in read_comments(config) if by_team(comment, logins)]
     found: dict[str, Status] = {}
     for comment in comments:
         status = parse(comment.get("body", ""), comment.get("id"))

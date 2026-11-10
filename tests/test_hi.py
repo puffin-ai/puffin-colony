@@ -840,3 +840,12 @@ def test_a_lead_adds_and_releases_files_and_never_takes_another_leads(home, conf
         claim("server/auth.ts", add=True)
     with pytest.raises(cli.ColonyError, match="holds at least one path"):
         claim("src/app.ts", "src/c.ts", release=True)
+
+
+def test_who_reads_only_statuses_the_teams_logins_wrote(home, config, github, capsys):
+    config["people"] = {"logins": ["ana", "sam"]}
+    github.add(lead(name="sam-api-lead", person="sam", computer="Sam-PC"))
+    github.comments[-1]["user"] = {"login": "sam"}
+    github.add(lead(name="eve-main-lead", person="eve", computer="Eve-PC"))
+    github.comments[-1]["user"] = {"login": "eve"}
+    assert [status.name for status in presence.read(config)] == ["sam-api-lead"]
