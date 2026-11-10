@@ -100,15 +100,19 @@ def where(config: dict) -> int:
     return wait.coordination_issue(config["project"]["repo"], config["project"]["name"])
 
 
-def read(config: dict) -> list[Status]:
-    """Every status comment on the statuses' issue, newest copy per name. gh prints one comment per line (`--jq
-    '.[]'`), each a whole JSON object, so no text inside a comment, such as a board post's "[Ana's Claude]
-    [merged]", can cut the reading."""
+def read_comments(config: dict) -> list[dict]:
+    """Every comment on the statuses' issue, oldest first. gh prints one comment per line (`--jq '.[]'`), each a whole
+    JSON object, so no text inside a comment, such as a board post's "[Ana's Claude] [merged]", can cut the reading."""
     from colony import wait
 
     repo, number = config["project"]["repo"], where(config)
     out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100", "--jq", ".[]")
-    comments = [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
+def read(config: dict) -> list[Status]:
+    """Every status comment on the statuses' issue, newest copy per name."""
+    comments = read_comments(config)
     found: dict[str, Status] = {}
     for comment in comments:
         status = parse(comment.get("body", ""), comment.get("id"))
@@ -299,7 +303,7 @@ def describe(status: Status, now: float) -> str:
 def who(config: dict, args) -> int:
     """`colony who`: every live lead and helper, across people and computers, with their folders and their
     accounts' room, and the gone ones."""
-    from colony import demo
+    from colony import demo, live, wait
 
     now = time.time()
     try:
@@ -307,6 +311,8 @@ def who(config: dict, args) -> int:
             print(line)
     except cli.ColonyError as e:
         print(f"{cli.NAME}: {e}", file=sys.stderr)
+    if wait.hack(config):
+        print(live.summary(config, cli.repo_root()))
     alive, gone, note = everyone(config, now)
     if note:
         print(note, file=sys.stderr)

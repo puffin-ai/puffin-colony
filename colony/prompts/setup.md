@@ -160,12 +160,13 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
    - The repo as `owner/name` and its default branch, and the folders at the top of the repo, for the owner question.
    - Any `CLAUDE.md` or `AGENTS.md` at the top, and the settings folders on this computer, by name only.
    - The person's name, from `git config user.name`, and GitHub login, from `gh api user --jq .login`.
-2. **Ask everything in one message.** This is the only other time you ask. Number these 5 questions, and give your default after each, so "defaults" is a full answer:
+2. **Ask everything in one message.** This is the only other time you ask. Number these 6 questions, and give your default after each, so "defaults" is a full answer:
    1. Who is on the team? Each person's GitHub login and name, and which one is the team lead, who alone reassigns work. Default: you alone, as the lead.
    2. Who owns which folders? Default: with you alone, the whole repo; with a team, "not yet" for each person, until the team splits the folders at kickoff.
    3. Which branch does work land on? Default: `main`.
    4. May agents merge into it themselves after a passing fast check? Default: yes.
    5. When is the demo? A date and time with your time zone, such as `2026-11-08 17:00 -08:00`. This one has no default: the countdown and the freeze run from it.
+   6. Where is the app live, and how does it deploy? Default: the base deploys by itself on each merge through the host's GitHub app, such as Vercel's, whose deployments Colony reads; name the live URL.
 
    When an answer is unclear, take the default and say so. When question 5 has no answer, ask it again, alone, until it has one.
 3. **Open and pin the board.** Look for an open issue titled exactly `Board: <project>`, with `gh issue list --repo <owner/name> --state open --search '"Board: <project>" in:title' --json number,title`, and reuse it when there is one. Otherwise:
@@ -192,6 +193,7 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        [hack]
        demo = "<question 5, such as 2026-11-08T17:00:00-08:00>"
        team_lead = "<the team lead's login, from question 1>"
+       deploy_environment = "<question 6's GitHub deployment environment, Production by default>"
 
        [people]
        logins = ["<login>", "<login>"]

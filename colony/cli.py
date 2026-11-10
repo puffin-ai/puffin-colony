@@ -1486,12 +1486,21 @@ def batch(config: dict, args) -> int:
 
 def status(config: dict, args) -> int:
     """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
-    from colony import batch as runner, demo
+    from colony import batch as runner, demo, live, wait as watcher
 
     if line := demo.countdown(config):
         print(line)
+    if watcher.hack(config):
+        print(live.summary(config, repo_root()))
     print(lead_line(config))
     return runner.batch_status(config, args)
+
+
+def live(config: dict, args) -> int:
+    """Post which commit is live, for a deploy GitHub doesn't record (live.post)."""
+    from colony import live as deploys
+
+    return deploys.post(config, args)
 
 
 def gate(config: dict, args) -> int:
@@ -1642,6 +1651,10 @@ def build_parser() -> argparse.ArgumentParser:
                                              "together with one check")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+    p = sub.add_parser("live", help="hack mode: whoever deploys by hand tells every lead which commit is live")
+    p.add_argument("sha", help="the commit you deployed, such as 1a2b3c4")
+    p.add_argument("--url", default="", help="where it is live, such as https://myapp.com")
+    p.set_defaults(run=live)
     p = sub.add_parser("gate", help="hack mode: the person switches the fast check off or on for colony merge on this "
                                     "computer, and the board hears it")
     p.add_argument("state", choices=("off", "on", "status"), help="off (the person, at their own terminal), on, or "

@@ -312,10 +312,10 @@ def test_setup_asks_the_mode_first_with_a_line_for_each_and_startup_by_default()
 def test_the_hack_branch_asks_only_the_hack_questions():
     asked = hack_steps().split("2. **Ask everything in one message.**", 1)[1].split("3. **", 1)[0]
     questions = re.findall(r"^   (\d)\. (.+)$", asked, re.M)
-    assert [number for number, _ in questions] == ["1", "2", "3", "4", "5"]
+    assert [number for number, _ in questions] == ["1", "2", "3", "4", "5", "6"]
     for (_, question), words in zip(questions, (("GitHub login and name", "team lead"), ("owns which folders",),
                                                 ("Default: `main`",), ("merge", "fast check", "Default: yes"),
-                                                ("demo",))):
+                                                ("demo", "no default"), ("live", "deploy"))):
         assert all(word in question for word in words), question
     assert "yes-or-no list" not in hack_steps()
 
@@ -367,6 +367,7 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
                      ("<the board issue's number>", "12"), ('["<login>", "<login>"]', '["ana", "ben"]'),
                      ("<question 5, such as 2026-11-08T17:00:00-08:00>", "2026-11-08T17:00:00-08:00"),
                      ("<the team lead's login, from question 1>", "ana"),
+                     ("<question 6's GitHub deployment environment, Production by default>", "Production"),
                      ('{ <login> = "<Name>", <login> = "<Name>" }', '{ ana = "Ana", ben = "Ben" }'),
                      ("[accounts.<login>]", "[accounts.ana]"), ('"<login>"', '"ana"')):
         assert old in text, old

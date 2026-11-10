@@ -66,6 +66,7 @@ A lead gathers the lines for it for 2 minutes, `[messages] lead_digest_minutes`,
 | --- | --- |
 | Done | ends with `Not verified: <what you didn't check>`, or `Not verified: nothing` |
 | Deploy | `DEPLOY: <what>, <when>, rollback: <how>`, posted before the deploy |
+| Live | `@all live: <sha> is live on <url>`, which `colony live <sha> --url <url>` posts once a hand-run deploy is live |
 | Claim | `taking <files>, @<login> please avoid until PR` |
 | Release | `<files> released`, when the PR lands or you stop |
 | Handoff | the branch and the commit where you stopped, such as `handing ana/login to @sam at 3f2a1bc` |
@@ -88,6 +89,16 @@ When the check fails, it runs once more: a test that fails only sometimes lands 
 **Worktrees.** Each helper makes one worktree per task, in the folder `[project] worktrees` names (`~/worktrees` by default), never beside the clone. After `colony merge` lands a branch, it removes the clean worktrees of branches already merged, except the one it runs in. A helper session can reach the worktrees folder, never the folder your clone sits in.
 
 **The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base or the repo's default branch (origin's HEAD, else `main`): `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A plain push, a force push to your own branch, and a forced push of tags alone still work.
+
+## What is live
+
+The demo is the live app, so `colony who` and `colony status` print which commit is live, and which branches merged into the base since then aren't live yet:
+
+```text
+Live: 1a2b3c4 on https://myapp.com, since 2026-11-08T15:44:00Z, from GitHub's Production deployment; merged but not live yet: ana/login, ben/export.
+```
+
+Colony reads it from GitHub's deployments, which hosts such as Vercel and Netlify record for each deploy: the newest successful one to `[hack] deploy_environment` (`Production` by default). The fastest setup deploys the base by itself on every merge, so merged means live within minutes. When someone deploys by hand, they run `colony live <sha> --url <url>` once it is live, which posts `@all live: <sha> is live on <url>` for every lead.
 
 ## Codex and other agents
 
