@@ -1643,8 +1643,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=merge)
     p = sub.add_parser("gate", help="hack mode: the person switches the fast check off or on for colony merge on this "
                                     "computer, and the board hears it")
-    p.add_argument("state", choices=("off", "on", "status"), help="off, on, or status to see which")
-    p.add_argument("--person", help="who switches it, when this session doesn't say")
+    p.add_argument("state", choices=("off", "on", "status"), help="off (the person, at their own terminal), on, or "
+                                                                  "status to see which")
     p.set_defaults(run=gate)
 
     p = sub.add_parser("sync", help="merge origin/<base> into a branch; a conflict only in generated files is rebuilt "

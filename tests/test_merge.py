@@ -5,6 +5,7 @@ import re
 import os
 import subprocess
 import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 
@@ -472,10 +473,17 @@ def test_a_landed_merge_removes_the_clean_worktrees_of_merged_branches(world, ca
     assert "removed the worktree" in out
 
 
+def at_a_terminal(monkeypatch, answer="off", login="ana"):
+    """The person at their own terminal: stdin is a terminal, they type `answer`, and gh is signed in as `login`."""
+    monkeypatch.setattr(merge.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": answer)
+    monkeypatch.setattr(merge, "terminal_login", lambda: login)
+
+
 def test_the_person_can_switch_the_fast_check_off_and_on_and_the_board_hears_each(world, capsys, monkeypatch):
-    monkeypatch.setenv("COLONY_PERSON", "ana")
+    at_a_terminal(monkeypatch)
     config = world.config(fast_check="false")
-    assert merge.gate(config, Namespace(state="off", person=None)) == 0
+    assert merge.gate(config, Namespace(state="off")) == 0
     world.branch("ana/login", {"a.txt": "good\n"})
     assert land(config, "ana/login") == 0
     out = capsys.readouterr().out
@@ -483,10 +491,37 @@ def test_the_person_can_switch_the_fast_check_off_and_on_and_the_board_hears_eac
     posts = [call[-1] for call in world.gh_calls() if call[:2] == ["issue", "comment"]]
     assert "@all gate: ana switched the fast check off" in posts[0]
     assert posts[-1].endswith(", fast check off")
-    assert merge.gate(config, Namespace(state="on", person=None)) == 0
+    assert merge.gate(config, Namespace(state="on")) == 0
     assert "@all gate: ana switched the fast check back on" in world.gh_calls()[-1][-1]
     world.branch("ana/notes", {"b.txt": "notes\n"})
     assert land(config, "ana/notes") == 1  # the check runs again, and `false` fails
+
+
+def test_only_the_person_at_a_terminal_switches_the_check_off_never_an_agent(world, monkeypatch):
+    config = world.config()
+    monkeypatch.setattr(merge.sys.stdin, "isatty", lambda: False, raising=False)  # an agent's shell call
+    with pytest.raises(cli.ColonyError, match="only your person switches the fast check off"):
+        merge.gate(config, Namespace(state="off"))
+    at_a_terminal(monkeypatch)
+    monkeypatch.setenv("COLONY_SESSION", "lead")  # a terminal, but a Colony session's
+    with pytest.raises(cli.ColonyError, match="only your person switches the fast check off"):
+        merge.gate(config, Namespace(state="off"))
+    monkeypatch.delenv("COLONY_SESSION")
+    at_a_terminal(monkeypatch, answer="yes")  # anything but `off` keeps it on
+    assert merge.gate(config, Namespace(state="off")) == 1 and merge.gate_off(config) is None
+    with pytest.raises(cli.ColonyError, match="hack mode"):
+        merge.gate(world.config(template=STARTUP), Namespace(state="off"))
+
+
+def test_a_switched_off_check_comes_back_on_by_itself_after_four_hours(world, monkeypatch):
+    at_a_terminal(monkeypatch)
+    config = world.config()
+    assert merge.gate(config, Namespace(state="off")) == 0
+    held = merge.gate_off(config)
+    assert held and 4 * 3600 - 60 < held["until"] - time.time() <= 4 * 3600
+    wait_module = merge.wait
+    wait_module.write_json(merge.gate_path(config), {**held, "until": time.time() - 1})
+    assert merge.gate_off(config) is None
 
 
 def test_a_slow_fast_check_gets_a_note_once_a_day(world, capsys, monkeypatch):

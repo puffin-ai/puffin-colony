@@ -43,6 +43,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 SUMMARY = re.compile(r"\b\d+\s+(?:passed|failed|failing|passing|errors?)\b", re.I)
 FAILING = re.compile(r"^(?:FAIL(?:ED)?|✗|×|✕|●|not ok)\s+\S")
 NAMED = 5  # the failing tests a message names
+GATE_HOURS = 4  # a switched-off fast check comes back on by itself after this long, when no demo time is set
 SLOW_CHECK_SECONDS = 90  # past this, a merge notes that a hackathon's fast check should be quicker, once a day
 # A database URL in the check's env, scheme://user:password@host/...: its host alone is ever named.
 DATABASE_URL = re.compile(r"^(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|sqlserver|mssql|cockroachdb)"
@@ -228,30 +229,53 @@ def gate_path(config: dict) -> Path:
 
 
 def gate_off(config: dict) -> dict | None:
-    """Who switched the fast check off on this computer, and when, or None while it is on."""
+    """Who switched the fast check off on this computer, and when, or None while it is on or once its time ran out."""
     held = wait.read_json(gate_path(config), None)
-    return held if isinstance(held, dict) and held.get("off") else None
+    if not isinstance(held, dict) or not held.get("off"):
+        return None
+    return held if time.time() < float(held.get("until") or 0) else None
+
+
+def terminal_login() -> str:
+    """The GitHub login gh is signed in as on this computer: who ran `colony gate off`."""
+    try:
+        return wait.gh("api", "user", "--jq", ".login").strip() or "someone"
+    except wait.GhError:
+        return "someone"
 
 
 def gate(config: dict, args) -> int:
     """`colony gate off|on|status`: the person switches the fast check off or on for `colony merge` on this computer,
-    and the board hears it. Off, a merge lands without the install and the check, and its [merged] line says so."""
-    from colony import presence
+    and the board hears it. Off, a merge lands without the install and the check, and its [merged] line says so.
 
+    Only the person switches it off: at their own terminal, outside any Colony session, typing `off` to confirm, so
+    no agent can drop the gate by itself. It comes back on by itself at the demo time, or after GATE_HOURS without
+    one. Anyone may switch it back on."""
+    from colony import demo, presence
+
+    if not wait.hack(config):
+        raise cli.ColonyError(f"`{cli.NAME} gate` is hack mode's: other modes land work through pull requests")
     if args.state == "status":
         held = gate_off(config)
         print(f"the fast check is off: {held.get('by')} switched it off at {held.get('at')}" if held
               else "the fast check is on")
         return 0
-    person = cli.person_of(config, args)
     if args.state == "off":
-        at = time.strftime("%H:%M UTC", time.gmtime())
-        wait.write_json(gate_path(config), {"off": True, "by": person, "at": at})
-        line = (f"@{wait.ALL} gate: {person} switched the fast check off at {at}: colony merge on "
-                f"{presence.computer()} lands without it until `{cli.NAME} gate on`")
+        if not sys.stdin.isatty() or os.environ.get(cli.SESSION_ENV):
+            raise cli.ColonyError(f"only your person switches the fast check off: they run `{cli.NAME} gate off` in "
+                                  "their own terminal, which asks them to confirm")
+        if input("Switch the fast check off for colony merge on this computer? Type off: ").strip() != "off":
+            print("the fast check stays on")
+            return 1
+        by, at = terminal_login(), time.strftime("%H:%M UTC", time.gmtime())
+        due = demo.demo_at(config)
+        until = due.timestamp() if due and due.timestamp() > time.time() else time.time() + GATE_HOURS * 3600
+        wait.write_json(gate_path(config), {"off": True, "by": by, "at": at, "until": until})
+        line = (f"@{wait.ALL} gate: {by} switched the fast check off at {at}: colony merge on {presence.computer()} "
+                f"lands without it until `{cli.NAME} gate on`, or {time.strftime('%H:%M UTC', time.gmtime(until))}")
     else:
         gate_path(config).unlink(missing_ok=True)
-        line = f"@{wait.ALL} gate: {person} switched the fast check back on: colony merge runs it again"
+        line = f"@{wait.ALL} gate: {terminal_login()} switched the fast check back on: colony merge runs it again"
     print(line.removeprefix(f"@{wait.ALL} "))
     if wait.hack(config):
         try:
