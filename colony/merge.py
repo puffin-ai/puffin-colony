@@ -155,7 +155,8 @@ def log_path(config: dict, name: str, run: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     for old in sorted(folder.glob("*.log"), key=lambda path: path.stat().st_mtime)[:-LOGS_KEPT]:
         old.unlink(missing_ok=True)
-    return folder / f"{re.sub(r'[^\w.-]', '-', name)}-{time.strftime('%Y%m%d-%H%M%S')}-{run}.log"
+    safe_name = re.sub(r"[^\w.-]", "-", name)  # outside the f-string: Python 3.11 allows no backslash in one
+    return folder / f"{safe_name}-{time.strftime('%Y%m%d-%H%M%S')}-{run}.log"
 
 
 def run_check(command: str, cwd: Path, env: dict, log: Path) -> Check:
