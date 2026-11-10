@@ -25,7 +25,7 @@ A teammate who uses another agent, such as Codex, needs only `sh` and `gh`.
 Take 10 minutes for this. It saves hours of merge conflicts.
 
 1. **Split the work by folder.** Give each person folders nobody else edits, such as `web/` for one and `api/` for another. Shared files, such as `package.json`, the database schema or shared types, get one owner too.
-2. **Run setup once.** One person runs `colony` in the repo, picks `hack`, and answers: the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time. Setup writes the owner table into `AGENTS.md`, opens and pins the board issue, copies `tools/board`, and opens its setup PR. Merge it.
+2. **Run setup once.** One person runs `colony` in the repo, picks `hack`, and answers: the team's logins and names, who owns which folders, the base branch (default `main`), whether agents may merge after the fast check (default yes), and the demo time, with its time zone, such as `2026-11-08 17:00 -08:00`. The demo time has no default: Colony counts down to it, `colony who` and `colony status` print the time left first, and the freeze starts an hour before it. It goes in `[hack] demo`, with `[hack] team_lead`. Setup writes the owner table into `AGENTS.md`, opens and pins the board issue, copies `tools/board`, and opens its setup PR. Merge it.
 3. **Everyone opens a lead.** Each teammate pulls, opens Claude Code in the repo, and says hi, or runs `.colony/bin/colony` in a terminal. Your lead is `<login>-main-lead`. Tell it your part of the demo.
 
 The owner table holds each person, their login and their folders, such as:
@@ -117,7 +117,7 @@ The session runs on your laptop, and the phone only talks to it. Keep the laptop
 
 ## The last hour before the demo
 
-1. **Freeze.** Post `@all freeze: only fixes from now`. Leads finish their current work and start nothing new.
+1. **Freeze.** An hour before `[hack] demo` (`[hack] freeze_minutes` changes it), the team lead's `colony wait` posts `@all freeze: the demo is at <time>, in <minutes>: only fixes from now` by itself. Leads finish their current work and start nothing new.
 2. **Merge what is ready** with `colony merge <branch>`.
 3. **Review once.** Ask one lead to run `colony batch --review --name demo-1`, with no `--card`, since hack has no cards. One fresh reviewer reads `origin/<base>` as it stands, the demo build, while the fast check runs, and writes its report. No fixers run. It pushes the report on its own branch, `<project>/batch-demo-1`, and posts one line on the board with the open count and the report's link, such as `@all demo build 3f2a91c reviewed: open: 2, fast check pass, report: <link>`. Fix what would break the demo, and note the rest for later with `colony idea "<one line>"`.
 4. **Rehearse.** Pull the base on the machine you present from, and run the demo once from start to end.

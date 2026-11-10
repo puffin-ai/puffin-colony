@@ -365,6 +365,8 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
                      ("<the fast check again: hack's gate runs it alone>", "npm test"), ("<the fast check>", "npm test"),
                      ("<the install command>", "npm ci"),
                      ("<the board issue's number>", "12"), ('["<login>", "<login>"]', '["ana", "ben"]'),
+                     ("<question 5, such as 2026-11-08T17:00:00-08:00>", "2026-11-08T17:00:00-08:00"),
+                     ("<the team lead's login, from question 1>", "ana"),
                      ('{ <login> = "<Name>", <login> = "<Name>" }', '{ ana = "Ana", ben = "Ben" }'),
                      ("[accounts.<login>]", "[accounts.ana]"), ('"<login>"', '"ana"')):
         assert old in text, old
@@ -471,3 +473,52 @@ def test_hack_mode_gathers_the_leads_lines_for_two_minutes():
     import tomllib
     preset = tomllib.loads((PACKAGE / "modes" / "hack.toml").read_text())
     assert preset["messages"]["lead_digest_minutes"] == 2
+
+
+# The demo's clock: [hack] demo sets the countdown and the freeze
+
+DEMO = {**CONFIG, "hack": {"demo": "2026-11-08 17:00 -08:00", "team_lead": "ana"}}
+
+
+def pst(text: str):
+    from datetime import datetime
+    return datetime.fromisoformat(f"2026-11-08T{text}:00-08:00")
+
+
+def test_the_countdown_names_the_time_left_and_the_freeze():
+    from colony import demo
+    assert demo.countdown(DEMO, pst("13:40")) == ("Demo at 17:00 UTC-08:00, in 3 h 20 min; the freeze starts at 16:00, "
+                                                  "in 2 h 20 min.")
+    assert demo.countdown(DEMO, pst("16:15")) == ("Freeze: the demo at 17:00 UTC-08:00 is in 45 min, so only fixes "
+                                                  "from now.")
+    assert demo.countdown(DEMO, pst("17:05")) == "The demo time, 17:00 UTC-08:00, has passed."
+    assert demo.countdown(CONFIG) == ""
+
+
+def test_a_demo_time_needs_its_time_zone():
+    from colony import demo
+    with pytest.raises(cli.ColonyError, match="needs its time zone"):
+        demo.countdown({"hack": {"demo": "2026-11-08 17:00"}})
+
+
+def test_the_team_leads_wait_posts_the_freeze_once_when_the_last_hour_starts(tmp_path, monkeypatch):
+    from colony import demo, transport
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sent = []
+    monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: sent.append(line) or 7)
+    demo.freeze_check(DEMO, "ana")(now=pst("15:59"))
+    assert sent == []
+    for _ in range(2):
+        demo.freeze_check(DEMO, "ana")(now=pst("16:01"))
+    demo.freeze_check(DEMO, "ben")(now=pst("16:01"))  # not the team lead
+    assert sent == ["@all freeze: the demo is at 17:00 UTC-08:00, in 59 min: only fixes from now. Merge what is "
+                    "ready, then rehearse on the last [merged] build"]
+
+
+def test_the_leads_wait_runs_the_freeze_check_at_each_poll(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    checks = []
+    monkeypatch.setattr(wait, "poll", lambda repo, state, me: state["pending"].append(["for lead: hi", True]))
+    me = wait.Session(name=cli.LEAD, names=frozenset({cli.LEAD}))
+    assert wait.wait("acme/demo", "demo", me, freeze=lambda: checks.append(1)) == 0
+    assert checks == [1]

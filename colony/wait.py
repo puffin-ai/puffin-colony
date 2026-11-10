@@ -476,7 +476,7 @@ def silent_check(project: str, lead: str):
 
 
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         stale=None, heartbeat=None, status=None, outbox=None, silent=None) -> int:
+         stale=None, heartbeat=None, status=None, outbox=None, silent=None, freeze=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
     when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
@@ -516,6 +516,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             status()  # edits the session's status comment, at most every 5 minutes, and never raises
         if outbox is not None:
             outbox()
+        if freeze is not None:
+            freeze()  # the team lead's: posts the freeze once its time comes (demo.freeze_check), and never raises
         if silent is not None:
             state["pending"] += [[line, True] for line in silent(state)]
         drop_shown(path, state, listed)
@@ -675,8 +677,13 @@ def run(config: dict, args, clock=None) -> int:
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
     silent = silent_check(project, name) if named() else None  # only a named lead's helpers post a status
+    freeze = None
+    if hack(config):
+        from colony import demo
+
+        freeze = demo.freeze_check(config, cli.person_of(config, args))
     return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status,
-                outbox=outbox, silent=silent)
+                outbox=outbox, silent=silent, freeze=freeze)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:

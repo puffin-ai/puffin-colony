@@ -299,7 +299,14 @@ def describe(status: Status, now: float) -> str:
 def who(config: dict, args) -> int:
     """`colony who`: every live lead and helper, across people and computers, with their folders and their
     accounts' room, and the gone ones."""
+    from colony import demo
+
     now = time.time()
+    try:
+        if line := demo.countdown(config):
+            print(line)
+    except cli.ColonyError as e:
+        print(f"{cli.NAME}: {e}", file=sys.stderr)
     alive, gone, note = everyone(config, now)
     if note:
         print(note, file=sys.stderr)

@@ -1486,8 +1486,10 @@ def batch(config: dict, args) -> int:
 
 def status(config: dict, args) -> int:
     """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
-    from colony import batch as runner
+    from colony import batch as runner, demo
 
+    if line := demo.countdown(config):
+        print(line)
     print(lead_line(config))
     return runner.batch_status(config, args)
 
