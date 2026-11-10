@@ -50,6 +50,9 @@ from types import SimpleNamespace
 from colony import cli, portable
 
 INTERVAL = 15
+SHARED_POLL = True  # every wait on a computer reads one shared copy of the board, fetched at most every INTERVAL
+SHARED_KEPT = 500  # the newest comments the shared copy keeps
+RATE_LIMIT_WAIT = 600  # the longest a wait sleeps for GitHub's rate limit before it reads again
 LOOKBACK = timedelta(hours=1)
 PAGE = 100
 GIVE_UP = 40  # failed polls in a row, about 10 minutes, before the wait ends with the error
@@ -287,6 +290,14 @@ def local_helpers(project: str) -> frozenset[str]:
     return frozenset(found)
 
 
+class RateLimited(GhError):
+    """GitHub's rate limit: the seconds until it resets, by its own headers."""
+
+    def __init__(self, message: str, seconds: float):
+        super().__init__(message)
+        self.seconds = seconds
+
+
 def gh_get(path: str, etag: str | None) -> tuple[int, str | None, list]:
     """GET a REST path through `gh api -i` with the last ETag: the status, the newest ETag, and a 200's JSON."""
     headers = ["-H", f"If-None-Match: {etag}"] if etag else []
@@ -294,10 +305,17 @@ def gh_get(path: str, etag: str | None) -> tuple[int, str | None, list]:
     head, _, body = run.stdout.replace("\r\n", "\n").partition("\n\n")
     first = head.split(maxsplit=2)
     status = int(first[1]) if len(first) > 1 and first[1].isdigit() else 0
+    headers = {}
     for header in head.splitlines()[1:]:
         key, _, value = header.partition(":")
+        headers[key.strip().lower()] = value.strip()
         if key.strip().lower() == "etag":
             etag = value.strip()
+    if status in (403, 429) and (headers.get("retry-after") or headers.get("x-ratelimit-remaining") == "0"):
+        reset = headers.get("x-ratelimit-reset", "")
+        seconds = float(headers["retry-after"]) if headers.get("retry-after", "").isdigit() else \
+            max(1.0, float(reset) - time.time()) if reset.isdigit() else 60.0
+        raise RateLimited(f"GitHub's rate limit: reading again in {int(seconds)} s", seconds)
     if status not in (200, 304):
         hint = " (run: gh auth login)" if status == 401 else ""
         raise GhError(f"GitHub answered {status or 'nothing'}{hint}: {run.stderr.strip()[:200]}")
@@ -368,8 +386,12 @@ def poll(repo: str, state: dict, me: Session) -> bool:
     """Read the comments changed since state["since"] once, add the new lines `me` takes to state["pending"] and to
     the unread cache (state["unread"], with their texts in state["listed"]), and say whether a full page came. The
     read time moves to the newest comment, so the next poll asks only after it."""
-    path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
-    _, state["etag"], comments = gh_get(path, state.get("etag"))
+    if SHARED_POLL:
+        comments, full = shared_comments(repo, state["since"])
+    else:
+        path = f"repos/{repo}/issues/comments?since={state['since']}&sort=updated&direction=asc&per_page={PAGE}"
+        _, state["etag"], comments = gh_get(path, state.get("etag"))
+        full = len(comments) >= PAGE
     if me.name == cli.LEAD:
         learn_helpers(state, comments, me.people)
         me = with_helpers(me, state)
@@ -387,7 +409,42 @@ def poll(repo: str, state: dict, me: Session) -> bool:
     if comments:
         state["since"] = comments[-1]["updated_at"]
     del seen[:-KEEP_SEEN]
-    return len(comments) >= PAGE
+    return full
+
+
+def slim(comment: dict) -> dict:
+    """The parts of a comment a wait reads, so the shared copy stays small."""
+    return {key: comment[key] for key in ("id", "issue_url", "body", "created_at", "updated_at", "author_association")
+            if key in comment} | ({"user": {"login": (comment.get("user") or {}).get("login")}}
+                                  if comment.get("user") else {})
+
+
+def shared_comments(repo: str, since: str) -> tuple[list, bool]:
+    """The comments changed since `since`, from one copy every wait on this computer shares: the first wait to read
+    past INTERVAL fetches what changed, under a lock, and the others read the copy. Sessions that each read GitHub
+    every 15 seconds on one account would soon reach its rate limit. A wait that reads further back than the copy
+    holds starts it afresh. Returns the comments and whether a full page came."""
+    path = Path.home() / f".{cli.NAME}" / "polls" / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', repo)}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "w") as held, portable.lock(held):
+        copy = read_json(path, {})
+        copy = copy if isinstance(copy, dict) and isinstance(copy.get("comments"), list) else {}
+        if not copy or since < str(copy.get("from", "")):
+            copy = {"from": since, "since": since, "comments": [], "fetched": 0.0}
+        if time.time() - float(copy.get("fetched", 0)) >= INTERVAL - 1 or copy.get("full"):
+            url = f"repos/{repo}/issues/comments?since={copy['since']}&sort=updated&direction=asc&per_page={PAGE}"
+            _, copy["etag"], fetched = gh_get(url, copy.get("etag"))
+            if fetched:
+                by_id = {comment["id"]: comment for comment in copy["comments"]}
+                by_id.update({comment["id"]: slim(comment) for comment in fetched})
+                copy["comments"] = sorted(by_id.values(), key=lambda comment: comment.get("updated_at", ""))
+                copy["since"] = fetched[-1]["updated_at"]
+            if len(copy["comments"]) > SHARED_KEPT:
+                copy["comments"] = copy["comments"][-SHARED_KEPT:]
+                copy["from"] = copy["comments"][0].get("updated_at", copy["from"])
+            copy["full"], copy["fetched"] = len(fetched) >= PAGE, time.time()
+            write_json(path, copy)
+        return [comment for comment in copy["comments"] if comment.get("updated_at", "") >= since], bool(copy["full"])
 
 
 def drop_shown(path: Path, state: dict, listed: set[str]) -> None:
@@ -497,6 +554,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     state.setdefault("listed", [])
     failures, digest_at = 0, clock.now() + digest
     listener = claim_listener(project, me.name)
+    limited = False
     last_wall, last_mono = time.time(), time.monotonic()
     add_stale(state, stale)
     while True:
@@ -504,6 +562,12 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         try:
             more = poll(repo, state, me)
             failures = 0
+        except RateLimited as e:
+            if not limited:
+                print(f"{cli.NAME} wait: {e}", file=sys.stderr)
+            limited = True
+            clock.sleep(min(e.seconds, RATE_LIMIT_WAIT))  # GitHub's limit is no failure: read again once it resets
+            continue
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             failures, more = failures + 1, False
             if failures >= GIVE_UP:

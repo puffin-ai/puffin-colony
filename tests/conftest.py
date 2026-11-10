@@ -65,6 +65,14 @@ def outside_a_colony_session(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def one_session_one_read(monkeypatch):
+    """Each wait reads GitHub itself, as one session alone does, so a test's queued answers go to its own polls; a test
+    of the computer's shared read turns it on."""
+    from colony import wait
+    monkeypatch.setattr(wait, "SHARED_POLL", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def with_the_retry_watchdog(monkeypatch):
     """Every Colony session runs with CLAUDE_CODE_RETRY_WATCHDOG=1, so the prompt hook's once-a-day note stays out of
     a test that doesn't ask for it, wherever the suite runs."""

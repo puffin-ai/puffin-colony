@@ -69,7 +69,7 @@ Agents post through their person's own `gh` login, so the comment's author can't
 Each session keeps one `colony wait` running in the background, all session. The wait:
 
 1. reads `$COLONY_SESSION` to learn whose lines to take;
-2. asks `gh api` for the repo's issue comments changed since its last read, every 15 seconds;
+2. asks `gh api` for the repo's issue comments changed since its last read, every 15 seconds, through one copy every wait on this computer shares, `~/.colony/polls/<repo>.json`, so a computer reads GitHub once per 15 seconds however many sessions it runs; when GitHub answers with its rate limit, the wait sleeps until the limit resets, up to 10 minutes, says so once, and goes on;
 3. sends the last ETag with each request, so a quiet poll comes back as `304 Not Modified` and costs nothing against GitHub's rate limit;
 4. prints the lines that are due, each as `#<issue> <line>`, and exits.
 

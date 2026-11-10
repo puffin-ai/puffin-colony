@@ -590,3 +590,40 @@ def test_post_all_means_at_all_and_say_to_a_helper_points_to_post(gh, monkeypatc
     assert "@all main is red" in capsys.readouterr().out
     with pytest.raises(cli.ColonyError, match="for one of your helpers, use colony post builder-2"):
         wait.say(CONFIG, Namespace(person=None, to="builder-2", sentence="hello"))
+
+
+def test_sessions_on_one_computer_share_one_read_of_the_board(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(wait, "SHARED_POLL", True)
+    reads = []
+    page = [comment(1, "for builder-1: start: the form (from lead)", "2026-11-05T10:00:01Z"),
+            comment(2, "for builder-2: start: the export (from lead)", "2026-11-05T10:00:02Z")]
+
+    def gh_get(path, etag):
+        reads.append(path)
+        return 200, 'W/"e1"', page
+    monkeypatch.setattr(wait, "gh_get", gh_get)
+    one, two = ({"since": "2026-11-05T09:00:00Z", "pending": []} for _ in range(2))
+    wait.poll("acme/demo", one, wait.Session("builder-1", frozenset({"builder-1"})))
+    wait.poll("acme/demo", two, wait.Session("builder-2", frozenset({"builder-2"})))
+    assert len(reads) == 1  # the second session read what the first one fetched
+    assert [line for line, _ in one["pending"]] == ["#7 for builder-1: start: the form (from lead)"]
+    assert [line for line, _ in two["pending"]] == ["#7 for builder-2: start: the export (from lead)"]
+
+
+def test_a_rate_limited_read_waits_for_githubs_reset_and_never_gives_up(gh, monkeypatch, capsys):
+    calls = []
+
+    def poll(repo, state, me):
+        calls.append(1)
+        if len(calls) <= 3:
+            raise wait.RateLimited("GitHub's rate limit", 120)
+        state["pending"].append(["for builder-1: start: the form (from lead)", True])
+        return False
+    monkeypatch.setattr(wait, "poll", poll)
+    monkeypatch.setattr(wait, "GIVE_UP", 2)
+    clock = Clock()
+    me = wait.Session("builder-1", frozenset({"builder-1"}))
+    assert wait.wait("acme/demo", "demo", me, clock=clock) == 0
+    assert clock.naps.count(120) == 3
+    assert capsys.readouterr().err.count("GitHub's rate limit") == 1
