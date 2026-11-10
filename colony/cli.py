@@ -1545,6 +1545,20 @@ def status(config: dict, args) -> int:
     return runner.batch_status(config, args)
 
 
+def stop_sessions(config: dict, args) -> int:
+    """Stop this project's Colony sessions on this computer (stop.stop)."""
+    from colony import stop
+
+    return stop.stop(config, args)
+
+
+def handoff(config: dict, args) -> int:
+    """Hand this person's open work to another person's lead (stop.handoff)."""
+    from colony import stop
+
+    return stop.handoff(config, args)
+
+
 def live(config: dict, args) -> int:
     """Post which commit is live, for a deploy GitHub doesn't record (live.post)."""
     from colony import live as deploys
@@ -1704,6 +1718,15 @@ def build_parser() -> argparse.ArgumentParser:
                                              "together with one check")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+    p = sub.add_parser("stop", help="stop this project's Colony sessions on this computer, never this one, and tell "
+                                    "the board")
+    p.add_argument("names", nargs="*", metavar="name", help="the sessions to stop, such as staff; none for all of them")
+    p.add_argument("--force", action="store_true", help="stop one whose folder holds uncommitted work too")
+    p.set_defaults(run=stop_sessions)
+    p = sub.add_parser("handoff", help="hack mode: hand this person's open work and claimed paths to another person's "
+                                       "lead")
+    p.add_argument("to", metavar="@login", help="the other person's login, such as @ben")
+    p.set_defaults(run=handoff)
     p = sub.add_parser("live", help="hack mode: whoever deploys by hand tells every lead which commit is live")
     p.add_argument("sha", help="the commit you deployed, such as 1a2b3c4")
     p.add_argument("--url", default="", help="where it is live, such as https://myapp.com")

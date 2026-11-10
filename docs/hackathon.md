@@ -134,7 +134,8 @@ The session runs on your laptop, and the phone only talks to it. Keep the laptop
 2. **Merge what is ready** with `colony merge <branch>`.
 3. **Review once.** Ask one lead to run `colony batch --review --name demo-1`, with no `--card`, since hack has no cards. One fresh reviewer reads `origin/<base>` as it stands, the demo build, while the fast check runs, and writes its report. No fixers run. It pushes the report on its own branch, `<project>/batch-demo-1`, and posts one line on the board with the open count and the report's link, such as `@all demo build 3f2a91c reviewed: open: 2, fast check pass, report: <link>`. Fix what would break the demo, and note the rest for later with `colony idea "<one line>"`.
 4. **Rehearse.** Pull the base on the machine you present from, and run the demo once from start to end.
-5. **Keep a good build.** Post the commit you rehearsed on, such as `@all demo build: 3f2a91c`, so you can go back to it if a late merge breaks something.
+5. **Hand off or stop.** Leaving early, run `colony handoff @<login>` to give your open branches and claimed paths to a teammate's lead, then `colony stop`, which ends this project's sessions on your computer, keeps any with uncommitted work, and tells the board.
+6. **Keep a good build.** Post the commit you rehearsed on, such as `@all demo build: 3f2a91c`, so you can go back to it if a late merge breaks something.
 
 ## FAQ
 
