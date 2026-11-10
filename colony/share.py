@@ -24,6 +24,7 @@ BRANCH = "colony-shared"
 # Files that hold secrets by their kind, whatever their words: never shared.
 SECRET_FILES = re.compile(r"^(\.env.*|.*\.(pem|key|p12|pfx|jks|keystore|kdbx)|id_(rsa|dsa|ecdsa|ed25519).*|"
                           r"credentials.*|secrets?\..*|\.netrc|\.npmrc|\.pypirc|.*service[-_]account.*\.json)$", re.I)
+SECRET_FOLDERS = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".gcloud", ".password-store"}
 SHARE_LIMIT = 10_000_000  # bytes
 NEED = re.compile(r"N(\d+)$", re.I)
 
@@ -43,9 +44,16 @@ def sender(config: dict) -> str:
 
 def share(config: dict, args) -> int:
     """`colony share <file> [--to @<login>]`: see the module's docstring."""
-    source = Path(args.file).expanduser()
+    given = Path(args.file).expanduser()
+    if given.is_symlink():
+        raise cli.ColonyError(f"{args.file} is a link, and colony never shares one: a link's name can hide a secret "
+                              "file; share the file itself")
+    source = given.resolve()
     if not source.is_file():
         raise cli.ColonyError(f"{args.file} is not a file")
+    if SECRET_FOLDERS & {part.lower() for part in source.parts[:-1]} or any(
+            SECRET_FILES.match(part) for part in source.parts[:-1]):
+        raise cli.ColonyError(f"{args.file} sits in a folder that holds secrets, and colony never shares a secret")
     if source.stat().st_size > SHARE_LIMIT:
         raise cli.ColonyError(f"{args.file} is over {SHARE_LIMIT // 1_000_000} MB: share a smaller copy")
     if SECRET_FILES.match(source.name):

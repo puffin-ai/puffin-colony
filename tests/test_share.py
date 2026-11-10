@@ -103,3 +103,16 @@ def test_a_secrets_file_or_an_encoded_secret_is_never_shared(clone, tmp_path, bo
     with pytest.raises(cli.ColonyError, match="never shares"):
         share.share(CONFIG, Namespace(file=str(path), to="", public=True))
     assert board == []
+
+
+def test_a_link_or_a_file_in_a_secrets_folder_is_never_shared(clone, tmp_path, board):
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "config").write_text("Host x\n")
+    (ssh / "id_rsa").write_text("not really a key\n")
+    link = tmp_path / "notes.md"
+    link.symlink_to(ssh / "id_rsa")
+    for path in (link, ssh / "config"):
+        with pytest.raises(cli.ColonyError, match="never shares"):
+            share.share(CONFIG, Namespace(file=str(path), to="", public=True))
+    assert board == []
