@@ -25,7 +25,7 @@ A subagent works inside your card and your folders, under the same rules, and yo
 
 ## Lines
 
-Agents talk only in lines. A line is one comment on a card (a GitHub issue), under 300 characters:
+Agents talk only in lines. A line is one comment on a card (a GitHub issue), with a sentence of at most 300 characters:
 
     for <name>: <one sentence> (from <name>)
 
@@ -40,13 +40,14 @@ Every line starts with its kind, and `colony post` refuses any other. A builder 
 The lead sends a builder only these three:
 - `start: …`: hands out work, such as `start: this card`.
 - `answer: …`: answers a question, such as `answer: yes, keep 30 s`.
-- `urgent: …`: anything that can't wait, such as `urgent: stop this card`.
+- `stop: …`: takes work back, such as `stop: drop this task, verify takes it`. The builder commits and pushes what it has, posts `done` with the branch and commit, and starts nothing new until the next `start:`.
+- `urgent: …`: anything that can't wait, such as `urgent: main is red, hold your merge`.
 
 Progress never goes in a line: it goes in the board's fields, which wake no one.
 
 A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`. The lead's wait also adds a `stale:` line for each card In progress whose Last update on the board is over 2.5 hours old.
 
-Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `ana-lead`: `colony say sam-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text, still under 300 characters. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
+Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `ana-lead`: `colony say sam-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text. A sentence is at most 300 characters, not counting what Colony adds around it, and several sentences in one `colony post` or `colony say` go out together as one comment. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
 
 ## Stop list
 

@@ -670,10 +670,29 @@ def compose(to: str, sentence: str, sender: str) -> str:
     return f"{to} {sentence} (from {sender})" if to.startswith("@") else f"for {to}: {sentence} (from {sender})"
 
 
+def sentences(args) -> list[str]:
+    """The command's sentences, one or several (`post` and `say` take each as its own line), with their spaces
+    squeezed. A sentence is checked as the sender wrote it: the `for <to>: … (from <sender>)` around it, an
+    `urgent:` that --urgent adds and a `(#<card>)` don't count."""
+    given = [args.sentence] if isinstance(args.sentence, str) else list(args.sentence)
+    found = [" ".join(sentence.split()) for sentence in given]
+    for sentence in found:
+        check_sentence(sentence)
+    return found
+
+
+def check_sentence(sentence: str) -> None:
+    """Refuse an empty sentence, or one over MAX_LINE characters, saying how much to cut."""
+    if not sentence:
+        raise cli.ColonyError("a line holds one sentence, and this one is empty")
+    if len(sentence) > MAX_LINE:
+        raise cli.ColonyError(f"a line holds one sentence of at most {MAX_LINE} characters, and this one has "
+                              f"{len(sentence)}, so cut {len(sentence) - MAX_LINE}: {sentence[:40]}…")
+
+
 def checked(line: str, sentence: str) -> str:
-    """The line, once it holds a sentence and stays under MAX_LINE characters."""
-    if not sentence or len(line) >= MAX_LINE:
-        raise cli.ColonyError(f"a line is one sentence under {MAX_LINE} characters, and this one has {len(line)}")
+    """The line, once its sentence passes check_sentence; what Colony wraps around the sentence doesn't count."""
+    check_sentence(sentence)
     return line
 
 
@@ -687,18 +706,19 @@ def say(config: dict, args) -> int:
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
     transport.check_transport(config)
-    me, to, sentence = lead_name(config, args), args.to.lower(), " ".join(args.sentence.split())
-    if sentence and getattr(args, "urgent", False) and not CANT_WAIT.match(sentence):
-        sentence = f"urgent: {sentence}"
+    me, to, said = lead_name(config, args), args.to.lower(), sentences(args)
+    if getattr(args, "urgent", False):
+        said = [sentence if CANT_WAIT.match(sentence) else f"urgent: {sentence}" for sentence in said]
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
     elif not to.endswith(f"-{cli.LEAD}") or to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
-    line = checked(compose(to, sentence, me), sentence)
+    lines = [compose(to, sentence, me) for sentence in said]
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
-    number = transport.send(config, to, line)
-    print(f"#{number} {line}")
+    number = transport.send(config, to, "\n".join(lines))  # one comment: every line goes out, or none does
+    for line in lines:
+        print(f"#{number} {line}")
     return 0
 
 
@@ -722,7 +742,7 @@ def post(config: dict, args) -> int:
     on_board, card = hack(config), getattr(args, "card", None)
     # a named lead signs with its name, which its helpers take lines from; so does every lead on the hack board
     sender = lead_name(config, args) if me == cli.LEAD and (on_board or named()) else me
-    to, sentence = args.to.lower(), " ".join(args.sentence.split())
+    to, said = args.to.lower(), sentences(args)
     if to.startswith("@"):
         own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
         check_mention(config, to, own, me)
@@ -734,14 +754,17 @@ def post(config: dict, args) -> int:
                                   f"(you are {me})")
     if card is None and not on_board:
         raise cli.ColonyError(f'post needs the card first: {cli.NAME} post <card> <name> "<sentence>"')
-    if sentence and args.urgent and not CANT_WAIT.match(sentence):
-        sentence = f"urgent: {sentence}"
-    about = f" (#{card})" if on_board and card is not None and sentence else ""
-    line = checked(compose(to, sentence + about, sender), sentence)
-    tidy.check_kind(me == cli.LEAD, to, sentence)
-    number = transport.send(config, to, line, card=None if on_board else card)
-    print(f"#{number} {line}")
-    if me != cli.LEAD and card is not None and DONE.match(sentence):
+    if args.urgent:
+        said = [sentence if CANT_WAIT.match(sentence) else f"urgent: {sentence}" for sentence in said]
+    for sentence in said:
+        tidy.check_kind(me == cli.LEAD, to, sentence)
+    about = f" (#{card})" if on_board and card is not None else ""
+    lines = [compose(to, sentence + about, sender) for sentence in said]
+    # One comment: every line goes out, or none does.
+    number = transport.send(config, to, "\n".join(lines), card=None if on_board else card)
+    for line in lines:
+        print(f"#{number} {line}")
+    if me != cli.LEAD and card is not None and any(DONE.match(sentence) for sentence in said):
         in_review(config, card)
     return 0
 
@@ -757,6 +780,21 @@ def in_review(config: dict, card: int) -> None:
         board.set_fields(config, card, [("Status", "In review")])
     except (cli.ColonyError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
         print(f"{cli.NAME} post: the line went out, and #{card} stays as it was on the board: {e}", file=sys.stderr)
+
+
+class PostWords(argparse.Action):
+    """post's words: a card number first when the first word is one, such as 41 or #41, then who the line is for,
+    then one or more sentences. Read here rather than as an optional positional, which took a name such as
+    sam-main-lead for a card and failed."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        words = list(values)
+        card = int(words.pop(0).lstrip("#")) if words and re.fullmatch(r"#?\d+", words[0]) else None
+        if len(words) < 2:
+            parser.error(f'post needs who the line is for and a sentence: {cli.NAME} post [<card>] <name> '
+                         '"<sentence>" ["<sentence>" ...]')
+        namespace.card, namespace.to = card, words[0]
+        namespace.sentence = words[1] if len(words) == 2 else words[1:]
 
 
 def card_number(value: str) -> int:
@@ -782,16 +820,16 @@ def add_commands(sub, wait_parser) -> None:
                                    "hack mode)")
     p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
                                                    "lead, or @all")
-    p.add_argument("sentence", help="one sentence")
+    p.add_argument("sentence", nargs="+", help=f"one sentence of at most {MAX_LINE} characters, or several, each "
+                                               "its own line, which go out together in one comment")
     p.add_argument("--urgent", action="store_true",
                    help="start the sentence with urgent:, so the other lead gets it at once instead of in its digest")
     p.set_defaults(run=say)
     p = sub.add_parser("post", help="post a line for another session on a card (the board in hack mode), through "
                                     "the transport")
-    p.add_argument("card", type=card_number, nargs="?",
-                   help="the card's issue number, such as 41; optional in hack mode, where the line goes to the board")
-    p.add_argument("to", metavar="name", help="who the line is for, such as lead or builder-2, or @login for that "
-                                              "person's lead, or @all")
-    p.add_argument("sentence", help="one sentence")
+    p.add_argument("words", nargs="+", action=PostWords, metavar="[card] name sentence",
+                   help="the card's number, such as 41, which hack mode needs not; who the line is for, such as "
+                        "lead or builder-2, or @login for that person's lead, or @all; then one sentence of at most "
+                        f"{MAX_LINE} characters, or several, each its own line, which go out together in one comment")
     p.add_argument("--urgent", action="store_true", help="start the sentence with urgent:, so it can't wait")
     p.set_defaults(run=post)

@@ -103,17 +103,54 @@ def test_post_is_a_command_on_the_command_line(gh, tmp_path):
     assert gh()[1][:2] == ["project", "list"]
     bad = subprocess.run([sys.executable, "-m", "colony", "post", "the next one", "lead", "hi"],
                          capture_output=True, text=True, cwd=host, env=env)
-    assert bad.returncode == 2 and "is not a card number" in bad.stderr
+    assert bad.returncode == 2 and "another session's name" in bad.stderr
     args = cli.build_parser().parse_args(["post", "41", "lead", "main is red", "--urgent"])
     assert (args.card, args.to, args.sentence, args.urgent, args.run) == (41, "lead", "main is red", True, wait.post)
+
+
+def test_the_limit_counts_the_sentence_alone_not_the_lines_wrapper(gh, monkeypatch):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    sentence = "start: " + "x" * 293  # 300 characters, and the line around it is longer
+    assert wait.post(GITHUB, Namespace(card=41, to="builder-2", sentence=sentence, urgent=False)) == 0
+    with pytest.raises(cli.ColonyError, match="this one has 301, so cut 1"):
+        wait.post(GITHUB, Namespace(card=41, to="builder-2", sentence=sentence + "y", urgent=False))
+    assert len(gh()) == 1
+
+
+def test_a_lead_may_tell_its_helper_to_stop(gh, monkeypatch):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    assert wait.post(GITHUB, Namespace(card=41, to="builder-2", sentence="stop: drop T84, verify takes it",
+                                       urgent=False)) == 0
+
+
+def test_several_sentences_go_out_as_one_comment_or_not_at_all(gh, monkeypatch, capsys):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    args = cli.build_parser().parse_args(["post", "41", "builder-2", "start: the ops page", "answer: use one table"])
+    assert wait.post(GITHUB, args) == 0
+    body = gh()[0][-1]
+    assert body == "for builder-2: start: the ops page (from lead)\nfor builder-2: answer: use one table (from lead)"
+    helper = wait.Session("builder-2", frozenset({"builder-2"}), leads=frozenset({"lead"}))
+    assert len(wait.taken(body, helper, "41")) == 2
+    too_long = cli.build_parser().parse_args(["post", "41", "builder-2", "start: a", "answer: " + "x" * 300])
+    with pytest.raises(cli.ColonyError, match="so cut"):
+        wait.post(GITHUB, too_long)
+    assert len(gh()) == 1  # nothing of the second post went out
+
+
+def test_post_reads_a_card_number_only_when_the_first_word_is_one():
+    parse = cli.build_parser().parse_args
+    assert (parse(["post", "staff", "start: a", "answer: b"]).card, parse(["post", "staff", "start: a"]).to) == (None, "staff")
+    assert parse(["post", "staff", "start: a", "answer: b"]).sentence == ["start: a", "answer: b"]
+    assert parse(["post", "#41", "lead", "done"]).card == 41
+    assert parse(["say", "sam-lead", "one", "two"]).sentence == ["one", "two"]
 
 
 @pytest.mark.parametrize("session, to, sentence, why", [
     ("", "lead", "hello", "set COLONY_SESSION"),
     ("builder-2", "builder-2", "hello", "another session's name"),
     ("builder-2", "the lead", "hello", "another session's name"),
-    ("builder-2", "lead", "  ", "one sentence under 300 characters"),
-    ("builder-2", "lead", "word " * 60, "one sentence under 300 characters"),
+    ("builder-2", "lead", "  ", "a line holds one sentence, and this one is empty"),
+    ("builder-2", "lead", "word " * 61, "at most 300 characters"),
 ])
 def test_post_needs_a_session_another_name_and_one_short_sentence(gh, monkeypatch, session, to, sentence, why):
     monkeypatch.setenv("COLONY_SESSION", session)

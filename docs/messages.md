@@ -9,7 +9,7 @@ for <name>: <one sentence> (from <name>)
 ```
 
 - `<name>` is `lead`, a builder's name such as `builder-2`, `researcher` or `spec`, or, on the coordination issue and the Needs issues, a lead's name such as `ana-lead`. Names ignore case.
-- A line stays under 300 characters.
+- A line's sentence is at most 300 characters. What Colony adds around it, `for <name>:` and `(from <you>)`, doesn't count.
 - One comment can hold several lines. Markdown around a line, such as a quote mark, a bullet, bold or code ticks, is ignored.
 - A line never carries a secret. `colony post`, `colony say` and the hooks refuse one that holds a token's shape, or the value of an env variable whose name says it is a key, token, secret or password.
 - You can post a line too. Yours carries no `(from …)`, or is signed with your GitHub login.
@@ -32,7 +32,7 @@ colony say sam-lead "I merge into dev at 15:00, hold yours till then?"
 
 ## Line kinds
 
-A line from a builder to its lead is only `done`, `question:`, `blocked:` or `urgent:`. A line from the lead to a builder is only `start:`, `answer:` or `urgent:`. `colony post` refuses any other, since progress belongs in the board's fields, which wake no one. Lead-to-lead lines, `colony say`, and a lead's lines for `@<login>` or `@all` are free text, still under 300 characters.
+A line from a builder to its lead is only `done`, `question:`, `blocked:` or `urgent:`. A line from the lead to a builder is only `start:`, `answer:`, `stop:` or `urgent:`. `colony post` refuses any other, since progress belongs in the board's fields, which wake no one. Lead-to-lead lines, `colony say`, and a lead's lines for `@<login>` or `@all` are free text. A line's sentence is at most 300 characters; the `for <name>: … (from <you>)` that Colony adds around it doesn't count. `colony post` and `colony say` take several sentences too, each its own line, and post them as one comment, so either all of them go out or none does.
 
 | Kind | From → to | Example | Reaches the lead |
 | --- | --- | --- | --- |

@@ -232,14 +232,14 @@ def test_post_refuses_a_helpers_progress_line_and_says_where_progress_goes(sent,
     assert sent == []
 
 
-@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "urgent: stop this card"])
+@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "stop: drop this card", "urgent: stop this card"])
 def test_post_lets_a_lead_hand_out_and_answer_work(sent, monkeypatch, sentence):
     assert post_as(monkeypatch, "lead", "builder-2", sentence) == 0
     assert sent == [f"for builder-2: {sentence} (from lead)"]
 
 
 def test_post_refuses_a_leads_chatter_to_a_helper_and_lets_lead_to_lead_talk_run_free(sent, monkeypatch):
-    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `urgent:`"):
+    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `stop:`, `urgent:`"):
         post_as(monkeypatch, "lead", "builder-2", "nice work on the form")
     assert post_as(monkeypatch, "lead", "sam-lead", "can your builders take the export card?") == 0
     assert post_as(monkeypatch, "lead", "@all", "I merge dev into main in 10 minutes") == 0

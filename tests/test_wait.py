@@ -402,9 +402,9 @@ def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, 
     monkeypatch.setenv("COLONY_SESSION", session)
     with pytest.raises(cli.ColonyError, match=why):
         wait.say(CONFIG, Namespace(person=None, to=to, sentence="hello"))
-    with pytest.raises(cli.ColonyError, match="under 300 characters"):
+    with pytest.raises(cli.ColonyError, match="at most 300 characters"):
         monkeypatch.setenv("COLONY_SESSION", "lead")
-        wait.say(CONFIG, Namespace(person=None, to="sam-lead", sentence="word " * 60))
+        wait.say(CONFIG, Namespace(person=None, to="sam-lead", sentence="word " * 61))
     assert gh.calls() == []
 
 
