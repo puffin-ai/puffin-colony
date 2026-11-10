@@ -93,7 +93,7 @@ Each preset ships three levels in `{package}/presets/<preset>/`, where `<preset>
 
 ## 5. Write the playbook and the briefs
 
-1. Copy `{package}/playbook.md` to `{dir}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{install}`, `{fast_check}` and `{checks}`, with this project's value, and drop the sentence that explains the placeholders. When `<vault>` is not `knowledge`, write it in place of `knowledge/` there. Change nothing else.
+1. Copy `{package}/playbook.md` to `{dir}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{install}`, `{fast_check}`, `{checks}`, `{worktrees}` (`[project] worktrees`) and `{project}` (`[project] name`), with this project's value, and drop the sentence that explains the placeholders. When `<vault>` is not `knowledge`, write it in place of `knowledge/` there. Change nothing else.
 2. Copy `{package}/prompts/spec.md` and `{package}/prompts/researcher.md` into `{dir}/prompts/`. They are the briefs the playbook's Spec and Researcher sections start, and the ones `{name} spec` and `{name} research` open a session with. In each copy, replace `{project}` with the project's name and `{knowledge}` with `<vault>`. Leave the `The feature:` and `The question:` lines as they are: they are filled in each time.
 
 ## 6. Lay out the knowledge vault

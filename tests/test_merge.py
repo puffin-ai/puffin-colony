@@ -444,3 +444,29 @@ def test_an_env_file_nowhere_says_where_it_looked(world, monkeypatch):
     config = world.config(template=ENV_HACK)
     with pytest.raises(cli.ColonyError, match=r"check_env_file names \.env\.local, which is in neither"):
         land(config, "ana/login")
+
+
+def test_a_landed_merge_removes_the_clean_worktrees_of_merged_branches(world, capsys, monkeypatch):
+    trees = world.tmp / "wt"
+    world.branch("ana/login", {"a.txt": "good\n"})
+    world.branch("ana/notes", {"b.txt": "notes\n"})
+    world.branch("ana/wip", {"b.txt": "wip\n"})
+    for name in ("ana/login", "ana/notes", "ana/wip"):
+        git(world.clone, "worktree", "add", "-q", str(trees / f"demo-{name.replace('/', '-')}"), name)
+    world.branch("ana/old", {"c.txt": "old\n"})
+    old = world.tmp / "ana-old"  # one made beside the clone, as the playbook once said
+    git(world.clone, "worktree", "add", "-q", str(old), "ana/old")
+    (trees / "demo-ana-wip" / "draft.txt").write_text("not committed\n")
+    git(world.clone, "worktree", "add", "-q", "-b", "ana/fresh", str(trees / "demo-ana-fresh"), "main")  # just begun
+    config = world.config(fast_check="true")
+    assert land(config, "ana/old") == 0
+    assert land(config, "ana/login") == 0
+    monkeypatch.chdir(trees / "demo-ana-notes")  # the helper merging from its own folder keeps it
+    assert land(config, "ana/notes") == 0
+    out = capsys.readouterr().out
+    assert not (trees / "demo-ana-login").exists() and not old.exists()
+    assert (trees / "demo-ana-notes").exists()  # the folder the command runs in
+    assert (trees / "demo-ana-wip").exists()  # unmerged, and holding uncommitted work
+    assert (trees / "demo-ana-fresh").exists()  # clean, and its tip is on main, but no merge took it: a task just begun
+    assert world.clone.exists() and (trees / "demo-merge").exists()
+    assert "removed the worktree" in out

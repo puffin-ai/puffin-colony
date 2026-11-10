@@ -474,8 +474,9 @@ def session_settings(config: dict, env: dict[str, str], masked: bool = False) ->
     shows the env's names alone, for a dry run."""
     base = config["project"]["base"]
     worktrees = Path(config["project"].get("worktrees", "")).expanduser() if config["project"].get("worktrees") else None
+    # Only the worktrees folder, where the playbook puts every worktree: never the folder the clone sits in, which
+    # can hold the person's private folders, such as their Desktop.
     folders = [str(worktrees)] if worktrees else []
-    folders.append(str(repo_root().parent))  # the playbook's ../<name>-<n> worktrees sit beside the clone
     settings = {
         "env": {key: "…" if masked else value for key, value in env.items() if key != "CLAUDE_CONFIG_DIR"},
         "permissions": {"allow": list(ROUTINE),

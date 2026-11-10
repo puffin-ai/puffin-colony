@@ -43,6 +43,7 @@ SUMMARY = re.compile(r"\b\d+\s+(?:passed|failed|failing|passing|errors?)\b", re.
 FAILING = re.compile(r"^(?:FAIL(?:ED)?|✗|×|✕|●|not ok)\s+\S")
 NAMED = 5  # the failing tests a message names
 LOGS_KEPT = 50
+MERGES_READ = 500  # the merge commits on the base read to tell which worktrees' branches landed
 
 
 def _git(cwd, *args: str, check: bool = True) -> str:
@@ -272,6 +273,35 @@ def post_landed(config: dict, branch: str, head: str) -> None:
         print(f"{cli.NAME} merge: the branch landed, and the board didn't get the line: {e}", file=sys.stderr)
 
 
+def drop_merged_worktrees(config: dict, root: Path) -> None:
+    """After a landing, remove each clean worktree whose branch is already in origin/<base>: helpers make one per
+    task, so they pile up otherwise. Never the main checkout, the merge worktree, a locked
+    or dirty one, or the one this command runs in, whose session still works there; the next landing takes it."""
+    from colony import tidy
+
+    base, here = config["project"]["base"], Path.cwd().resolve()
+    keep = {root.resolve(), worktree(config).resolve()}
+    # A branch is merged when a merge commit on the base took its tip as a second parent. A tip merely on the base,
+    # such as a task's branch just cut from it with no commit yet, is work that has only begun.
+    merges = _git(root, "log", "--merges", "--format=%P", f"-n{MERGES_READ}", f"origin/{base}", check=False)
+    taken = {parent for line in merges.splitlines() for parent in line.split()[1:]}
+    for tree in tidy.worktrees(root):
+        path = Path(tree["path"]).resolve()
+        if tree["main"] or tree["bare"] or tree["locked"] or not tree["branch"] or path in keep:
+            continue
+        if here == path or path in here.parents:
+            continue
+        tip = _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{tree['branch']}", check=False)
+        if tip not in taken or tidy.dirt(tree["path"]):
+            continue
+        try:
+            tidy.git_remove(root, tree["path"])
+        except cli.ColonyError as e:
+            print(f"{cli.NAME} merge: kept {tree['path']}: {e}", file=sys.stderr)
+            continue
+        print(f"removed the worktree {tree['path']}: {tree['branch']} is in {base}, and it was clean")
+
+
 def open_pr(config: dict, root: Path, branch: str, reason: str) -> str:
     """Push the branch when origin lacks its commits (never forced), and open its pull request into the base, or
     return the one already open."""
@@ -427,6 +457,8 @@ def run(config: dict, args) -> int:
         print(result.what)
         if result.head:
             post_landed(config, branch, result.head)
+            _git(root, "fetch", "origin", check=False)
+            drop_merged_worktrees(config, root)
         return 0
     log = f"; full log: {result.log}" if result.log else ""
     if not result.pr:

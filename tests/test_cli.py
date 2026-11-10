@@ -469,8 +469,8 @@ def test_routine_git_gh_and_colony_commands_never_stop_a_session_to_ask(home, ho
     assert {"Bash(git:*)", "Bash(gh:*)", "Bash(colony:*)"} <= set(permissions["allow"])
     assert {"Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push origin dev:*)"} <= set(
         permissions["deny"])
-    assert str(home / "trees") in permissions["additionalDirectories"]  # worktrees = "~/trees"
-    assert str(host.parent) in permissions["additionalDirectories"]  # the playbook's ../<name>-<n>
+    # Only the worktrees folder: the folder the clone sits in, such as a Desktop of private folders, stays out.
+    assert permissions["additionalDirectories"] == [str(home / "trees")]  # worktrees = "~/trees"
     assert args.index("--settings") < args.index("--permission-mode") < len(args) - 1  # the prompt stays last
 
 

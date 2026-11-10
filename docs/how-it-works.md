@@ -137,7 +137,7 @@ Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 **Each builder then:**
 1. keeps `colony wait` running in the background all session;
 2. stamps the card's Last update on the board, `colony board set 41 Last_update=now`, at the start and after each commit: progress goes there, never in a line;
-3. makes the change in its own worktree and branch, `../builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
+3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
 4. runs the fast check and fixes what it reports;
 5. writes a test for a bug fix or new logic (a style change needs none), and checks touch or layout work in a browser at phone width, 390×844;
 6. updates the living spec and wiki pages the change makes stale, in the same commit;
@@ -151,8 +151,8 @@ Builders run at medium effort by default, write no reports, and ask no person an
 When a `done` line arrives, the lead runs `colony tier --head origin/<branch>`. When the branch prints a higher tier than its card, it raises the card's Tier. Then it sets the card to In review and merges that branch into the batch so far, so a conflict shows now and not at the end:
 
 ```sh
-git fetch origin && git worktree add --detach ../next-<batch> origin/<base>    # first card of a batch
-git fetch origin && git -C ../next-<batch> merge --no-ff --no-edit origin/<branch>
+git fetch origin && git worktree add --detach <worktrees>/<project>-next-<batch> origin/<base>    # first card of a batch
+git fetch origin && git -C <worktrees>/<project>-next-<batch> merge --no-ff --no-edit origin/<branch>
 ```
 
 `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day. On a conflict, the lead aborts the merge and asks the builder to merge the other branch into its own, resolve it, push, and post `done` again.
@@ -223,7 +223,7 @@ When a round passes, or the last round leaves only review and walk findings, the
 
 The PR body holds the cards, the findings the last round left open as new cards, open problems by round (such as `7 → 4 → 1 → 0`), a table of each round's open count, walk and checks, the check commands and their result lines, any account switches, any test files the batch deletes, a minutes table that sums each kind of step's runs, minutes and cost and what the skips saved, and a card stats table of each card's predicted and actual minutes and tokens.
 
-The lead removes `../next-<batch>`, tells you the link, and keeps the other cards moving.
+The lead removes `<worktrees>/<project>-next-<batch>`, tells you the link, and keeps the other cards moving.
 
 ## 10. The batch teaches
 
@@ -268,8 +268,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-batch-<batch>-walk` | The walker's worktree, detached at each round's head |
 | `<worktrees>/<project>-fix-<batch>-<card>-r<round>` | A fixer's worktree, removed after its merge |
 | `<worktrees>/<project>-retro-<batch>` | The retro agent's worktree |
-| `../<builder>-<card>` | A builder's worktree |
-| `../next-<batch>` | The lead's early-merge worktree |
+| `<worktrees>/<project>-<builder>-<card>` | A builder's worktree, in the folder `[project] worktrees` names, never beside the clone |
+| `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
 

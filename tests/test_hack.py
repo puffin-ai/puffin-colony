@@ -414,7 +414,7 @@ def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_card
 
 
 def test_the_hack_section_holds_only_the_placeholders_setup_fills_in_the_playbook():
-    assert set(PLACEHOLDER.findall(playbook_section("Hack"))) <= {"base", "fast_check"}
+    assert set(PLACEHOLDER.findall(playbook_section("Hack"))) <= {"base", "fast_check", "worktrees", "project"}
 
 
 def test_a_hack_lead_and_builder_open_on_the_hack_section(tmp_path, monkeypatch):

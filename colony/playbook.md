@@ -1,6 +1,6 @@
 # The colony playbook
 
-The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
+The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. `{worktrees}` is the folder `[project] worktrees` names in `.colony/colony.toml`, and `{project}` is `[project] name`: every worktree goes in that folder, never beside the clone, where it would fill the person's folder, such as their Desktop. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
 
 ## Leads and helpers
 
@@ -126,10 +126,10 @@ At the start of a session, run `colony handover --read`. When it prints a handov
 2. When the cards need helpers, ask the person every time, in one tap: run `colony helpers <n>`, which prints the question "Open them myself, or you paste?" with the last answer as the default. On "open", run `colony helpers <n> --open`: cmux windows when you run in a terminal or cmux, else background sessions, and tell the person to paste `colony view` into a cmux terminal to see them. On "paste", run `colony helpers <n> --paste` and give the person its `colony join <lead>` lines for any computer, such as one whose account has room in `colony who`. Each joined helper connects to you by itself. Up to `max_builders` (default 4) run on this machine.
 3. Hand a card out with a line on it, `colony post <n> <builder> "start: this card"`, and `colony board set <n> Status="In progress" Helper=<builder>`.
 4. When a `done` line arrives, run `colony tier --head origin/<branch>` (see Tiers), set `Status="In review"`, and merge that builder's branch into the batch so far, so a conflict shows now:
-   - First card of a batch: `git fetch origin && git worktree add --detach ../next-<batch> origin/{base}`. `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day.
-   - Each card: `git fetch origin && git -C ../next-<batch> merge --no-ff --no-edit origin/<branch>`.
-   - On a conflict: `git -C ../next-<batch> merge --abort`, and send the builder a line, `colony post <n> <builder> "start: merge origin/<other branch> into your branch, resolve the conflict in <files>, push, and post done again"`.
-5. Every 3 to 5 done cards, or when the person asks, run the batch as a background command: `colony batch --name <batch> --card <n>=<branch> --card <n>=<branch> ...`. It runs `{checks}`, a fresh reviewer with the risk list and a browser walk, sends each problem to its card's fixer, and loops until 0 open problems. Its pull request says `Closes #<n>` for each card, and it ends with `colony tidy`. Then `git worktree remove --force ../next-<batch>`. `colony status --name <batch>` shows where it stands.
+   - First card of a batch: `git fetch origin && git worktree add --detach {worktrees}/{project}-next-<batch> origin/{base}`. `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day.
+   - Each card: `git fetch origin && git -C {worktrees}/{project}-next-<batch> merge --no-ff --no-edit origin/<branch>`.
+   - On a conflict: `git -C {worktrees}/{project}-next-<batch> merge --abort`, and send the builder a line, `colony post <n> <builder> "start: merge origin/<other branch> into your branch, resolve the conflict in <files>, push, and post done again"`.
+5. Every 3 to 5 done cards, or when the person asks, run the batch as a background command: `colony batch --name <batch> --card <n>=<branch> --card <n>=<branch> ...`. It runs `{checks}`, a fresh reviewer with the risk list and a browser walk, sends each problem to its card's fixer, and loops until 0 open problems. Its pull request says `Closes #<n>` for each card, and it ends with `colony tidy`. Then `git worktree remove --force {worktrees}/{project}-next-<batch>`. `colony status --name <batch>` shows where it stands.
    - It prints `done in round N. <link>`: go to step 6.
    - It prints `stopped: <why>`: give the cause to the builder who owns it as a card, then run a new batch under the next name.
 6. After each batch, two things, both as background commands:
@@ -155,7 +155,7 @@ In hack mode, follow the Hack section instead.
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
-2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
+2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add {worktrees}/{project}-<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 4. Run `{fast_check}` once, when the change and its tests are done, and fix what it reports; run it again only after a fix.
 5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.
@@ -224,7 +224,7 @@ You talk with your person, split their part of the demo into tasks inside the fo
 You build one task at a time for your own person's lead. Your name is the one you were given.
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start:` line from your lead gives you a task.
-2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add ../<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. Run the install command there. Work only there.
+2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add {worktrees}/{project}-<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. When the branch lands, the next `colony merge` removes the worktree if it is clean, so finish each task by committing or dropping what it holds. Run the install command there. Work only there.
 3. Run `{fast_check}`, and fix what it reports. Write a test for a bug fix or for new logic.
 4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass.
 5. Post one line: `colony post lead "done, <login>/<task> landed, <the fast check's last line>"`. When `colony merge` opened a pull request instead, post `colony post lead "blocked: <login>/<task> did not land: <why>, <the PR link>"`.

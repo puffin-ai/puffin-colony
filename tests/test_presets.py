@@ -116,3 +116,10 @@ def test_every_shipped_skill_has_a_skill_md_with_its_name_and_a_description(name
 def test_the_starter_set_is_every_shipped_skill_beside_the_role_skills():
     assert set(guards.STARTER_SKILLS) == set(shipped_skills()) - set(cli.ROLE_SKILLS) - {cli.SETUP_SKILL}
     assert len(guards.STARTER_SKILLS) == 10
+
+
+def test_the_playbook_puts_every_worktree_in_the_worktrees_folder():
+    from importlib import resources
+    playbook = (Path(str(resources.files("colony"))) / "playbook.md").read_text()
+    assert "worktree add ../" not in playbook and "worktree add --detach ../" not in playbook
+    assert "{worktrees}/{project}-<login>-<task>" in playbook and "`{worktrees}`" in playbook

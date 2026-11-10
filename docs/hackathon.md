@@ -83,6 +83,8 @@ It fetches, merges the branch into the base on your machine, and runs the fast c
 
 When the check fails, it runs once more: a test that fails only sometimes lands the branch, and the message names it as flaky. When it fails twice, the message gives the test runner's summary line, the failing tests, and the path of the whole output, in `~/.colony/<project>/merge-logs/`. Then it checks the base alone, unless the base is the commit Colony itself last landed green. A base that fails on its own gets one `@all urgent: <base> <sha> fails the fast check on its own` line on the board and no PR, since no branch is to blame: fix the base first, then merge again.
 
+**Worktrees.** Each helper makes one worktree per task, in the folder `[project] worktrees` names (`~/worktrees` by default), never beside the clone. After `colony merge` lands a branch, it removes the clean worktrees of branches already merged, except the one it runs in. A helper session can reach the worktrees folder, never the folder your clone sits in.
+
 **The push guard.** Colony's wait guard hook refuses any Claude session's `git push` that would rewrite or delete the base or the repo's default branch (origin's HEAD, else `main`): `--force`, `--force-with-lease`, `--mirror`, `--delete`, a `+` refspec, or `:<base>`. A plain push, a force push to your own branch, and a forced push of tags alone still work.
 
 ## Codex and other agents
