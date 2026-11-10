@@ -129,10 +129,15 @@ def parse(text: str, comment: int | None = None) -> Status | None:
     return status
 
 
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}  # GitHub's author_association for someone with access to the repo
+
+
 def by_team(comment: dict, logins: frozenset[str]) -> bool:
-    """Whether a comment's author is one of the team's logins; with none configured, every author counts."""
-    author = str((comment.get("user") or {}).get("login") or "").lower()
-    return not logins or author in logins
+    """Whether a comment's author is one of the team's logins; with none configured, whether GitHub says the author
+    has access to the repo. Anyone else's comment never counts as a status."""
+    if logins:
+        return str((comment.get("user") or {}).get("login") or "").lower() in logins
+    return comment.get("author_association") in TRUSTED
 
 
 def where(config: dict) -> int:

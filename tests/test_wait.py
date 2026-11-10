@@ -45,7 +45,7 @@ BATCH = [99]  # a batch running on another card, so DIGEST_LINE's done waits for
 def comment(id, body, updated="2026-11-05T10:00:00Z", issue=7, login="ana-gh"):
     """One issue comment as GitHub's REST API answers it. Agents post through their person's login."""
     return {"id": id, "issue_url": f"https://api.github.com/repos/acme/demo/issues/{issue}", "body": body,
-            "updated_at": updated, "user": {"login": login}}
+            "updated_at": updated, "user": {"login": login}, "author_association": "COLLABORATOR"}
 
 
 def ok(*comments, etag='W/"e1"'):

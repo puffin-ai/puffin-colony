@@ -86,7 +86,8 @@ class GitHub:
         monkeypatch.setattr(wait, "gh", self.gh)
 
     def add(self, status: presence.Status) -> None:
-        self.comments.append({"id": 100 + len(self.comments), "body": presence.body(status)})
+        self.comments.append({"id": 100 + len(self.comments), "body": presence.body(status),
+                              "author_association": "OWNER"})
 
     def gh(self, *args: str) -> str:
         self.calls.append(args)
@@ -105,7 +106,8 @@ class GitHub:
         if args[:2] == ("issue", "list"):
             return json.dumps([{"number": 5, "title": wait.COORDINATION}])
         if args[0] == "api":
-            self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body=")})
+            self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body="),
+                                  "author_association": "OWNER"})
             return json.dumps({"id": self.comments[-1]["id"]})
         return json.dumps({"body": "Folders: apps/web/"})
 

@@ -55,7 +55,8 @@ def test_the_lead_hears_once_of_a_helper_whose_tool_call_waits_on_a_prompt(tmp_p
     fine = presence.Status("staff", "helper", lead="ana-main-lead", waiting="Bash", waiting_since=now - 60, at=now)
     other = presence.Status("qa", "helper", lead="ben-main-lead", waiting="Bash", waiting_since=now - 3600, at=now)
     state: dict = {}
-    wait.learn_helpers(state, [{"body": presence.body(s), "updated_at": "x"} for s in (stuck, fine, other)])
+    wait.learn_helpers(state, [{"body": presence.body(s), "updated_at": "x", "author_association": "MEMBER"}
+                               for s in (stuck, fine, other)])
     check = watch.stuck_check("ana-main-lead")
     lines = check(state, now)
     assert lines == ["urgent: auth's Bash call has waited 11 minutes for an answer, likely a permission prompt in its "
@@ -112,3 +113,11 @@ def test_a_status_from_a_login_outside_the_team_is_never_taken(tmp_path, monkeyp
     wait.learn_helpers(state, [{"body": status, "updated_at": "x", "user": {"login": "Ana"}}],
                        people=frozenset({"ana", "ben"}))
     assert state["helpers"] == {"auth": "ana-main-lead"}
+
+
+def test_with_no_team_logins_a_status_counts_only_from_someone_with_access_to_the_repo():
+    for association, counts in (("OWNER", True), ("MEMBER", True), ("COLLABORATOR", True), ("CONTRIBUTOR", False),
+                                ("NONE", False), (None, False)):
+        comment = {"user": {"login": "someone"}, "author_association": association}
+        assert presence.by_team(comment, frozenset()) is counts, association
+    assert presence.by_team({"user": {"login": "ana"}, "author_association": "NONE"}, frozenset({"ana"}))
