@@ -941,7 +941,8 @@ def retro(config: dict, args) -> int:
 def stale_lines(config: dict, now) -> list[str]:
     """The `stale:` lines for the lead's wait: one per card In progress whose Last update is older than
     [cycle] stale_hours (2.5 by default). The board has no State, so a helper waiting on a usage limit is stale too:
-    the lead looks at its session and finds out.
+    the lead looks at its session and finds out. A background helper `claude agents` lists as blocked waits on a
+    prompt, so its line says so and names the `claude attach` command that reaches it.
 
     `now` is an aware datetime, or a Unix time. Each card is reported once until its Last update changes, through
     a state file in ~/.colony/<project>/. Call it at most every STALE_CHECK_MINUTES. It returns [] when the repo has
@@ -956,7 +957,7 @@ def stale_lines(config: dict, now) -> list[str]:
     path = wait.state_path(config["project"]["name"], f"{cli.LEAD}-stale")
     reported = wait.read_json(path, {})
     reported = reported if isinstance(reported, dict) else {}
-    lines = []
+    lines, stale = [], []
     for item in board.items(found):
         last = board.field_value(item, board.LAST_UPDATE)
         if board.squash(board.field_value(item, "Status")) != board.squash("In progress"):
@@ -968,8 +969,15 @@ def stale_lines(config: dict, now) -> list[str]:
         if updated is None or now - updated <= after or key in reported:
             continue
         reported[key] = now.isoformat()
-        who = board.field_value(item, "Helper") or "its helper"
-        lines.append(f"#{item['number']} stale: {who} shows no update since {last}; check its session")
+        stale.append((item["number"], board.field_value(item, "Helper"), last))
+    blocked = cli.blocked_sessions(config) if any(helper for _, helper, _ in stale) else {}
+    for number, helper, last in stale:
+        agent = blocked.get(helper.lower()) if helper else None
+        if agent:
+            lines.append(f"#{number} stale: {helper} waits on a prompt in its background session, with no update "
+                         f"since {last}; answer it with `{cli.attach_text(agent)}`")
+        else:
+            lines.append(f"#{number} stale: {helper or 'its helper'} shows no update since {last}; check its session")
     reported = {key: at for key, at in reported.items() if now - moment(at) <= KEEP_REPORTED}
     wait.write_json(path, reported)
     return lines

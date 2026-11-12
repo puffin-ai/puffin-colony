@@ -87,7 +87,7 @@ colony board set 12 Last_update=now
 
 `colony board set` checks every field and value before it writes, so a typo changes nothing, and it refuses any other field, such as an older board's State, Builder, Tier, Account or Branch. `board init` leaves those old fields on an older board, so no card loses what they hold. Field names ignore case and spaces, so `last_update` works. Progress goes in Last update, which wakes no one, never in a line.
 
-**Stale cards.** Every 10 minutes, the lead's wait checks the board. A card In progress whose Last update is over 2.5 hours old gives the lead one `stale:` line, naming its Helper. The board has no State, so a builder waiting on a usage limit shows up too, and the lead looks at its session to tell.
+**Stale cards.** Every 10 minutes, the lead's wait checks the board. A card In progress whose Last update is over 2.5 hours old gives the lead one `stale:` line, naming its Helper. The board has no State, so a builder waiting on a usage limit shows up too, and the lead looks at its session to tell. When `claude agents` lists that helper's background session as blocked, the line says it waits on a prompt and names the `claude attach <id>` that reaches it.
 
 Every computer's `gh` login needs the project scope: `gh auth refresh -s project`. When the board can't be reached, agents say why once and go on without it. `[board] number` points Colony at a project you already have.
 
