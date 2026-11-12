@@ -133,6 +133,10 @@ REWRITES_BASE = [
     "git push -f -- origin main",
     "git push -f origin @",  # @ is HEAD, the branch checked out
     "git push origin +:",  # : pushes every branch both sides have, as push.default=matching does
+    "git push -f origin HEAD:heads/main",  # git reads heads/main as refs/heads/main
+    "git push origin :heads/main",
+    "git --attr-source HEAD push --force origin main",
+    "git --shallow-file x push --force origin main",
 ]
 LEAVES_BASE = [
     "git push origin main",

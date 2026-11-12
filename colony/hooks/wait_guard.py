@@ -72,8 +72,8 @@ RAW_GIT = re.compile(r"git")  # in a line shlex can't read, any git with a push 
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
-GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
-                     "--config-env"}  # git's, before `push`
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
+                     "--attr-source", "--shallow-file"}  # git's, before `push`
 # git push's long options, as `git push --git-completion-helper` lists them. Git reads a word that is a prefix of
 # only one of them as that option, and refuses a prefix of several.
 PUSH_OPTIONS = ("verbose", "quiet", "repo", "all", "branches", "mirror", "delete", "tags", "dry-run", "porcelain",
@@ -371,9 +371,10 @@ def long_options(word: str) -> set[str]:
 
 def reached(target: str, protected: list[str]) -> str:
     """The protected branch a refspec's destination names, or matches when it is a pattern such as refs/heads/*, or
-    "". Git's * matches across slashes, as fnmatch's does."""
+    "". Git reads a destination such as heads/main as refs/heads/main, and its * matches across slashes, as fnmatch's
+    does."""
     for branch in protected:
-        if any(fnmatch.fnmatchcase(name, target) for name in (branch, f"refs/heads/{branch}")):
+        if any(fnmatch.fnmatchcase(name, target) for name in (branch, f"heads/{branch}", f"refs/heads/{branch}")):
             return branch
     return ""
 
