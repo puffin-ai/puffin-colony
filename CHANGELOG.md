@@ -42,6 +42,7 @@ Security:
 
 - Status comments and `live:` lines count only from the team's logins, or, with none set, from someone with access to the repo. Each field is checked.
 - The push guard refuses a line it can't read when that line holds a `git push`.
+- The push guard reads a push as git does: a shortened option such as `--del`, `--prune` and patterns such as `+refs/heads/*:refs/heads/*`, both readings of the first word after `--repo`, and, for a push that names no refspec, what `remote.<name>.push`, `remote.<name>.mirror` or `push.default` sends, such as every branch with `push.default=matching`. When git config can't say, or a command earlier on the line such as `git checkout` can change it, a forced push must name its branch.
 - Only the person, at their own terminal, can switch the fast check off. No agent can.
 - A private line goes out only after GitHub says, at that moment, that its repo is private.
 - `colony share` asks for `--public` on a public repo, and refuses links, files that hold secrets, and files in folders such as `.ssh`.

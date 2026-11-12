@@ -17,12 +17,20 @@ fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
 It also refuses, in every mode and even in the background, a `git push` that force-pushes or deletes the base branch,
 `[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
-can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec or a deletion. A force push rewrites the
+can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec, a deletion, or `--prune` with a pattern
+such as refs/heads/*, which it matches against those branches. It reads options as git does, so a prefix git accepts,
+such as `--del`, counts as the whole option. A forced or deleting push that names no refspec updates what git config
+says, `remote.<name>.push` or `push.default` with the line's own `-c` values, so with push.default=matching it
+rewrites the base too; when git config can't say, such a push is refused. A plain push that names no refspec is
+refused only when git config forces, deletes or mirrors a protected branch through it. The guard reads git config
+before the line runs, so after a command on the same line that can change it or the branch checked out, such as `git
+checkout` or `cd`, a forced push names its branch. `@` is HEAD, the branch checked out. A force push rewrites the
 branch every teammate builds on, and makes each of them rebase. A plain push, and a forced push of tags alone, pass.
 A line whose quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -66,8 +74,24 @@ RAW_GIT = re.compile(r"git")  # in a line shlex can't read, any git with a push 
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
-GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}  # git's, before `push`
-PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
+                     "--attr-source", "--shallow-file"}  # git's, before `push`
+# git push's long options, as `git push --git-completion-helper` lists them. Git reads a word that is a prefix of
+# only one of them as that option, and refuses a prefix of several.
+PUSH_OPTIONS = ("verbose", "quiet", "repo", "all", "branches", "mirror", "delete", "tags", "dry-run", "porcelain",
+                "force", "force-with-lease", "force-if-includes", "recurse-submodules", "thin", "receive-pack",
+                "exec", "set-upstream", "progress", "prune", "no-verify", "verify", "follow-tags", "signed",
+                "atomic", "push-option", "ipv4", "ipv6")
+PUSH_VALUE_OPTIONS = {"repo", "recurse-submodules", "receive-pack", "exec", "push-option"}  # take the next word
+# The settings that choose what a push with no refspec updates, as git config prints their keys.
+PUSH_CONFIG = (r"^(push\.default|remote\.pushdefault|remote\..+\.(push|mirror)|"
+               r"branch\..+\.(remote|pushremote|merge))$")
+FALSE = ("", "false", "no", "off", "0")  # the values git reads as false, and "" for a setting not there
+# Commands that can change the branch checked out, git config or the folder for a later push on the same line, which
+# the guard reads before the line runs.
+LINE_CHANGES_GIT = {"checkout", "switch", "config", "branch", "remote", "symbolic-ref"}
+LINE_CHANGES = {"cd", "pushd", "popd"}
+GIT_VARIABLE = re.compile(r"^(GIT_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where git finds its repo and its config
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
 PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
                 "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person.")
@@ -343,51 +367,154 @@ def protected_branches(cwd: str) -> list[str]:
     return list(dict.fromkeys([base_branch(cwd), default_branch(cwd)]))
 
 
-def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
-    """Why a `git push` with these arguments, the words after `push`, rewrites or deletes a protected branch, or ""."""
-    force = delete = everything = mirror = tags = False
+def long_options(word: str) -> set[str]:
+    """The git push options a --word names: the one it spells out, else each one it is a prefix of. Git refuses a
+    prefix of several, so reading it as each of them refuses nothing git would run."""
+    name = word[2:].partition("=")[0]
+    if name in PUSH_OPTIONS:
+        return {name}
+    if name.startswith("no-"):  # a negation takes no value, and forces or deletes nothing
+        return set()
+    return {option for option in PUSH_OPTIONS if option.startswith(name)}
+
+
+def reached(target: str, protected: list[str]) -> str:
+    """The protected branch a refspec's destination names, or matches when it is a pattern such as refs/heads/*, or
+    "". Git reads a destination such as heads/main as refs/heads/main, and its * matches across slashes, as fnmatch's
+    does."""
+    for branch in protected:
+        if any(fnmatch.fnmatchcase(name, target) for name in (branch, f"heads/{branch}", f"refs/heads/{branch}")):
+            return branch
+    return ""
+
+
+def config_key(key: str) -> str:
+    """A config key the way git config prints it: the section and the name in lower case, a subsection as written."""
+    section, _, rest = key.partition(".")
+    subsection, dot, name = rest.rpartition(".")
+    return f"{section.lower()}.{subsection}{dot}{name.lower()}"
+
+
+def push_config(cwd: str, overrides: list[tuple[str, str | None]]) -> dict[str, list[str]] | None:
+    """The settings in PUSH_CONFIG, each key's values in order, with the line's own -c values last, as git reads
+    them. None when git can't say, or when a --config-env value, which the guard can't see, sets one of them."""
+    try:
+        run = subprocess.run(["git", "config", "-z", "--get-regexp", PUSH_CONFIG], cwd=cwd or None,
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if run.returncode not in (0, 1):  # 1: none of them is set
+        return None
+    found: dict[str, list[str]] = {}
+    for entry in filter(None, run.stdout.split("\0")):
+        key, newline, value = entry.partition("\n")
+        found.setdefault(key, []).append(value if newline else "true")  # a key with no value is true
+    for key, value in overrides:
+        key = config_key(key)
+        if re.match(PUSH_CONFIG, key):
+            if value is None:
+                return None
+            found.setdefault(key, []).append(value)
+    return found
+
+
+def default_refspecs(config: dict[str, list[str]], remote: str, branch: str) -> tuple[list[str], str] | None:
+    """The refspecs a push with none of its own pushes to this remote from this branch ("" when none is checked
+    out), and the setting they come from: remote.<remote>.push, else push.default. None when git can't say."""
+    if specs := config.get(f"remote.{remote}.push"):
+        return specs, f"remote.{remote}.push"
+    mode = (config.get("push.default") or ["simple"])[-1]
+    upstream = (config.get(f"branch.{branch}.merge") or [""])[-1]
+    if mode == "nothing":
+        return [], ""
+    if mode == "matching":
+        return [":"], "push.default=matching"
+    if mode in ("simple", "current") and branch:  # simple pushes to an upstream only of the same name
+        return [branch], ""
+    if mode in ("upstream", "tracking") and branch and upstream:
+        return [f"{branch}:{upstream}"], f"push.default={mode}"
+    return None
+
+
+def refspec_target(spec: str, force: bool, delete: bool, prune: bool) -> tuple[str, str]:
+    """The branch or pattern a refspec updates on the remote, and how it rewrites it: "deletes", "force-pushes",
+    "can delete", or "" when it does neither."""
+    plus, spec = spec.startswith("+"), spec.lstrip("+")
+    source, colon, destination = spec.partition(":")
+    if spec == ":":  # every branch both sides have, as push.default=matching pushes
+        source = destination = "refs/heads/*"
+    target = destination if colon else source
+    how = ("deletes" if delete or (colon and not source) else "force-pushes" if force or plus
+           else "can delete" if prune and "*" in target else "")  # --prune deletes only through a pattern
+    return target, how
+
+
+def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
+                  overrides: list[tuple[str, str | None]] | None = None, changed: str = "") -> str:
+    """Why a `git push` with these arguments, the words after `push`, rewrites or deletes a protected branch, or "".
+    overrides are the line's -c settings before `push`, and None for a --config-env one, whose value can't be seen.
+    changed names what on the line can change the branch checked out or git config before this push runs."""
+    force = delete = everything = mirror = prune = tags = repo = False
     positional: list[str] = []
-    skip = False
+    remote, value_of, options_end = "", "", False  # value_of: the option the next word is the value of
     for word in arguments:
-        if skip:
-            skip = False
-        elif word in PUSH_VALUE_OPTIONS:
-            skip = True
-        elif word == "--force" or word.startswith("--force-with-lease"):
-            force = True
-        elif word == "--mirror":
-            mirror = True
-        elif word == "--delete":
-            delete = True
-        elif word in ("--all", "--branches"):
-            everything = True
-        elif word == "--tags":
-            tags = True
-        elif word.startswith("--"):
-            continue
-        elif word.startswith("-") and len(word) > 1:
-            letters, option, value = word[1:].partition("o")  # -o takes the rest as its value, as in -odeploy
-            force, delete, skip = force or "f" in letters, delete or "d" in letters, bool(option and not value)
-        else:
+        if value_of:
+            remote, value_of = word if value_of == "repo" else remote, ""
+        elif options_end or not word.startswith("-") or word == "-":
             positional.append(word)
+        elif word == "--":
+            options_end = True
+        elif word.startswith("--"):
+            named = long_options(word)
+            force = force or bool(named & {"force", "force-with-lease"})
+            delete, mirror, prune = delete or "delete" in named, mirror or "mirror" in named, prune or "prune" in named
+            everything, repo = everything or bool(named & {"all", "branches"}), repo or "repo" in named
+            tags = tags or named == {"tags"}  # tags alone pass, so only a word that can mean nothing else counts
+            if "=" in word:
+                remote = word.partition("=")[2] if named == {"repo"} else remote
+            elif named and named <= PUSH_VALUE_OPTIONS:
+                value_of = "repo" if named == {"repo"} else "other"
+        else:
+            letters, option, value = word[1:].partition("o")  # -o takes the rest as its value, as in -odeploy
+            force, delete = force or "f" in letters, delete or "d" in letters
+            value_of = "push-option" if option and not value else ""
     if mirror:
         return "`git push --mirror` overwrites every branch on the remote"
     if force and everything:
         return f"a force push of every branch rewrites {' and '.join(protected)}"
-    targets = []  # (the branch a refspec updates, how it rewrites it, or "")
-    for spec in positional[1:]:
-        plus, spec = spec.startswith("+"), spec.lstrip("+")
-        source, colon, destination = spec.partition(":")
-        deletes = delete or bool(colon and not source)
-        how = "deletes" if deletes else "force-pushes" if force or plus else ""
-        targets.append((destination if colon else source, how))
-    if len(positional) <= 1 and not tags:  # no refspec: git pushes the branch checked out, or with --tags only tags
-        targets.append(("HEAD", "deletes" if delete else "force-pushes" if force else ""))
-    for target, how in targets:
-        if target == "HEAD":
+    if prune and everything:
+        return f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has its name"
+    # Git takes the first word as the repository even with --repo, which names only a default. With --repo the
+    # guard reads that word as a refspec too, so a push is refused when either reading reaches a protected branch.
+    refspecs = [(spec, "") for spec in positional[1:] + (positional[:1] if repo else [])]
+    if len(positional) <= 1 and not tags:
+        # No refspec: git pushes what remote.<name>.mirror, remote.<name>.push or push.default says, and with --tags
+        # only tags. When the guard can't tell what that is, a plain push passes, and any other is refused.
+        how = "deletes" if delete else "force-pushes" if force else "can delete" if prune else ""
+        if changed and how:
+            return f"this push names no refspec, and {changed} on this line can change which branches it {how}"
+        config = None if changed else push_config(cwd, overrides or [])
+        found = None
+        if config is not None:
+            branch = current_branch(cwd)
+            setting = lambda key: (config.get(key) or [""])[-1]  # noqa: E731
+            remote = (positional[0] if positional else remote) or setting(f"branch.{branch}.pushremote") or \
+                setting("remote.pushdefault") or setting(f"branch.{branch}.remote") or "origin"
+            if setting(f"remote.{remote}.mirror").lower() not in FALSE:
+                return f"remote.{remote}.mirror makes this push a `--mirror` push, which overwrites every branch"
+            found = default_refspecs(config, remote, branch)
+        if found is None and how:
+            return f"this push names no refspec, and git config can't say which branches it {how}"
+        refspecs += [(spec, found[1]) for spec in found[0]] if found else []
+    for spec, via in refspecs:
+        target, how = refspec_target(spec, force, delete, prune)
+        if how and target in ("HEAD", "@"):  # @ is git's short name for HEAD
+            if changed:
+                return f"this push {how} HEAD, and {changed} on this line can change which branch that is"
             target = current_branch(cwd)
-        if how and target.removeprefix("refs/heads/") in protected:
-            return f"this push {how} {target.removeprefix('refs/heads/')}"
+        branch = reached(target, protected) if how else ""
+        if branch:
+            return f"this push {how} {branch}" + (f", through {via}" if via else "")
     return ""
 
 
@@ -403,21 +530,42 @@ def pushes(command: str, cwd: str) -> list[str]:
                     "of its own"]
         return []
     found, words = [], []
+    changed = ""  # the first command on the line that can change what a later push reads, such as `git checkout`
     for token in [*line, ";"]:
         if token and set(token) <= set(";&|(){}<>"):
             program = program_words(words)
+            before = words[:len(words) - len(program)]  # assignments and wrappers, such as env GIT_DIR=x
+            variables = [word.partition("=")[0] for word in before if GIT_VARIABLE.match(word)]
             words = []
-            if not program or PurePath(program[0]).name != "git":
+            name = PurePath(program[0]).name if program else ""
+            if name != "git":
+                if name in LINE_CHANGES or (not program and variables) or (
+                        name in ("export", "unset") and any(GIT_VARIABLE.match(word) for word in program[1:])):
+                    changed = changed or f"`{name or variables[0]}`"
                 continue
-            index, here = 1, cwd
+            index, here, overrides = 1, cwd, []
+            own = f"`{variables[0]}`" if variables else ""  # a variable set for this command alone
+            if any(word in ("-C", "--chdir") or word.startswith("--chdir=") for word in before):
+                own = own or "`env --chdir`"  # env runs the command in another folder
             while index < len(program) and program[index].startswith("-"):
-                if program[index] == "-C" and index + 1 < len(program):
-                    here = os.path.join(cwd, program[index + 1])
-                index += 2 if program[index] in GIT_VALUE_OPTIONS else 1
-            if program[index:index + 1] == ["push"]:
-                reason = push_rewrites(program[index + 1:], protected_branches(here), here)
+                option, value = program[index], program[index + 1] if index + 1 < len(program) else ""
+                if option == "-C" and value:
+                    here = os.path.join(cwd, value)
+                elif option == "-c":
+                    key, equals, setting = value.partition("=")
+                    overrides.append((key, setting if equals else "true"))  # -c <key> alone sets it to true
+                elif option.startswith("--config-env"):  # --config-env=<key>=<variable>, or the pair as the value
+                    overrides.append(((option.partition("=")[2] or value).rpartition("=")[0], None))
+                elif option.partition("=")[0] in ("--git-dir", "--work-tree"):
+                    own = own or f"`{option.partition('=')[0]}`"
+                index += 2 if option in GIT_VALUE_OPTIONS else 1
+            command = program[index] if index < len(program) else ""
+            if command == "push":
+                reason = push_rewrites(program[index + 1:], protected_branches(here), here, overrides, changed or own)
                 if reason:
                     found.append(reason)
+            elif command in LINE_CHANGES_GIT:
+                changed = changed or f"`git {command}`"
         else:
             words.append(token)
     return found

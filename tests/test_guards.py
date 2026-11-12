@@ -117,6 +117,26 @@ REWRITES_BASE = [
     "npm test && git push --force origin main",
     "git push --tags -f origin main",
     "git push -fo ci.skip origin +main",
+    # Git reads any unambiguous prefix of a long option as the option.
+    "git push --del origin main",
+    "git push --mir origin",
+    "git push --force-w origin main",
+    "git push -uf origin main",
+    # --prune deletes what a pattern reaches and no local branch matches, and a pattern reaches the base.
+    "git push --prune origin 'refs/heads/*:refs/heads/*'",
+    "git push --pru origin 'refs/heads/*'",
+    "git push --all --prune origin",
+    "git push origin '+refs/heads/*:refs/heads/*'",
+    # An option that takes the next word as its value, here or before `push`, hides no remote or push.
+    "git push --recurse-submodules check -f origin",
+    "git --config-env core.editor=EDITOR push --force origin main",
+    "git push -f -- origin main",
+    "git push -f origin @",  # @ is HEAD, the branch checked out
+    "git push origin +:",  # : pushes every branch both sides have, as push.default=matching does
+    "git push -f origin HEAD:heads/main",  # git reads heads/main as refs/heads/main
+    "git push origin :heads/main",
+    "git --attr-source HEAD push --force origin main",
+    "git --shallow-file x push --force origin main",
 ]
 LEAVES_BASE = [
     "git push origin main",
@@ -130,6 +150,11 @@ LEAVES_BASE = [
     "git push origin --tags --force",
     "git push -odeploy origin main",  # -o's value, not -d
     "git push -fodeploy origin ana/login",
+    "git push --dry origin main",  # --dry-run, which forces nothing
+    "git push --prune origin main",  # --prune deletes only through a pattern
+    "git push --prune origin 'refs/heads/ana/*:refs/heads/ana/*'",
+    "git push origin '+refs/heads/ana/*:refs/heads/ana/*'",
+    "git push origin :",  # matching, but not forced
 ]
 
 
@@ -184,6 +209,90 @@ def test_the_guard_protects_the_default_branch_too_when_the_base_is_another(on_m
     assert push_guard("git push --force origin dev", on_main).returncode == 2
     assert push_guard("git push --force origin main", on_main).returncode == 0  # main is neither base nor default
     assert push_guard("git push origin trunk", on_main).returncode == 0
+
+
+def test_a_push_with_repo_is_refused_when_either_reading_of_its_words_reaches_the_base(on_main):
+    # Git takes the first word as the repository even with --repo, so this forces main, checked out, to origin.
+    assert push_guard("git push --repo=elsewhere --force origin", on_main).returncode == 2
+    subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
+    for command in ("git push --repo=origin --force main", "git push --repo origin --force main",
+                    "git push --rep=origin --force main"):
+        run = push_guard(command, on_main)
+        assert run.returncode == 2 and "this push force-pushes main" in run.stderr, command
+    for command in ("git push --repo=origin --force ana/login", "git push --repo=origin --force origin ana/login",
+                    "git push --repo=origin main"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
+def git_in(root: Path, *arguments: str) -> None:
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.test", *arguments],
+                   check=True, capture_output=True)
+
+
+def test_a_forced_push_with_no_refspec_updates_what_git_config_says(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    assert push_guard("git push -f", on_main).returncode == 0  # push.default=simple: ana/login alone
+    run = push_guard("git -c push.default=matching push -f", on_main)
+    assert run.returncode == 2 and "this push force-pushes main, through push.default=matching" in run.stderr
+    git_in(on_main, "config", "push.default", "matching")
+    assert push_guard("git push --force", on_main).returncode == 2
+    for command in ("git push", "git push --force origin ana/login", "git push --tags -f", "git push -f origin @",
+                    "git -c push.default=simple push -f"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
+def test_a_forced_push_with_no_refspec_reads_the_upstream_and_the_remotes_push_refspecs(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    git_in(on_main, "config", "branch.ana/login.remote", "origin")
+    git_in(on_main, "config", "branch.ana/login.merge", "refs/heads/main")
+    run = push_guard("git -c push.default=upstream push -f", on_main)
+    assert run.returncode == 2 and "this push force-pushes main, through push.default=upstream" in run.stderr
+    assert push_guard("git -c push.default=upstream push", on_main).returncode == 0  # a plain push
+    run = push_guard("git -c 'remote.origin.push=refs/heads/*:refs/heads/*' push -f", on_main)
+    assert run.returncode == 2 and "through remote.origin.push" in run.stderr
+    git_in(on_main, "config", "remote.fork.push", "refs/heads/*:refs/heads/*")
+    assert push_guard("git push -f fork", on_main).returncode == 2
+    assert push_guard("git push -f origin", on_main).returncode == 0  # fork's refspecs are not origin's
+
+
+def test_a_forced_push_with_no_refspec_is_refused_when_git_config_cant_say_what_it_updates(on_main):
+    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    for command in ("git --config-env push.default=PUSH_DEFAULT push -f", "git -c push.default=sideways push -f"):
+        run = push_guard(command, on_main)
+        assert run.returncode == 2 and "git config can't say which branches" in run.stderr, command
+    git_in(on_main, "checkout", "-q", "--detach")  # no branch checked out for simple to push
+    assert push_guard("git push -f", on_main).returncode == 2
+    assert push_guard("git push --tags -f", on_main).returncode == 0
+
+
+def test_a_plain_push_with_no_refspec_is_refused_when_git_config_forces_deletes_or_mirrors_the_base(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    for command in ("git -c 'remote.origin.push=+refs/heads/*:refs/heads/*' push",
+                    "git -c remote.origin.push=:refs/heads/main push", "git -c remote.origin.mirror=true push"):
+        assert push_guard(command, on_main).returncode == 2, command
+    git_in(on_main, "config", "remote.origin.mirror", "true")
+    run = push_guard("git push", on_main)
+    assert run.returncode == 2 and "remote.origin.mirror" in run.stderr
+    for command in ("git push origin ana/login", "git push fork", "git -c remote.origin.mirror=false push"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
+def test_a_forced_push_names_its_branch_after_a_command_on_the_line_that_can_change_what_it_pushes(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    for command in ("git checkout main && git push -f", "git switch main; git push --force-with-lease",
+                    "git config push.default matching && git push -f", "cd ../other && git push -f",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push -f",
+                    "export GIT_DIR=../other/.git; git push -f", "git --git-dir=../other/.git push -f",
+                    "git checkout main && git push -f origin HEAD",
+                    "git symbolic-ref HEAD refs/heads/main && git push -f", "env -C ../other git push -f",
+                    "HOME=/tmp/elsewhere git push -f", "export XDG_CONFIG_HOME=/tmp/elsewhere; git push -f"):
+        run = push_guard(command, on_main)
+        assert run.returncode == 2 and "on this line can change" in run.stderr, command
+    for command in ("git rebase main && git push -f", "npm test && git push --force-with-lease",
+                    "git checkout main && git push -f origin ana/login", "git checkout main && git push",
+                    "git push -f && git checkout main"):
+        assert push_guard(command, on_main).returncode == 0, command
 
 
 @pytest.fixture
