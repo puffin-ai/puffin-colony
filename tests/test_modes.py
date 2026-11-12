@@ -179,7 +179,7 @@ def test_a_hack_config_needs_only_what_setup_asks(tmp_path, monkeypatch):
     project, gate = config["project"], config["gate"]
     assert (project["mode"], project["base"], project["worktrees"]) == ("hack", "main", str(tmp_path / "worktrees"))
     assert (gate["check"], gate["review"], gate["walk"], gate["merge_after_fast_check"]) == ("fast", False, False, True)
-    assert config["messages"] == {"lead_digest_minutes": 0, "board": 12}
+    assert config["messages"] == {"lead_digest_minutes": 2, "board": 12}
     assert not any(config["features"].values())
     assert config["roles"]["spec"] == config["roles"]["builder"]  # the mode's roles, and the builder's for spec
     assert config["accounts"]["ana"]["config_dir"] == str(tmp_path / "ana")
@@ -464,7 +464,7 @@ def test_hack_mode_needs_the_board_number(tmp_path, gh, monkeypatch):
 
 def test_a_hack_lead_reads_the_board_at_once_and_opens_no_coordination_issue(tmp_path, gh, monkeypatch, capsys):
     config = load(tmp_path, HACK)
-    post = "[Bo's Claude] @ana can the login form return the name? (from bo-lead)"
+    post = "[Bo's Claude] @ana question: can the login form return the name? (from bo-lead)"  # at once
     gh.answer(ok(comment(1, post, issue=12, login="bo"), comment(2, "[Bo's Claude] @bo note to self (from bo-lead)")))
     code, out = run_wait(config, "lead", "ana", monkeypatch, capsys)
     assert code == 0 and out == f"#12 {post}\n"

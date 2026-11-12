@@ -86,7 +86,8 @@ def changes(gh):  # noqa: F811
 def test_card_new_refuses_a_lead_at_its_open_card_limit(gh, capsys):  # noqa: F811
     full = [card(n, "In progress") for n in range(1, 11)] + [card(11, "Done"), card(12, "To do", lead="sam-lead")]
     quiet(gh, items=full)
-    args = parse("card", "new", "builder-1: the export button", "--body", "predicted: S, 20 min", "--size", "S")
+    args = parse("card", "new", "builder-1: the export button", "--body", "Folders: src/\npredicted: S, 20 min",
+                 "--size", "S")
     with pytest.raises(cli.ColonyError, match="ana-lead has 10 open cards, and \\[limits\\] open_cards_per_lead is "
                                               "10: close or finish one first"):
         args.run(CONFIG, args)
@@ -95,11 +96,23 @@ def test_card_new_refuses_a_lead_at_its_open_card_limit(gh, capsys):  # noqa: F8
     gh.answer("issue create", "https://github.com/acme/demo/issues/40\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_40"})
-    args = parse("card", "new", "builder-1: the export button", "--body", "b", "--size", "S", "--lead", "sam-lead")
+    args = parse("card", "new", "builder-1: the export button", "--body", "Folders: src/", "--size", "S", "--lead",
+                 "sam-lead")
     assert args.run(CONFIG, args) == 0
-    args = parse("card", "new", "builder-1: the import button", "--body", "b", "--size", "M")
+    args = parse("card", "new", "builder-1: the import button", "--body", "Folders: src/", "--size", "M")
     assert args.run({**CONFIG, "limits": {"open_cards_per_lead": 11}}, args) == 0
     assert len(gh.called("issue", "create")) == 2
+
+
+BODY = "done when: it signs in\nFolders: src/, tests/"
+
+
+@pytest.mark.parametrize("body", ["done when: it signs in", "the folders are src/ and tests/", "Folders:"])
+def test_card_new_refuses_a_body_with_no_folders_line_since_take_would_refuse_the_card(gh, body):  # noqa: F811
+    args = parse("card", "new", "builder-2: the login form", "--body", body, "--size", "M")
+    with pytest.raises(cli.ColonyError, match="names the folders it touches on a `Folders:` line"):
+        args.run(CONFIG, args)
+    assert gh.calls() == []
 
 
 def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lead_and_size(gh, capsys):  # noqa: F811
@@ -107,10 +120,10 @@ def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lea
     gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_41"})
-    args = parse("card", "new", "builder-2: the  login form", "--body", "done when: it signs in", "--size", "M")
+    args = parse("card", "new", "builder-2: the  login form", "--body", BODY, "--size", "M")
     assert args.run(CONFIG, args) == 0
     assert gh.called("issue", "create") == [["issue", "create", "--repo", "acme/demo", "--title",
-                                             "builder-2: the login form", "--body", "done when: it signs in"]]
+                                             "builder-2: the login form", "--body", BODY]]
     head = ["project", "item-edit", "--project-id", "PVT_3", "--id", "PVTI_41", "--field-id"]
     assert gh.called("project", "item-edit") == [head + ["F2", "--single-select-option-id", "F2-0"],
                                                  head + ["F3", "--text", "ana-lead"],
@@ -129,7 +142,8 @@ def test_card_new_prints_the_median_of_the_last_cards_of_its_size_beside_the_pre
     gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_41"})
-    args = parse("card", "new", "builder-2: the export", "--body", "predicted: M, 45 min", "--size", "M")
+    args = parse("card", "new", "builder-2: the export", "--body", "Folders: src/\npredicted: M, 45 min", "--size",
+                 "M")
     assert args.run(CONFIG, args) == 0
     assert capsys.readouterr().out.splitlines()[-1] == "predicted 45 min; the last 3 M cards took a median of 120 min"
 
@@ -139,7 +153,7 @@ def test_card_new_prints_the_median_of_the_last_cards_of_its_size_beside_the_pre
 def test_card_new_refuses_a_duplicate_of_an_open_card_by_its_number(gh, title):  # noqa: F811
     quiet(gh, issues=[{"number": 7, "title": "Colony: coordination"},
                       {"number": 12, "title": "builder-2: Add dark mode to settings"}])
-    args = parse("card", "new", title, "--body", "b", "--size", "S")
+    args = parse("card", "new", title, "--body", "Folders: src/", "--size", "S")
     with pytest.raises(cli.ColonyError, match="#12 is already open as 'builder-2: Add dark mode to settings'"):
         args.run(CONFIG, args)
     assert changes(gh) == []
@@ -232,14 +246,14 @@ def test_post_refuses_a_helpers_progress_line_and_says_where_progress_goes(sent,
     assert sent == []
 
 
-@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "urgent: stop this card"])
+@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "stop: drop this card", "urgent: stop this card"])
 def test_post_lets_a_lead_hand_out_and_answer_work(sent, monkeypatch, sentence):
     assert post_as(monkeypatch, "lead", "builder-2", sentence) == 0
     assert sent == [f"for builder-2: {sentence} (from lead)"]
 
 
 def test_post_refuses_a_leads_chatter_to_a_helper_and_lets_lead_to_lead_talk_run_free(sent, monkeypatch):
-    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `urgent:`"):
+    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `stop:`, `urgent:`"):
         post_as(monkeypatch, "lead", "builder-2", "nice work on the form")
     assert post_as(monkeypatch, "lead", "sam-lead", "can your builders take the export card?") == 0
     assert post_as(monkeypatch, "lead", "@all", "I merge dev into main in 10 minutes") == 0
@@ -275,9 +289,12 @@ def test_tidy_rotates_the_coordination_issue_at_200_comments_and_the_watcher_fol
     assert create[create.index("--body") + 1].endswith("Continues #5, closed at 200 comments.")
     closing = gh.called("issue", "comment", "5")[0][-1]
     assert closing.startswith("Closed at 200 comments; this thread goes on in #31.")
-    assert ("- for ana-lead: question: can you take #12? (from sam-lead)\n"
-            "- for sam-lead: blocked: main is red (from bo-lead)\n"
-            "- for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    assert ("- carried: for ana-lead: question: can you take #12? (from sam-lead)\n"
+            "- carried: for sam-lead: blocked: main is red (from bo-lead)\n"
+            "- carried: for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    # A copied line wakes no one a second time: every wait read it on the old issue already.
+    ana = wait.lead_session({"project": {"name": "demo"}}, "ana-lead")
+    assert wait.taken(closing, ana, "5") == []
     assert "note 1 " not in closing and "an old question" not in closing
     assert gh.called("issue", "close") == [["issue", "close", "5", "--repo", "acme/demo"]]
     assert not gh.called("issue", "create", "--repo", "acme/demo", "--title", "Needs Ana")
@@ -490,7 +507,67 @@ def test_tidy_removes_a_closed_cards_clean_worktree_and_keeps_a_dirty_one_and_th
     assert not gh.called("issue", "view", "14")
     assert "builder-1/12" in git(repo, "branch", "--list", "builder-1/12")  # the branch stays: only the folder goes
     out = capsys.readouterr().out
-    assert f"worktrees: 1 removed, 1 kept: {dirty} (uncommitted or untracked changes)" in out
+    assert re.search(r"worktrees: 1 removed, \d+ bytes freed, 1 kept: " +
+                     re.escape(f"{dirty} (uncommitted or untracked changes)"), out)
+
+
+def detached(repo, name):
+    """A detached worktree beside the repo, as Colony makes for a walk, a merge or an image."""
+    path = repo.parent / name
+    git(repo, "worktree", "add", "-q", "--detach", str(path))
+    return path
+
+
+def test_tidy_removes_the_worktrees_of_merged_cards_and_ended_batches_merges_and_retros_and_prints_the_space_freed(
+        gh, repo, capsys):  # noqa: F811
+    git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    merged = worktree(repo, "builder-1/12")
+    batch, fix, retro = worktree(repo, "demo/batch-b1"), worktree(repo, "demo/fix-b1-12-r1"), worktree(repo, "demo/retro-b1")
+    walk, merge, image = detached(repo, "demo-batch-b1-walk"), detached(repo, "demo-merge"), detached(repo, "demo-image-7")
+    running, fresh = worktree(repo, "demo/batch-b2"), worktree(repo, "demo/batch-b3")
+    reports = batch / ".colony" / "reports" / "b1"
+    reports.mkdir(parents=True)
+    (reports / "state.json").write_text("{}")  # a batch's own untracked state never keeps its worktree
+    quiet(gh, issues=[{"number": 12, "title": "builder-1: card 12"}])
+    gh.answer("pr list", [{"headRefName": "builder-1/12", "state": "MERGED"},
+                          {"headRefName": "demo/batch-b1", "state": "MERGED"},
+                          {"headRefName": "demo/fix-b1-12-r1", "state": "MERGED"},
+                          {"headRefName": "demo/retro-b1", "state": "CLOSED"},
+                          {"headRefName": "demo/batch-b2", "state": "CLOSED"},
+                          {"headRefName": "demo/batch-b2", "state": "OPEN"}])
+    assert tidy.run_tidy(CONFIG, repo) == 0
+    assert not any(path.exists() for path in (merged, batch, fix, retro, walk, merge, image))
+    assert running.exists() and fresh.exists() and repo.exists()  # an open pull request, and none yet
+    assert len([call for call in gh.calls() if call[:2] == ["pr", "list"]]) == 1
+    out = capsys.readouterr().out
+    assert "card #12's pull request merged" in out and "demo/retro-b1's pull request closed" in out
+    assert re.search(r"worktrees: 7 removed, [\d.]+ (bytes|KB|MB) freed, 0 kept", out)
+
+
+def test_tidy_keeps_a_merge_worktree_whose_head_is_not_in_the_base(gh, repo, capsys):  # noqa: F811
+    git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    merge = detached(repo, "demo-merge")
+    (merge / "b.txt").write_text("b\n")
+    git(merge, "add", "-A")
+    git(merge, "commit", "-qm", "not merged yet")
+    quiet(gh)
+    assert tidy.run_tidy(CONFIG, repo) == 0
+    assert merge.exists()
+
+
+def test_tidy_dry_run_lists_the_worktrees_it_leaves_with_their_size_and_last_commit_date(gh, repo, capsys):  # noqa: F811
+    working, dirty = worktree(repo, "builder-3/14"), worktree(repo, "builder-2/13", dirty=True)
+    (working / "big.bin").write_bytes(b"x" * 5000)
+    quiet(gh, issues=[{"number": 14, "title": "builder-3: card 14"}])
+    gh.answer("issue view", {"state": "CLOSED"})
+    assert tidy.run_tidy(CONFIG, repo, dry=True) == 0
+    assert working.exists() and (working / "big.bin").exists() and dirty.exists()
+    out = capsys.readouterr().out
+    today = git(repo, "log", "-1", "--format=%cs")
+    assert "The other worktrees, which tidy leaves:" in out
+    assert re.search(rf"{re.escape(str(working))}: 5\.\d KB, last commit {today}", out)
+    assert re.search(rf"{re.escape(str(dirty))}: \d+ bytes, last commit {today}", out)
+    assert str(repo) + ":" not in out  # the main checkout is never listed
 
 
 # colony tidy

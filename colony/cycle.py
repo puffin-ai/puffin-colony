@@ -842,7 +842,8 @@ each problem that came back in a later round, and each card that ran far over it
 Write each lesson in the checkout {checkout}, on branch {branch}, as one of these two, and never as a note alone:
 - A rule line plus a check. The rule line is one sentence with must or must not, in the file of {rules} it belongs \
 to. The check fails on the problem: a test, a lint setting, or a script the full check (`{checks}`) runs.
-- A decision for the person, with your default, when the lesson turns on a choice only they can make.
+- A decision for the person, with your default, when the lesson turns on a choice only they can make, or when \
+its rule line belongs in {protected}, which only the person asks for and reviews: never edit those.
 
 Run `{fast_check}` before each commit, and end each commit message with `{trailer}`. Push nothing, and start no \
 agent of your own.
@@ -853,6 +854,14 @@ Write {report}. Its first line is exactly `lessons: N`. Then one line per lesson
 Final reply: the lessons line, in under 100 words."""
 LESSONS = re.compile(r"lessons:\s*(\d+)", re.I)
 DECISION = re.compile(r"^\s*[-*]?\s*decision:\s*(.+?)\s+[—–-]+\s*default:\s*(.+)$", re.I)
+
+
+def protected(path: str) -> bool:
+    """Whether a [gate] rules entry is a file no agent edits unless the person asks and reviews it: the core, and any
+    CLAUDE.md or AGENTS.md. The retro writes its rule lines elsewhere, and turns a lesson for one of them into a
+    decision."""
+    path = path.replace("\\", "/").removeprefix("./")
+    return path == f"{cli.DIR}/core.md" or path.rsplit("/", 1)[-1] in ("CLAUDE.md", "AGENTS.md")
 
 
 def retro_names(config: dict, name: str) -> tuple[str, Path]:
@@ -867,9 +876,11 @@ def retro_prompt(config: dict, name: str, reports: Path, checkout: Path, branch:
     from colony import batch as runner
 
     project = config["project"]
-    rules = ", ".join(f"`{rule}`" for rule in config.get("gate", {}).get("rules", [f"{cli.DIR}/rules/*.md"]))
+    targets = [rule for rule in config.get("gate", {}).get("rules", []) if not protected(rule)]
+    rules = ", ".join(f"`{rule}`" for rule in targets or [f"{cli.DIR}/rules/*.md"])
     return runner.fill(RETRO_PROMPT, project=project["name"], batch=name, reports=reports, checkout=checkout, branch=branch,
-                rules=rules, checks=runner.every_area(config, project["checks"]),
+                rules=rules, protected=f"`{cli.DIR}/core.md`, `CLAUDE.md` and `AGENTS.md`",
+                checks=runner.every_area(config, project["checks"]),
                 fast_check=runner.every_area(config, runner.fast_check(project)),
                 trailer=trailer, report=report)
 
@@ -930,7 +941,8 @@ def retro(config: dict, args) -> int:
 def stale_lines(config: dict, now) -> list[str]:
     """The `stale:` lines for the lead's wait: one per card In progress whose Last update is older than
     [cycle] stale_hours (2.5 by default). The board has no State, so a helper waiting on a usage limit is stale too:
-    the lead looks at its session and finds out.
+    the lead looks at its session and finds out. A background helper `claude agents` lists as blocked waits on a
+    prompt, so its line says so and names the `claude attach` command that reaches it.
 
     `now` is an aware datetime, or a Unix time. Each card is reported once until its Last update changes, through
     a state file in ~/.colony/<project>/. Call it at most every STALE_CHECK_MINUTES. It returns [] when the repo has
@@ -945,7 +957,7 @@ def stale_lines(config: dict, now) -> list[str]:
     path = wait.state_path(config["project"]["name"], f"{cli.LEAD}-stale")
     reported = wait.read_json(path, {})
     reported = reported if isinstance(reported, dict) else {}
-    lines = []
+    lines, stale = [], []
     for item in board.items(found):
         last = board.field_value(item, board.LAST_UPDATE)
         if board.squash(board.field_value(item, "Status")) != board.squash("In progress"):
@@ -957,8 +969,15 @@ def stale_lines(config: dict, now) -> list[str]:
         if updated is None or now - updated <= after or key in reported:
             continue
         reported[key] = now.isoformat()
-        who = board.field_value(item, "Helper") or "its helper"
-        lines.append(f"#{item['number']} stale: {who} shows no update since {last}; check its session")
+        stale.append((item["number"], board.field_value(item, "Helper"), last))
+    blocked = cli.blocked_sessions(config) if any(helper for _, helper, _ in stale) else {}
+    for number, helper, last in stale:
+        agent = blocked.get(helper.lower()) if helper else None
+        if agent:
+            lines.append(f"#{number} stale: {helper} waits on a prompt in its background session, with no update "
+                         f"since {last}; answer it with `{cli.attach_text(agent)}`")
+        else:
+            lines.append(f"#{number} stale: {helper or 'its helper'} shows no update since {last}; check its session")
     reported = {key: at for key, at in reported.items() if now - moment(at) <= KEEP_REPORTED}
     wait.write_json(path, reported)
     return lines

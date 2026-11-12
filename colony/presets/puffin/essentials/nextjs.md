@@ -24,3 +24,4 @@ This is the web app, `{web_app}`: Next.js with React and TanStack Query. Every c
 12. You must return focus to a control that stays when the pressed one leaves, give every control a name, and announce outcomes in a live region mounted empty from first paint. (`accessibility.md`, Keyboard and focus, and Announcements and refusals)
 13. You must await or catch every promise a handler or timer starts, so a rejection ends in a shown refusal. (`coding.md`, Lines the web app follows)
 14. You must give a bug fix or new logic a test that fails without the change, and must check touch or layout work in a browser at phone width, 390 by 844. (`testing.md`, In both apps)
+15. You must add no shim before the first release to users, such as a redirect, a re-export, an alias, or a fallback reader for an old shape, and must change every caller instead and delete the old name. (`design-principles.md`)

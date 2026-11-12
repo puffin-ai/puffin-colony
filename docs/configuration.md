@@ -16,13 +16,14 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it, except `colony merge` in Hack with `[gate] merge_after_fast_check = true`. |
 | `preset` | no | `"lean"` | The rules setup copied: `lean`, `puffin` or `own`. A record for you; the commands don't read it. |
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
-| `worktrees` | yes | `"~/worktrees"` | Where batches, fixers and the retro make their worktrees. Pick a folder outside the clone. |
+| `worktrees` | yes | `"~/worktrees"` | Where builders, batches, fixers, the merge and the retro make their worktrees. Pick a folder outside the clone. A relative path, such as `"../worktrees"`, starts from the clone. |
 | `fast_check` | no | `"npm test"` | A builder's quick check after each change. Setup writes it into the playbook. |
 | `checks` | yes | `"python3 tools/checks.py {areas}"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. With `[checks] areas`, `{areas}` takes the names of the areas a round runs. |
 | `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change is never TINY. |
 | `generated` | no | `["src/generated/*"]` | Globs for files a build writes. When a merge conflicts only in these, Colony takes the card's side and runs `regen`. Their lines don't count toward a tier. |
 | `regen` | no | `"npm run codegen"` | The command that rebuilds the generated files. |
-| `check_env_file` | no | `"~/.config/myapp/check.env"` | A local file of `KEY=VALUE` lines added to the checks' environment. A relative path starts at the repo root. Keep it out of git. Colony never prints its values. |
+| `check_env_file` | no | `"~/.config/myapp/check.env"` | A local file of `KEY=VALUE` lines added to the checks' environment. A relative path starts at the checkout the command runs in, and when the file isn't there, at the repo's main checkout, so a helper's worktree and the merge worktree use the main checkout's `.env.local`. Keep it out of git. Colony never prints its values. When it names a database on another computer, such as a hosted Postgres, `colony merge` and `colony batch` print a note once a day with the host alone: every check run writes to that database, and a shared one slows as runs pile up. |
+| `deploy_environment` | no | `"Production"` | The GitHub deployment environment that is the live app, which hosts such as Vercel and Netlify record. `colony who` and `colony status` print its newest successful deploy and what landed on the base since. Default: `Production`. A hack config from before this key names it under `[hack]`, which still counts. |
 | `install` | no | `"npm ci"` | Runs in each new worktree: the batch's, the walker's and each fixer's. |
 | `trailer` | no | `"Assisted-by: claude-code:claude-opus-5-5"` | The line every batch, fixer and retro commit ends with. Default: `Assisted-by: claude-code:<the fixer's model>`. |
 

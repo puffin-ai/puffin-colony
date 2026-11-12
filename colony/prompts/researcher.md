@@ -32,6 +32,6 @@ The knowledge vault is `{knowledge}/`. Its rules are in `.colony/rules/`, and it
 
 - Work in your own worktree on a branch named `research/<topic>`, made from the base branch, and change no application code.
 - Run `colony check-docs` and fix what it reports, then commit as `docs(research): <topic>` and push the branch.
-- Post one line for the lead on the card: `for lead: done, research/<topic> pushed, <rows closed> of <rows> findings closed (from researcher)`.
+- Post one line for the lead on the card: `colony post <card> lead "done, research/<topic> pushed, <rows closed> of <rows> findings closed"`, which signs it with your name.
 
 Final reply: the bottom line, then the count of findings, how many closed by a rule line and a check, and each decision you asked with its default, in under 150 words.

@@ -50,8 +50,10 @@ def no_cmux_app(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def outside_claude_code(monkeypatch):
     """The suite may run inside a Claude Code session, whose $CLAUDECODE would make plain `colony` take the
-    in-session path. A test that wants that path sets it."""
+    in-session path, and whose $CLAUDE_CODE_SESSION_ID would save and load a session's identity. A test that wants that
+    path sets them."""
     monkeypatch.delenv("CLAUDECODE", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +62,14 @@ def outside_a_colony_session(monkeypatch):
     make a command act as that agent. A test that wants one sets it."""
     for name in [name for name in os.environ if name.startswith("COLONY_")]:
         monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def one_session_one_read(monkeypatch):
+    """Each wait reads GitHub itself, as one session alone does, so a test's queued answers go to its own polls; a test
+    of the computer's shared read turns it on."""
+    from colony import wait
+    monkeypatch.setattr(wait, "SHARED_POLL", False, raising=False)
 
 
 @pytest.fixture(autouse=True)

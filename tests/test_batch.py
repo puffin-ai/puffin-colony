@@ -1,5 +1,6 @@
 """Tests for colony batch and colony status, using temporary git repositories and stub `claude` and `gh` commands."""
 
+import json
 import os
 import re
 import subprocess
@@ -666,6 +667,79 @@ def test_a_batch_checks_only_the_areas_its_change_touched_and_minutes_md_shows_w
     assert '"areas": [\n        "api"\n      ]' in state
 
 
+# The output a fast check prints for a backend card when it runs the web checks alone: nothing was checked
+NOTHING_RAN = "BASE origin/main: the fork point.\nNOT RUN web: no changed file is in its folders.\nLogs: /tmp/c\n" \
+              "FAST web passed in 0s.\n"
+
+
+def test_a_check_whose_output_only_says_not_run_ran_nothing():
+    assert batch.ran_nothing(NOTHING_RAN)
+    assert not batch.ran_nothing(PUFFIN_LOG)
+    assert not batch.ran_nothing("NOT RUN backend tests: no test file matches.\nPASS web lint (3s)\n")
+    assert not batch.ran_nothing("NOT RUN e2e: no browser.\n12 passed in 3.1s\n")
+    assert not batch.ran_nothing("all good\n")
+
+
+@pytest.fixture
+def fast_card(repo, config, monkeypatch):
+    """A builder's card branch in the repo, with [checks] areas and an echoing `{areas}` fast check; returns a
+    function that commits the card's files and runs `colony fast-check` there, giving its exit code and output."""
+    with_areas(config, skip=["docs/"])
+    config["project"]["fast_check"] = "echo checked {areas}"
+    git(repo, "checkout", "-q", "-b", "builder-1/7", "main")
+    monkeypatch.chdir(repo)
+
+    def run(files: dict, capsys, committed: bool = True) -> tuple[int, str]:
+        if committed:
+            commit(repo, files, "the card")
+        else:
+            for name, text in files.items():
+                (repo / name).parent.mkdir(parents=True, exist_ok=True)
+                (repo / name).write_text(text)
+        code = batch.run_fast_check(config, Namespace(dry_run=False))
+        return code, capsys.readouterr().out
+    return run
+
+
+def test_a_web_cards_fast_check_runs_for_the_web_area_and_its_last_line_says_passed(fast_card, capsys):
+    code, out = fast_card({"web/page.tsx": "x\n"}, capsys)
+    assert code == 0
+    assert out.splitlines() == ["$ echo checked web", "checked web", "fast check: passed for web: checked web"]
+
+
+def test_a_backend_cards_fast_check_runs_for_its_area_with_uncommitted_files_counted(fast_card, capsys):
+    code, out = fast_card({"api/routes.py": "x\n"}, capsys, committed=False)
+    assert code == 0
+    assert out.splitlines()[-1] == "fast check: passed for api: checked api"
+
+
+def test_a_docs_only_cards_fast_check_is_not_run_and_runs_no_command(fast_card, capsys):
+    code, out = fast_card({"docs/guide.md": "x\n"}, capsys)
+    assert code == batch.NOT_RUN_EXIT
+    assert out.splitlines() == ["fast check: not run, the change touches no check area"]
+
+
+def test_a_fast_check_that_only_says_not_run_is_not_run_and_a_failing_one_failed(fast_card, config, capsys):
+    config["project"]["fast_check"] = "printf '%s' '" + NOTHING_RAN + "'"
+    code, out = fast_card({"api/routes.py": "x\n"}, capsys)
+    assert code == batch.NOT_RUN_EXIT
+    assert out.splitlines()[-1] == "fast check: not run, its output only says NOT RUN: FAST web passed in 0s."
+    config["project"]["fast_check"] = "echo 'FAIL web lint (3s)'; exit 1"
+    code, out = fast_card({}, capsys, committed=False)
+    assert code == 1 and out.splitlines()[-1] == "fast check: failed, exit 1: FAIL web lint (3s)"
+
+
+def test_a_batch_round_whose_checks_only_say_not_run_reports_not_run_not_pass(repo, config, stubs, tmp_path):
+    (tmp_path / "nothing.log").write_text(NOTHING_RAN)
+    config["project"]["checks"] = f"cat {(tmp_path / 'nothing.log').as_posix()}"
+    assert batch.run_batch(config, batch_args(repo, "11=card/a")) == 0
+    reports = Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1"
+    assert (reports / "checks-1.md").read_text().startswith("checks: not run")
+    body = (reports / "pr.md").read_text()
+    assert "| 1 | 3 | skipped | not run |" in body
+    assert "` not run: its output only says NOT RUN: FAST web passed in 0s." in body
+
+
 def test_minutes_table_lists_what_each_kind_of_skipped_step_saved_below_the_total():
     table = batch.minutes_table(["10:00 checks-r1 4.0", "10:05 saved checks-r1 37.0", "10:30 saved walk-r1 27.0 $6.00",
                                  "10:40 saved walk-r2 20.5 $4.50"])
@@ -745,6 +819,53 @@ def test_a_check_that_still_fails_in_the_last_round_stops_the_batch(repo, config
     assert "round 3 of 3 still fails its checks (failing test tests/test_x.py::test_" in capsys.readouterr().out
     assert not stubs["gh"].exists()
     assert git(repo.parent / "origin.git", "branch", "--list", "demo/*") == ""
+
+
+
+def test_a_check_that_fails_on_the_start_point_alone_stops_the_batch_with_no_fixer(repo, config, stubs, capsys):
+    # A broken base, or a check's database that is down, fails every branch: no fixer chases what the cards didn't do.
+    config["project"]["checks"] = "echo 'FAILED tests/test_db.py::test_connects'; exit 1"
+    config["gate"].update(review=False, walk=False)
+    assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 1
+    out = capsys.readouterr().out
+    start = git(repo, "rev-parse", "origin/main")[:9]
+    assert (f"every failing check also fails on origin/main alone at {start}, without the cards "
+            "(tests/test_db.py::test_connects): the cards are not to blame, so no fixer runs") in out
+    assert not stubs["claude"].exists()
+    reports = Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1"
+    assert f"fails on origin/main alone at {start} too, so no fixer gets it" in (reports / "checks-1.md").read_text()
+    assert not (Path(config["project"]["worktrees"]) / "demo-batch-b1-start").exists()
+
+
+def test_a_fixer_gets_only_the_cards_own_failures_and_the_start_points_stop_the_next_round(repo, config, stubs,
+                                                                                           capsys):
+    # test_db fails on main already; test_b fails only with card/b's change, until its fixer appends "fixed".
+    config["project"]["checks"] = ("echo 'FAILED tests/test_db.py::test_connects'; grep -q fixed b.txt || "
+                                   "{ grep -qx b1 b.txt && echo 'FAILED tests/test_b.py::test_b'; }; exit 1")
+    config["gate"].update(review=False, walk=False)
+    assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 1
+    out = capsys.readouterr().out
+    assert stubs["claude"].read_text().count("You are a fast builder") == 1
+    assert "every failing check also fails on origin/main alone" in out and "round 2" not in out.split("stopped")[0]
+    reports = Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1"
+    state = json.loads((reports / "state.json").read_text())
+    assert [x["on_start"] for x in state["rounds"]] == [["failing test tests/test_db.py::test_connects"]] * 2
+    assert list(state["start_checks"].values()) == [["tests/test_db.py::test_connects"]]  # run once, then kept
+
+
+
+def test_a_check_env_that_names_a_remote_database_gets_a_note_with_its_host_alone(repo, config, stubs, capsys,
+                                                                                   tmp_path, monkeypatch):
+    # Checks that share one hosted database slow each other down; a batch's checks and its base check add more.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env = tmp_path / "check.env"
+    env.write_text("DATABASE_URL=postgres://app:s3cret@ep-cool-1.neon.tech/db\nTEST_DB=postgres://localhost/test\n")
+    config["project"]["check_env_file"] = str(env)
+    config["gate"].update(review=False, walk=False)
+    assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 0
+    out = capsys.readouterr().out
+    assert "note: the checks' env names a database on ep-cool-1.neon.tech" in out
+    assert "s3cret" not in out and "localhost" not in out
 
 
 RATE_STUB = r'''#!/usr/bin/env python3
