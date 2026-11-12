@@ -187,6 +187,17 @@ def native(path: str) -> str:
     return os.path.normpath(path) if WINDOWS else path
 
 
+def same_path(a: str, b: str, windows: bool = WINDOWS) -> bool:
+    """Whether two absolute paths name one folder, as Claude Code keys its projects. On Windows its state file holds
+    both C:\\Users\\... and C:/Users/..., and case doesn't count there, so neither slashes nor case do; on macOS and
+    Linux only a trailing slash is ignored."""
+    def key(path: str) -> str:
+        path = path.replace("\\", "/") if windows else path
+        path = path.rstrip("/") or "/"
+        return path.casefold() if windows else path
+    return key(a) == key(b)
+
+
 LINK_MODE = "120000"  # the index mode git gives a symbolic link
 FIX_LINKS = "colony fix-links"
 DEVELOPER_MODE = "turn on Developer Mode (Settings > System > For developers)"
