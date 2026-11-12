@@ -1,6 +1,6 @@
 {
   "name": "puffin-colony",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "One command that runs a repo's whole software life cycle with Claude Code: a lead, builders, and a gate of checks, review and a browser walk.",
   "keywords": ["claude", "claude-code", "agents", "ai", "automation", "code-review", "cli"],
   "homepage": "https://github.com/puffin-ai/puffin-colony",
