@@ -3,7 +3,8 @@ one, and after a handoff the other person's builders keep asking the side that c
 
 `colony stop [<name> ...]` stops this project's Colony sessions on this computer: a background one with `claude stop`,
 which keeps its conversation, and an interactive one with a terminate signal. It never stops the session that runs
-it, and keeps one whose folder holds uncommitted work unless --force. The board hears who stopped.
+it, and keeps one whose folder holds uncommitted work unless --force. The board hears who stopped, or outside
+hack mode the coordination issue, except in solo mode, which has one person.
 
 `colony handoff @<login>` hands this person's open work to another person's lead: the branches not yet in the base,
 with their commits, a warning for each one never pushed, and this lead's claimed paths, which it releases. The board
@@ -77,7 +78,7 @@ def stop(config: dict, args) -> int:
     if not stopped and not kept:
         print(f"No other {cli.DISPLAY} session of {project} runs on this computer.")
         return 0
-    if wait.hack(config) and stopped:
+    if cli.mode(config) != "solo" and stopped:  # other people's leads hear it: on the board, or the coordination issue
         line = f"@{wait.ALL} {' and '.join(stopped)} stopped on {presence.computer()}"
         if kept:
             line += f"; {' and '.join(kept)} kept, with uncommitted work"

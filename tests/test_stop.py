@@ -54,6 +54,17 @@ def test_stop_ends_this_projects_sessions_here_but_this_one_and_one_with_uncommi
                      "uncommitted work"]
 
 
+def test_stop_tells_the_other_leads_in_startup_mode_and_no_one_in_solo_mode(sessions, board):
+    # In startup mode several people run leads, and their leads read the coordination issue; solo has one person.
+    for mode, heard in (("startup", 1), ("solo", 0)):
+        board.clear()
+        config = {**CONFIG, "project": {**CONFIG["project"], "mode": mode}}
+        stop.stop(config, Namespace(names=["staff"], force=False))
+        assert len(board) == heard
+    stop.stop({**CONFIG, "project": {**CONFIG["project"], "mode": "startup"}}, Namespace(names=["staff"], force=False))
+    assert board == ["@all demo-staff stopped on " + presence.computer()]
+
+
 def test_stop_names_sessions_and_force_takes_one_with_uncommitted_work(sessions, board):
     assert stop.stop(CONFIG, Namespace(names=["auth"], force=True)) == 0
     assert sessions == ["demo-auth"]
