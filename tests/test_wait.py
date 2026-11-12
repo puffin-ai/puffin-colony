@@ -589,6 +589,19 @@ def test_a_named_helpers_line_for_lead_goes_to_its_own_lead_by_name(gh, capsys, 
     assert ["issue", "comment", "1560", "--repo", "acme/demo", "--body", line] in gh.calls()
 
 
+def test_a_named_leads_wait_takes_a_for_lead_done_from_its_own_helper(gh, capsys, monkeypatch):
+    from colony import presence
+
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    monkeypatch.setattr(presence, "keeper", lambda *args, **kwargs: lambda: None)
+    gh.answer(ok(status_comment(1, "builder-1", "2026-11-05T10:00:00Z"),
+                 comment(2, "for lead: done, builder-1/12 pushed (from builder-1)", issue=12),
+                 comment(3, "for lead: done, builder-9/14 pushed (from builder-9)", issue=14)))
+    code, out, clock = run_as("lead", capsys, monkeypatch)
+    assert code == 0 and clock.naps == []  # a done while no batch runs comes at once
+    assert out == "#12 for lead: done, builder-1/12 pushed (from builder-1)\n"  # not builder-9's, a stranger's
+
+
 def test_a_helpers_line_for_lead_reaches_its_own_lead_and_no_other():
     line = "for lead: blocked: no token (from builder-7)"
     main = wait.with_helpers(wait.Session(cli.LEAD, frozenset({cli.LEAD, "alex-main-lead"})),

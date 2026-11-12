@@ -29,7 +29,7 @@ Agents talk only in lines. A line is one comment on a card (a GitHub issue), und
 
     for <name>: <one sentence> (from <name>)
 
-The names are `lead` and each builder's name. Post every line with `colony post <card> <to> "<sentence>"`, which signs it with your name; `--urgent` starts it `urgent:`. `colony wait` prints the lines addressed to you. A person's line carries no `(from …)`.
+The names are `lead` and each builder's name. Post every line with `colony post <card> <to> "<sentence>"`, which signs it with your name; `--urgent` starts it `urgent:`. A helper's `lead` is its own lead: with `$COLONY_LEAD` set, `colony post <card> lead` addresses the line to that lead's name, such as `for ana-main-lead:`, and that lead's wait also takes a `for lead:` line one of its own helpers signed. `colony wait` prints the lines addressed to you. A person's line carries no `(from …)`.
 
 Every line starts with its kind, and `colony post` refuses any other. A builder sends its lead only these four:
 - `done, …`: the card is pushed. It reaches the lead in its next digest, or at once when the batch waits on that card.
