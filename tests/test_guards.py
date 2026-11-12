@@ -204,6 +204,19 @@ def test_the_guard_protects_the_default_branch_too_when_the_base_is_another(on_m
     assert push_guard("git push origin trunk", on_main).returncode == 0
 
 
+def test_a_push_with_repo_is_refused_when_either_reading_of_its_words_reaches_the_base(on_main):
+    # Git takes the first word as the repository even with --repo, so this forces main, checked out, to origin.
+    assert push_guard("git push --repo=elsewhere --force origin", on_main).returncode == 2
+    subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
+    for command in ("git push --repo=origin --force main", "git push --repo origin --force main",
+                    "git push --rep=origin --force main"):
+        run = push_guard(command, on_main)
+        assert run.returncode == 2 and "this push force-pushes main" in run.stderr, command
+    for command in ("git push --repo=origin --force ana/login", "git push --repo=origin --force origin ana/login",
+                    "git push --repo=origin main"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A fresh git repo to run in, with HOME in the temporary folder."""

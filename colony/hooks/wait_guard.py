@@ -375,7 +375,7 @@ def reached(target: str, protected: list[str]) -> str:
 
 def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
     """Why a `git push` with these arguments, the words after `push`, rewrites or deletes a protected branch, or ""."""
-    force = delete = everything = mirror = prune = tags = False
+    force = delete = everything = mirror = prune = tags = repo = False
     positional: list[str] = []
     skip = options_end = False
     for word in arguments:
@@ -389,7 +389,7 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
             named = long_options(word)
             force = force or bool(named & {"force", "force-with-lease"})
             delete, mirror, prune = delete or "delete" in named, mirror or "mirror" in named, prune or "prune" in named
-            everything = everything or bool(named & {"all", "branches"})
+            everything, repo = everything or bool(named & {"all", "branches"}), repo or "repo" in named
             tags = tags or named == {"tags"}  # tags alone pass, so only a word that can mean nothing else counts
             skip = "=" not in word and bool(named) and named <= PUSH_VALUE_OPTIONS
         else:
@@ -402,7 +402,9 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
     if prune and everything:
         return f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has its name"
     targets = []  # (the branch a refspec updates, how it rewrites it, or "")
-    for spec in positional[1:]:
+    # Git takes the first word as the repository even with --repo, which names only a default. With --repo the
+    # guard reads that word as a refspec too, so a push is refused when either reading reaches a protected branch.
+    for spec in positional[1:] + (positional[:1] if repo else []):
         plus, spec = spec.startswith("+"), spec.lstrip("+")
         source, colon, destination = spec.partition(":")
         target = destination if colon else source
