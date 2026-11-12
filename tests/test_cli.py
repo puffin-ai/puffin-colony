@@ -528,7 +528,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
-            "tidy", "idea", "card", "release", "setup", "skill-install", "tools")
+            "tidy", "idea", "card", "release", "setup", "fix-links", "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

@@ -36,6 +36,13 @@ def repo(tmp_path) -> Path:
     return root
 
 
+@pytest.fixture
+def as_windows(monkeypatch):
+    """Colony acts as on Windows, in this process: main would otherwise restart itself in UTF-8 mode in a child."""
+    monkeypatch.setattr(portable, "WINDOWS", True)
+    monkeypatch.setattr(portable, "needs_utf8", lambda: False)
+
+
 def plain(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
@@ -98,6 +105,7 @@ def test_the_note_is_quiet_off_windows_and_where_links_are_fine(repo, tmp_path, 
 
 def test_fix_links_does_nothing_on_macos_and_linux(repo, monkeypatch, capsys):
     monkeypatch.setattr(portable, "WINDOWS", False)
+    monkeypatch.setattr(portable, "needs_utf8", lambda: False)
     monkeypatch.chdir(repo)
     assert cli.main(["fix-links"]) == 0
     assert "nothing to do" in capsys.readouterr().out
@@ -105,8 +113,7 @@ def test_fix_links_does_nothing_on_macos_and_linux(repo, monkeypatch, capsys):
     assert plain(repo / "rules" / "a.md")
 
 
-def test_fix_links_changes_nothing_when_links_cant_be_made(repo, monkeypatch, capsys):
-    monkeypatch.setattr(portable, "WINDOWS", True)
+def test_fix_links_changes_nothing_when_links_cant_be_made(repo, as_windows, monkeypatch, capsys):
     monkeypatch.setattr(portable, "can_symlink", lambda: False)
     monkeypatch.chdir(repo)
     assert cli.main(["fix-links"]) == 2
@@ -115,10 +122,9 @@ def test_fix_links_changes_nothing_when_links_cant_be_made(repo, monkeypatch, ca
     assert plain(repo / "rules" / "a.md")
 
 
-def test_fix_links_prints_the_counts_and_the_kept_file(repo, monkeypatch, capsys):
+def test_fix_links_prints_the_counts_and_the_kept_file(repo, as_windows, monkeypatch, capsys):
     if not portable.can_symlink():
         pytest.skip("this computer can't make symbolic links: Windows without Developer Mode")
-    monkeypatch.setattr(portable, "WINDOWS", True)
     monkeypatch.chdir(repo)
     (repo / "rules" / "a.md").write_text("my own notes")
     assert cli.main(["fix-links"]) == 0
