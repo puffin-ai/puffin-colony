@@ -80,15 +80,25 @@ class GitHub:
     def __init__(self, monkeypatch):
         self.comments: list[dict] = []
         self.calls: list[tuple] = []
+        self.unreadable = ""  # set: reading the comments fails with this error
+        self.down = ""  # set: every gh call fails with this error
+        self.deployments: list[dict] = []  # GitHub's deployments, each with its newest status as "status"
         monkeypatch.setattr(presence, "where", lambda config: 5)
         monkeypatch.setattr(wait, "gh", self.gh)
 
     def add(self, status: presence.Status) -> None:
-        self.comments.append({"id": 100 + len(self.comments), "body": presence.body(status)})
+        self.comments.append({"id": 100 + len(self.comments), "body": presence.body(status),
+                              "author_association": "OWNER"})
 
     def gh(self, *args: str) -> str:
         self.calls.append(args)
+        if self.down:
+            raise wait.GhError(self.down)
         if args[:2] == ("api", "--paginate"):
+            if self.unreadable:
+                raise wait.GhError(self.unreadable)
+            if "--jq" in args:  # one comment per line, as gh prints `--jq '.[]'`
+                return "".join(json.dumps(comment) + "\n" for comment in self.comments)
             return json.dumps(self.comments)
         if args[:3] == ("api", "-X", "PATCH"):
             number = int(args[3].rsplit("/", 1)[-1])
@@ -96,8 +106,14 @@ class GitHub:
             return "{}"
         if args[:2] == ("issue", "list"):
             return json.dumps([{"number": 5, "title": wait.COORDINATION}])
+        if args[0] == "api" and "/deployments" in args[1]:
+            if "/statuses" in args[1]:
+                number = int(args[1].split("/deployments/")[1].split("/")[0])
+                return json.dumps([next(d["status"] for d in self.deployments if d["id"] == number)])
+            return json.dumps(self.deployments)
         if args[0] == "api":
-            self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body=")})
+            self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body="),
+                                  "author_association": "OWNER"})
             return json.dumps({"id": self.comments[-1]["id"]})
         return json.dumps({"body": "Folders: apps/web/"})
 
@@ -399,6 +415,37 @@ def test_keep_edits_the_one_comment_in_place_every_five_minutes(home, config, gi
     assert len(github.comments) == 1 and fresh["status_id"] == state["status_id"]
 
 
+def test_a_post_holding_brackets_never_breaks_the_status_read(home, config, github):
+    github.add(lead(name="sam-main-lead", person="sam"))
+    github.comments.append({"id": 900, "body": "[Sam's Claude] [merged] sam/x → dev 1a2b3c4, fast check passed"})
+    assert [status.name for status in presence.read(config)] == ["sam-main-lead"]
+
+
+def test_a_status_is_posted_fresh_when_the_old_comments_cant_be_read(home, config, github):
+    github.unreadable = "gh api failed: HTTP 502"
+    state: dict = {}
+    assert presence.keep(config, lead(name="ana-main-lead"), state, now=1000.0)
+    assert len(github.comments) == 1 and state["status_id"] == github.comments[0]["id"]
+
+
+def test_who_says_unknown_instead_of_none_when_github_was_not_read(home, config, github, capsys):
+    github.unreadable = "gh api failed: HTTP 502"
+    assert cli.main(["who"]) == 0
+    out, err = capsys.readouterr()
+    assert "Helpers: unknown, because GitHub was not read." in out and "none alive" not in out
+    assert "GitHub was not read" in err
+
+
+def test_the_status_keeper_warns_once_per_error_not_at_every_poll(home, config, github, capsys):
+    github.down = "gh api failed: check your internet connection or https://githubstatus.com"
+    run = presence.keeper(config, argparse.Namespace(person=None), "ana-main-lead", "lead")
+    run(), run(), run()
+    assert capsys.readouterr().err.count("the status comment was not kept") == 1
+    github.down = "gh api failed: HTTP 401"
+    run()
+    assert "HTTP 401" in capsys.readouterr().err
+
+
 def test_who_lists_every_live_lead_and_helper_across_computers(home, config, github, capsys):
     github.add(lead(folders=["apps/api/"], person="sam", name="sam-engine-lead", computer="Sam-PC"))
     github.add(presence.Status("builder-2", "helper", person="sam", lead="sam-engine-lead", computer="Sam-PC",
@@ -410,6 +457,28 @@ def test_who_lists_every_live_lead_and_helper_across_computers(home, config, git
     assert "- builder-2 (helper of sam-engine-lead): sam on Sam-PC, account work" in out
     assert "Room: work: 5h 10%." in out
     assert "- ana-lead: ana on " in out
+
+
+def test_who_and_status_print_the_live_commit_outside_hack_mode_too(home, config, github, capsys):
+    # Work merges through pull requests here, and the person asks "is it live?" all the same.
+    assert cli.main(["who"]) == 0
+    assert "Live:" not in capsys.readouterr().out  # no deploy known, as for a library: no line
+    github.deployments = [{"id": 1, "sha": "a" * 40, "environment": "Production",
+                           "status": {"state": "success", "created_at": "2026-11-10T10:00:00Z",
+                                      "environment_url": "https://demo.example"}}]
+    assert cli.main(["who"]) == 0
+    assert "Live: aaaaaaa on https://demo.example, since 2026-11-10T10:00:00Z" in capsys.readouterr().out
+    cli.main(["status"])
+    assert "Live: aaaaaaa on https://demo.example" in capsys.readouterr().out
+
+
+def test_who_lists_this_leads_open_needs_in_every_mode(home, config, github, capsys):
+    from colony import share
+
+    wait.write_json(share.needs_path(cli.load_config()), {"next": 2, "open": [
+        {"n": 1, "to": "@ben", "what": "the export API", "at": time.time() - 600}]})
+    assert cli.main(["who"]) == 0
+    assert "Open needs: 1, the oldest 10 min: `colony need` lists them." in capsys.readouterr().out
 
 
 def test_status_names_each_lead_on_this_computer_with_account_and_heartbeat_age(home, config, capsys):
@@ -735,3 +804,97 @@ def test_every_new_session_is_told_to_take_its_role_name_in_the_sidebar(home, co
     assert rename.format("builder-1") in capsys.readouterr().out
     assert cli.main(["claim", "web", "--person", "ana"]) == 0
     assert rename.format("ana-web-lead") in capsys.readouterr().out
+
+
+def test_the_account_label_follows_the_person_when_two_people_share_a_settings_folder(home, monkeypatch):
+    shared = {"accounts": {"sam": {"config_dir": "~/.claude", "person": "sam"},
+                           "ana": {"config_dir": "~/.claude", "person": "ana"}}}
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    assert cli.current_account(shared) == "ana"
+    monkeypatch.delenv(cli.PERSON_ENV)
+    assert cli.current_account(shared) == "sam"  # no person known: the first, as before
+
+
+def test_a_lead_a_person_opened_keeps_its_identity_for_its_claude_code_session(home, config, github, capsys,
+                                                                                monkeypatch):
+    monkeypatch.setenv(cli.CLAUDE_SESSION_ENV, "0f1e2d3c")
+    out = hi(capsys)
+    assert "this session leads ana-main-lead" in out and "run colony commands as they are" in out
+    assert wait.TOKEN_ENV not in out  # no token to copy into every command
+    saved = home / ".colony" / "sessions" / "0f1e2d3c.json"
+    assert saved.stat().st_mode & 0o777 == 0o600
+    held = json.loads(saved.read_text())
+    assert (held[cli.SESSION_ENV], held[wait.LEAD_ENV], held[cli.PERSON_ENV]) == ("lead", "ana-main-lead", "ana")
+    # A later command in the same session, with no env before it, is that lead.
+    for key in (cli.SESSION_ENV, wait.LEAD_ENV, cli.PERSON_ENV, wait.TOKEN_ENV):
+        monkeypatch.setenv(key, "x")
+        monkeypatch.delenv(key)
+    cli.load_identity()
+    assert whoami(config) == 0
+    assert "session: lead\nkind: lead\nlead: ana-main-lead\nperson: ana" in capsys.readouterr().out
+
+
+def test_the_hooks_run_for_a_session_whose_identity_colony_saved():
+    from colony import guards
+    assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.colony_command("unread")
+    assert '.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json' in guards.quiet_command("unread")
+
+
+# Claims by file as well as by folder
+
+def test_a_file_claim_overlaps_only_that_file_and_the_folders_that_hold_it():
+    assert presence.overlaps("src/a.ts", "src/a.ts") and presence.overlaps("src/a.ts", "src/")
+    assert presence.overlaps("src/", "src/ui/") and presence.overlaps("src/ui/", "src/")
+    assert not presence.overlaps("src/a.ts", "src/a.tsx") and not presence.overlaps("src/a.ts", "src/b.ts")
+    assert not presence.overlaps("src/", "srcs/")
+
+
+def test_a_claimed_path_keeps_a_folders_slash_and_a_files_name(host):
+    (host / "src").mkdir()
+    assert presence.folder("src") == "src/" and presence.folder("./src/app.ts") == "src/app.ts"
+    assert presence.folder("lib/") == "lib/"
+
+
+def test_a_lead_adds_and_releases_files_and_never_takes_another_leads(home, config, github, capsys, monkeypatch):
+    def claim(stream, *paths, add=False, release=False):
+        return cli.claim(config, argparse.Namespace(stream=stream, folders=list(paths), person="ana", add=add,
+                                                    release=release, dry_run=False))
+    github.add(lead(name="sam-api-lead", person="sam", folders=["server/auth.ts"], computer="Sam-PC"))
+    assert claim("web", "src/app.ts") == 0
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-web-lead")
+    assert claim("src/b.ts", "src/c.ts", add=True) == 0
+    assert presence.claimed("ana-web-lead") == ["src/app.ts", "src/b.ts", "src/c.ts"]
+    assert claim("src/b.ts", release=True) == 0
+    assert presence.claimed("ana-web-lead") == ["src/app.ts", "src/c.ts"]
+    with pytest.raises(cli.ColonyError, match="server/auth.ts overlaps server/auth.ts of sam-api-lead"):
+        claim("server/auth.ts", add=True)
+    with pytest.raises(cli.ColonyError, match="holds at least one path"):
+        claim("src/app.ts", "src/c.ts", release=True)
+
+
+def test_a_claim_change_tells_the_other_leads_in_startup_mode_and_no_one_in_solo_mode(home, config, github,
+                                                                                    monkeypatch):
+    # Several people lead in startup mode and read the coordination issue; solo mode has one person.
+    from colony import transport
+
+    sent = []
+    monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: sent.append((to, line)) or 5)
+    claim = lambda *paths, **kind: cli.claim(config, argparse.Namespace(  # noqa: E731
+        stream=paths[0], folders=list(paths[1:]), person="ana", dry_run=False, **{"add": False, "release": False, **kind}))
+    assert claim("web", "src/app.ts") == 0
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-web-lead")
+    sent.clear()
+    assert claim("src/b.ts", add=True) == 0
+    assert sent == [("@all", "@all taking src/b.ts: ask ana-web-lead before you edit them")]
+    config["project"]["mode"] = "solo"
+    assert claim("src/b.ts", release=True) == 0
+    assert len(sent) == 1
+
+
+def test_who_reads_only_statuses_the_teams_logins_wrote(home, config, github, capsys):
+    config["people"] = {"logins": ["ana", "sam"]}
+    github.add(lead(name="sam-api-lead", person="sam", computer="Sam-PC"))
+    github.comments[-1]["user"] = {"login": "sam"}
+    github.add(lead(name="eve-main-lead", person="eve", computer="Eve-PC"))
+    github.comments[-1]["user"] = {"login": "eve"}
+    assert [status.name for status in presence.read(config)] == ["sam-api-lead"]

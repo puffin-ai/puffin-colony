@@ -36,7 +36,7 @@ SUMMARY_COMMENTS = 50  # a rotation's closing comment lists the open items among
 NEAR = 0.75  # two titles whose meaningful words overlap this much name the same card
 STOP_WORDS = {"a", "an", "the", "to", "of", "and", "or", "for", "in", "on", "with", "is", "it", "at", "by"}
 HELPER_KINDS = ("done", "question", "blocked", "urgent")
-LEAD_KINDS = ("start", "answer", "urgent")
+LEAD_KINDS = ("start", "answer", "stop", "urgent")
 KIND = re.compile(r"([a-z]+)\s*[:,]", re.I)
 OPEN_ITEM = re.compile(r"(question|blocked|urgent)\s*:", re.I)
 DECIDES = re.compile(r"\bdecides:\s*(.+?)\s+Default:", re.I)
@@ -287,7 +287,8 @@ def rotate(config: dict, number: int, info: dict, new: int | None = None) -> int
     comments = json.loads(wait.gh("issue", "view", str(number), "--repo", repo, "--json", "comments") or "{}")
     items = open_items((comments.get("comments") or [])[-SUMMARY_COMMENTS:], NEEDS.fullmatch(title) is not None)
     new = new or fresh_issue(repo, number, info)
-    listed = "\n".join(f"- {item[:wait.MAX_LINE]}" for item in items) or "- none found"
+    # Each copy starts `carried:`, so no wait takes it a second time: every wait read it on the old issue.
+    listed = "\n".join(f"- {wait.CARRIED}{item[:wait.MAX_LINE]}" for item in items) or "- none found"
     wait.gh("issue", "comment", str(number), "--repo", repo, "--body",
             f"Closed at {count} comments; this thread goes on in #{new}.\n\nOpen items from its last "
             f"{SUMMARY_COMMENTS} comments:\n{listed}")

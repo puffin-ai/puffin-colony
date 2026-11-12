@@ -232,14 +232,14 @@ def test_post_refuses_a_helpers_progress_line_and_says_where_progress_goes(sent,
     assert sent == []
 
 
-@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "urgent: stop this card"])
+@pytest.mark.parametrize("sentence", ["start: this card", "answer: yes, keep 30 s", "stop: drop this card", "urgent: stop this card"])
 def test_post_lets_a_lead_hand_out_and_answer_work(sent, monkeypatch, sentence):
     assert post_as(monkeypatch, "lead", "builder-2", sentence) == 0
     assert sent == [f"for builder-2: {sentence} (from lead)"]
 
 
 def test_post_refuses_a_leads_chatter_to_a_helper_and_lets_lead_to_lead_talk_run_free(sent, monkeypatch):
-    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `urgent:`"):
+    with pytest.raises(cli.ColonyError, match="a lead's line to its helper starts with `start:`, `answer:`, `stop:`, `urgent:`"):
         post_as(monkeypatch, "lead", "builder-2", "nice work on the form")
     assert post_as(monkeypatch, "lead", "sam-lead", "can your builders take the export card?") == 0
     assert post_as(monkeypatch, "lead", "@all", "I merge dev into main in 10 minutes") == 0
@@ -275,9 +275,12 @@ def test_tidy_rotates_the_coordination_issue_at_200_comments_and_the_watcher_fol
     assert create[create.index("--body") + 1].endswith("Continues #5, closed at 200 comments.")
     closing = gh.called("issue", "comment", "5")[0][-1]
     assert closing.startswith("Closed at 200 comments; this thread goes on in #31.")
-    assert ("- for ana-lead: question: can you take #12? (from sam-lead)\n"
-            "- for sam-lead: blocked: main is red (from bo-lead)\n"
-            "- for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    assert ("- carried: for ana-lead: question: can you take #12? (from sam-lead)\n"
+            "- carried: for sam-lead: blocked: main is red (from bo-lead)\n"
+            "- carried: for sam-lead: urgent: I merge in 5 minutes (from ana-lead)") in closing
+    # A copied line wakes no one a second time: every wait read it on the old issue already.
+    ana = wait.lead_session({"project": {"name": "demo"}}, "ana-lead")
+    assert wait.taken(closing, ana, "5") == []
     assert "note 1 " not in closing and "an old question" not in closing
     assert gh.called("issue", "close") == [["issue", "close", "5", "--repo", "acme/demo"]]
     assert not gh.called("issue", "create", "--repo", "acme/demo", "--title", "Needs Ana")

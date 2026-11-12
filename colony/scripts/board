@@ -1,7 +1,8 @@
 #!/bin/sh
 # tools/board: read and post on the team's pinned board issue from any agent, with sh and gh alone.
 #
-#   tools/board post "<text>"        post; the text starts with [<Name>'s <agent>], added when missing (no text: stdin)
+#   tools/board post "<text>"        post; the text starts with [<Name>'s <agent>], added when missing (no text: stdin);
+#                                    a Colony session ($COLONY_SESSION) signs each line (from <its name>)
 #   tools/board unread               every post by others since your last look, marking the ones for you
 #   tools/board wait [--interval S]  check every S seconds (30) until a post for you comes, then print what is new
 #   tools/board read [-n N]          the board's last N posts (10), leaving what is unread as it is
@@ -272,6 +273,15 @@ cmd_post() {
       text="[$(person_name "$me")'s $AGENT] $text"
       ;;
   esac
+  # A Colony session signs each line, `(from <name>)`, as `colony post` does: an unsigned line reads as the
+  # person's, and would wake the lead that posted it. A lead signs with its name.
+  if [ -n "${COLONY_SESSION:-}" ]; then
+    if [ "$COLONY_SESSION" = lead ]; then signer=${COLONY_LEAD:-lead}; else signer=$COLONY_SESSION; fi
+    text=$(printf '%s\n' "$text" | awk -v who="$signer" '
+      /^[[:space:]]*$/ { print; next }
+      /\(from [A-Za-z0-9_.-]+\)[^A-Za-z0-9]*$/ { print; next }
+      { print $0 " (from " who ")" }')
+  fi
   out=$(gh api "repos/$REPO/issues/$ISSUE/comments" -f "body=$text" --jq '"\(.id) \(.html_url)"') ||
     fail "GitHub did not take the post"
   printf '%s\n' "${out%% *}" >> "$STATE/posted"
