@@ -355,6 +355,72 @@ def every_area(config: dict, cmd: str) -> str:
     return check_command(config, cmd, list(check_areas(config)))
 
 
+# A check's output that only says NOT RUN ran nothing: a NOT RUN line, and no line that reports a check that ran, such
+# as a PASS or FAIL line, TAP's ok or not ok, or a test runner's `12 passed`.
+NOT_RUN = re.compile(r"^\W*NOT RUN\b", re.M)
+RAN = re.compile(r"^\W*(PASS|PASSED|FAIL|FAILED|ERROR|ok|not ok)\b|\b\d+ (passed|failed)\b", re.M)
+NOT_RUN_EXIT = 2  # `colony fast-check`'s exit code when nothing was checked
+ONLY_NOT_RUN = "its output only says NOT RUN: "  # starts the result line of a check run that checked nothing
+
+
+def ran_nothing(output: str) -> bool:
+    """Whether a check's output only says NOT RUN, so the check counts as not run even when it exited 0."""
+    return bool(NOT_RUN.search(output)) and not RAN.search(output)
+
+
+def branch_changes(root: Path, base: str) -> list[str]:
+    """The files a branch changes against origin/<base>: its commits since it forked, its uncommitted edits and its
+    new untracked files, as paths from the repo's top."""
+    fork = _git(root, "merge-base", f"origin/{base}", "HEAD")
+    changed = _git(root, "diff", "--name-only", fork).splitlines()
+    changed += _git(root, "ls-files", "--others", "--exclude-standard").splitlines()
+    return sorted({path for path in changed if path})
+
+
+def fast_check_command(config: dict, root: Path) -> tuple[str, list[str] | None]:
+    """A builder's fast check, `[project] fast_check`, with `{areas}` filled from the areas its branch changes
+    (areas_of), and those areas: [] when the change touches none, such as a docs-only card, and None when the command
+    names no areas, so it runs as it is."""
+    cmd = fast_check(config["project"])
+    if "{areas}" not in cmd or not check_areas(config):
+        return cmd, None
+    areas = areas_of(config, branch_changes(root, config["project"]["base"]))
+    return (check_command(config, cmd, areas) if areas else cmd), areas
+
+
+def run_fast_check(config: dict, args) -> int:
+    """`colony fast-check`: run a builder's fast check for the areas its branch changes, and end on one line for the
+    done line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no
+    check area or the output only says NOT RUN (ran_nothing). It exits 0, 1, or NOT_RUN_EXIT."""
+    root = cli.repo_root()
+    cmd, areas = fast_check_command(config, root)
+    named = f" for {' '.join(areas)}" if areas else ""
+    if areas == []:
+        print("fast check: not run, the change touches no check area")
+        return NOT_RUN_EXIT
+    print(f"$ {cmd}", flush=True)
+    if args.dry_run:
+        return 0
+    command, shell, env = portable.shell(cmd, checks_env(config, root))
+    proc = subprocess.Popen(command, shell=shell, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors="replace")
+    output = []
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        output.append(line)
+    code = proc.wait()
+    text = "".join(output)
+    last = next((line.strip() for line in reversed(output) if line.strip()), "no output")
+    if code:
+        print(f"fast check: failed{named}, exit {code}: {last}")
+        return 1
+    if ran_nothing(text):
+        print(f"fast check: not run{named}, {ONLY_NOT_RUN}{last}")
+        return NOT_RUN_EXIT
+    print(f"fast check: passed{named}: {last}")
+    return 0
+
+
 def test_id(finding: Finding) -> str:
     """The test a check finding names, as its output named it (`path::name` for pytest, the file for a JS runner), or
     an empty string for a finding that names no test."""
@@ -1059,7 +1125,9 @@ def rerun_timeouts(b: Batch, r: int, output: str, failures: list[Finding], log: 
 def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, started: float, clock: str):
     """Wait for the round's background checks, rerun the tests a timeout may have failed (rerun_timeouts), and write
     checks-<r>.md; return (passed, result line, failures, the run's minutes before any rerun). The checks pass after
-    a failed run when every failing test passed alone and the output shows no other failure (other_failures)."""
+    a failed run when every failing test passed alone and the output shows no other failure (other_failures). A run
+    that exits 0 but only says NOT RUN (ran_nothing) blocks nothing, and its line starts ONLY_NOT_RUN, so the round
+    and the pull request say the checks did not run."""
     code = proc.wait()
     b.track(proc, on=False)
     minutes = (time.time() - started) / 60
@@ -1073,7 +1141,10 @@ def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, st
         others = other_failures(output, set(cleared))
         passed = not others
         failures = [Finding("", 0, "checks failed: " + "; ".join(others[:5]))] if others else []
-    summary = [f"checks: {'pass' if passed else 'fail'}", "", f"`{cmd}` exited {code}: {last}", ""]
+    if passed and code == 0 and ran_nothing(output):
+        last = f"{ONLY_NOT_RUN}{last}"
+    status = ("not run" if last.startswith(ONLY_NOT_RUN) else "pass") if passed else "fail"
+    summary = [f"checks: {status}", "", f"`{cmd}` exited {code}: {last}", ""]
     alone = [f"- passed alone on a rerun, so not counted: {test}" for test in cleared]
     (b.reports / f"checks-{r}.md").write_text("\n".join(summary + alone + [f"- {f.text}" for f in failures]) + "\n")
     return passed, last, failures, minutes
@@ -1215,7 +1286,8 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     walk_text = walk_report.read_text() if walk else ""
     walk_result = parse_walk(walk_text) if walk else "skipped"
     signature = sorted(DURATION.sub("", f.text) for f in check_findings)
-    checks = "skipped" if proc is None else "pass" if passed else "fail"
+    checks = "skipped" if proc is None else "fail" if not passed else "not run" if line.startswith(ONLY_NOT_RUN) \
+        else "pass"
     b.state["rounds"].append({"round": r, "head": head, "open": open_count if b.review else "skipped", "walk": walk_result,
                               "checks": checks, "checks_cmd": cmd if proc is not None else "", "checks_line": line,
                               "checks_signature": signature, "areas": areas,
