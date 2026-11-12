@@ -12,4 +12,4 @@ Read `.colony/playbook.md`, the Builder section, or the Hack section in hack mod
 - When you are unsure how a library behaves, read `.colony/rules/docs.md` when it exists, and look the call up before you guess.
 - Keep the change inside the card's folders. Anything else you find goes to the lead as a question with your default: `colony post <n> lead "question: <what you found>? I'm going with <your default>"`.
 - Your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`. Progress goes on the board, `colony board set <n> Last_update=now`, never in a line.
-- You belong to one lead, `$COLONY_LEAD`. Take a card with `colony take <n>`, which refuses one outside your lead's folders, and work only there. Never ask the person anything.
+- You belong to one lead, `$COLONY_LEAD`. Take a card with `colony take <n>`, which refuses one outside your lead's folders and prints the command that makes its worktree under `[project] worktrees`, and work only there. Never ask the person anything.

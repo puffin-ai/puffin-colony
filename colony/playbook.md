@@ -109,7 +109,7 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 - archives an item Done for 7 days;
 - rotates the coordination issue and each Needs issue at 200 comments;
 - turns on the repo's delete-branch-on-merge setting when it is off;
-- removes a closed card's worktree when it is clean, and names a dirty one it keeps.
+- removes a finished worktree when it is clean, a closed or merged card's or an ended batch's, merge's or retro's, names a dirty one it keeps, and prints the space freed.
 
 ## Lead
 
@@ -154,7 +154,7 @@ In hack mode, follow the Hack section instead.
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
-2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
+2. Make the change on its own branch `<name>/<n>`, in its own worktree under `[project] worktrees`, inside the card's folders: run `colony take <n>` and the `git worktree add` command it prints, then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 4. Run `{fast_check}` once, when the change and its tests are done, and fix what it reports; run it again only after a fix.
 5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`.

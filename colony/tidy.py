@@ -14,17 +14,20 @@
   pinned in its place.
 - `colony tidy [--dry-run]` closes a card with no update in `[limits] stale_days`, or moves it to future-work when its
   work never started; rotates the long issues; archives Done items after `[limits] archive_days`; turns on the repo's
-  `delete_branch_on_merge`; and removes each closed card's clean worktree, keeping a dirty one. It prints the counts
-  before and after. `colony batch` runs it at its end.
+  `delete_branch_on_merge`; and removes each finished worktree that is clean (`finished`), keeping and naming a dirty
+  one, with the space it freed. `--dry-run` also lists the worktrees it leaves, with each one's size and last commit
+  date. It prints the counts before and after. `colony batch` runs it at its end.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -479,7 +482,9 @@ class Tally:
     rotated: int = 0
     archived: int = 0
     removed: int = 0
+    freed: int = 0
     kept: list[str] = field(default_factory=list)
+    others: list[str] = field(default_factory=list)
     setting: str = "not read"
 
 
@@ -597,33 +602,179 @@ def setting_steps(config: dict, before: Tally) -> list[Step]:
                  lambda t: setattr(t, "setting", "turned on"))]
 
 
+def pull_states(repo: str) -> dict[str, set[str]]:
+    """Each branch's pull request states, OPEN, CLOSED or MERGED, from one `gh pr list`; {} when gh can't read them."""
+    try:
+        listed = json.loads(wait.gh("pr", "list", "--repo", repo, "--state", "all", "--limit", "1000", "--json",
+                                    "headRefName,state") or "[]")
+    except (cli.ColonyError, ValueError):
+        return {}
+    states: dict[str, set[str]] = {}
+    for pull in listed if isinstance(listed, list) else []:
+        if isinstance(pull, dict) and pull.get("headRefName"):
+            states.setdefault(pull["headRefName"], set()).add(str(pull.get("state", "")).upper())
+    return states
+
+
+def ended(states: set[str]) -> bool:
+    """Whether a branch's pull requests are all merged or closed: it has one, and none is open."""
+    return bool(states) and "OPEN" not in states
+
+
+def merge_idle(config: dict) -> bool:
+    """Whether no merge or release holds this computer's merge lock right now."""
+    path = wait.state_path(config["project"]["name"], "merge").with_suffix(".lock")
+    if not path.exists():
+        return True
+    with open(path, "a") as held, portable.lock(held, block=False) as got:
+        return got
+
+
+def merged_into_base(root: Path, path: str, base: str) -> bool:
+    """Whether a worktree's HEAD is already in origin/<base>, so nothing in it is left to merge."""
+    head = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True)
+    return not head.returncode and not subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", head.stdout.strip(), f"origin/{base}"],
+        capture_output=True).returncode
+
+
+def finished(config: dict, root: Path, tree: dict, open_numbers: set, closing: set,
+             pulls: Callable[[], dict]) -> str | None:
+    """Why a worktree's work is over, or None: a closed card, or one whose pull request merged; a batch, fix or retro
+    branch whose pull requests all merged or closed, and that batch's walk; an idle merge worktree whose head is in
+    the base; an image worktree left behind. A branch with no pull request yet is never finished."""
+    tag, repo, name = config["project"]["name"], config["project"]["repo"], Path(tree["path"]).name
+    branch, card = tree["branch"], CARD_BRANCH.fullmatch(tree["branch"])
+    if card:
+        number, states = int(card[1]), pulls().get(tree["branch"], set())
+        if card_closed(repo, number, open_numbers, closing):
+            return f"card #{number} is closed"
+        return f"card #{number}'s pull request merged" if ended(states) and "MERGED" in states else None
+    if re.fullmatch(rf"{re.escape(tag)}/(batch|fix|retro)-.+", branch):
+        states = pulls().get(branch, set())
+        return f"{branch}'s pull request {'merged' if 'MERGED' in states else 'closed'}" if ended(states) else None
+    if branch:
+        return None
+    walk = re.fullmatch(rf"{re.escape(tag)}-batch-(.+)-walk", name)
+    if walk:
+        return f"batch {walk[1]} has ended" if ended(pulls().get(f"{tag}/batch-{walk[1]}", set())) else None
+    if name == f"{tag}-merge":
+        base = config["project"]["base"]
+        return f"no merge is running, and its head is in origin/{base}" \
+            if merge_idle(config) and merged_into_base(root, tree["path"], base) else None
+    if re.fullmatch(rf"{re.escape(tag)}-image-\d+", name):
+        return "`colony image` left it behind"
+    return None
+
+
+def colony_owned(config: dict, tree: dict) -> bool:
+    """Whether Colony made this worktree for a batch, fix, retro or walk, whose untracked round reports never keep it."""
+    tag = re.escape(config["project"]["name"])
+    return bool(re.fullmatch(rf"{tag}/(batch|fix|retro)-.+", tree["branch"]) or
+                (not tree["branch"] and re.fullmatch(rf"{tag}-batch-.+-walk", Path(tree["path"]).name)))
+
+
+def dirt_beyond_reports(path: str) -> str:
+    """What keeps a Colony worktree: changes other than its untracked files under .colony/, or ""."""
+    run = subprocess.run(["git", "-C", path, "status", "--porcelain"], capture_output=True, text=True)
+    if run.returncode:
+        return "git can't read it"
+    rest = [line for line in run.stdout.splitlines() if line.strip() and
+            not (line.startswith("?? ") and line[3:].strip('"').startswith(f"{cli.DIR}/"))]
+    return "uncommitted or untracked changes" if rest else ""
+
+
+def folder_size(path: str) -> int:
+    """The bytes under a folder, never following a link or a junction."""
+    total, stack = 0, [path]
+    while stack:
+        try:
+            entries = list(os.scandir(stack.pop()))
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False) and not getattr(entry, "is_junction", lambda: False)():
+                    stack.append(entry.path)
+                else:
+                    total += entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+    return total
+
+
+def sizes(paths: list[str]) -> dict[str, int]:
+    """Each folder's size, measured side by side."""
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(zip(paths, pool.map(folder_size, paths)))
+
+
+def human(count: int) -> str:
+    """A byte count as people read it, such as 1.2 GB."""
+    if count < 1000:
+        return f"{count} bytes"
+    size = float(count)
+    for unit in ("KB", "MB", "GB"):
+        size /= 1000
+        if size < 1000 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return f"{size:.1f} GB"
+
+
+def last_commit(path: str) -> str:
+    """The date of a worktree's last commit, or "no commit"."""
+    run = subprocess.run(["git", "-C", path, "log", "-1", "--format=%cs"], capture_output=True, text=True)
+    return run.stdout.strip() if not run.returncode and run.stdout.strip() else "no commit"
+
+
 def worktree_steps(config: dict, root: Path, issues: list[dict], closing: set, before: Tally) -> list[Step]:
-    """Remove the worktree of each closed card, `<name>/<n>`, when it is clean; keep and name a dirty one. The main
-    checkout is never removed."""
-    repo, steps = config["project"]["repo"], []
+    """Remove each finished worktree (finished) when it is clean, and keep and name a dirty or locked one; each step
+    notes the space it frees. The worktrees it leaves go in before.others, for the dry run's list. The main checkout is
+    never removed."""
+    repo, steps, cache, leaving = config["project"]["repo"], [], {}, []
     open_numbers = {issue["number"] for issue in issues}
+
+    def pulls() -> dict:
+        if "states" not in cache:
+            cache["states"] = pull_states(repo)
+        return cache["states"]
+
     for tree in worktrees(root):
-        found = CARD_BRANCH.fullmatch(tree["branch"])
-        if tree["main"] or tree["bare"] or not found or Path(tree["path"]).resolve() == root.resolve():
+        if tree["main"] or tree["bare"] or Path(tree["path"]).resolve() == root.resolve():
             continue
-        number = int(found[1])
-        if not card_closed(repo, number, open_numbers, closing):
+        why = finished(config, root, tree, open_numbers, closing, pulls)
+        own = colony_owned(config, tree)
+        kept = ("locked" if tree["locked"] else dirt_beyond_reports(tree["path"]) if own else dirt(tree["path"])) \
+            if why else ""
+        if kept:
+            before.kept.append(f"{tree['path']} ({kept})")
+        if not why or kept:
+            before.others.append(tree["path"])
             continue
-        why = "locked" if tree["locked"] else dirt(tree["path"])
-        if why:
-            before.kept.append(f"{tree['path']} ({why})")
-            continue
-        steps.append(Step(f"remove the worktree {tree['path']}: card #{number} is closed, and the worktree is clean",
-                          lambda path=tree["path"]: git_remove(root, path),
-                          lambda t: setattr(t, "removed", t.removed + 1)))
+        leaving.append((tree["path"], why, own))
+    measured = sizes([path for path, _, _ in leaving])
+    for path, why, own in leaving:
+        steps.append(Step(f"remove the worktree {path}: {why}, and the worktree is clean ({human(measured[path])})",
+                          lambda path=path, own=own: git_remove(root, path, force=own),
+                          lambda t, size=measured[path]: (setattr(t, "removed", t.removed + 1),
+                                                          setattr(t, "freed", t.freed + size))))
     return steps
 
 
-def git_remove(root: Path, path: str) -> None:
-    """Remove one clean worktree; git itself refuses a dirty one."""
-    run = subprocess.run(["git", "-C", str(root), "worktree", "remove", path], capture_output=True, text=True)
+def git_remove(root: Path, path: str, force: bool = False) -> None:
+    """Remove one clean worktree; git itself refuses a dirty one. `force` is only for a Colony worktree whose sole
+    untracked files are its own, which dirt_beyond_reports has checked."""
+    run = subprocess.run(["git", "-C", str(root), "worktree", "remove", *(["--force"] if force else []), path],
+                         capture_output=True, text=True)
     if run.returncode:
         raise cli.ColonyError(f"git worktree remove {path}: {run.stderr.strip()[:200]}")
+
+
+def other_worktrees(paths: list[str]) -> list[str]:
+    """The dry run's list of the worktrees tidy leaves: each one's path, size and last commit date, largest first."""
+    measured = sizes(paths)
+    return [f"  - {path}: {human(measured[path])}, last commit {last_commit(path)}"
+            for path in sorted(paths, key=lambda p: -measured[p])]
 
 
 def plan(config: dict, root: Path, now: datetime) -> tuple[Tally, list[Step]]:
@@ -654,7 +805,7 @@ def report(before: Tally, after: Tally, dry: bool) -> list[str]:
              "comments: " + (", ".join(f"{label} {count} → {after.comments.get(label, count)}"
                                        for label, count in before.comments.items()) or "no coordination or Needs issue"),
              f"rotations: {after.rotated}", f"board items archived: {after.archived}",
-             f"worktrees: {after.removed} removed, {len(after.kept)} kept" +
+             f"worktrees: {after.removed} removed, {human(after.freed)} freed, {len(after.kept)} kept" +
              (f": {'; '.join(after.kept)}" if after.kept else ""),
              f"delete_branch_on_merge: {before.setting}" +
              (f" → {after.setting}" if after.setting != before.setting else "")]
@@ -685,6 +836,9 @@ def run_tidy(config: dict, root: Path | None = None, dry: bool = False, now: dat
         print(f"  - {step.says}" + (f", {note}" if note else ""))
     if dry and not steps:
         print("  - nothing to change")
+    if dry and before.others:
+        print("The other worktrees, which tidy leaves:")
+        print("\n".join(other_worktrees(before.others)))
     print("Before → after:")
     print("\n".join(report(before, after, dry)))
     return 1 if failed else 0
@@ -706,9 +860,10 @@ def relax_batch(sub) -> None:
 
 def add_commands(sub) -> None:
     """cli.py's route to this module: `colony tidy`, `colony idea` and `colony card new`."""
-    p = sub.add_parser("tidy", help="close stale cards, rotate long issues, archive done items and remove closed "
-                                    "cards' clean worktrees; prints the counts before and after")
-    p.add_argument("--dry-run", action="store_true", help="print the plan and change nothing")
+    p = sub.add_parser("tidy", help="close stale cards, rotate long issues, archive done items and remove finished "
+                                    "clean worktrees; prints the counts before and after")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and the other worktrees' sizes and "
+                                                          "dates, and change nothing")
     p.set_defaults(run=tidy)
 
     p = sub.add_parser("idea", help="write one idea to the future-work register, never as an issue")

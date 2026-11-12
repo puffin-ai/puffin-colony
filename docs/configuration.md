@@ -16,7 +16,7 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it, except `colony merge` in Hack with `[gate] merge_after_fast_check = true`. |
 | `preset` | no | `"lean"` | The rules setup copied: `lean`, `puffin` or `own`. A record for you; the commands don't read it. |
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
-| `worktrees` | yes | `"~/worktrees"` | Where batches, fixers and the retro make their worktrees. Pick a folder outside the clone. |
+| `worktrees` | yes | `"~/worktrees"` | Where builders, batches, fixers, the merge and the retro make their worktrees. Pick a folder outside the clone. A relative path, such as `"../worktrees"`, starts from the clone. |
 | `fast_check` | no | `"npm test"` | A builder's quick check after each change. Setup writes it into the playbook. |
 | `checks` | yes | `"python3 tools/checks.py {areas}"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. With `[checks] areas`, `{areas}` takes the names of the areas a round runs. |
 | `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change is never TINY. |
