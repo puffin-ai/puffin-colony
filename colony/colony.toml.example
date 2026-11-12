@@ -7,7 +7,8 @@ base = "main"                      # PRs go here; colony never pushes to it
 preset = "lean"                    # the rules setup copied: lean, puffin or own
 max_builders = 4                   # builders the lead opens on this machine; more join from other computers
 worktrees = "~/worktrees"          # where builders and batches make their worktrees
-fast_check = "npm test"            # a builder's quick check
+fast_check = "npm test"            # a builder's quick check, which `colony fast-check` runs; with [checks] areas,
+                                   # {areas} in it takes the areas the builder's branch changes
 checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs; with [checks] areas,
                                    # {areas} in it takes the names of the areas a round runs
 backend_paths = []                 # optional: folders whose change is never TINY to `colony tier`

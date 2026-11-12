@@ -1702,6 +1702,13 @@ def wait(config: dict, args) -> int:
     return watcher.run(config, args)
 
 
+def fast_check(config: dict, args) -> int:
+    """Run a builder's fast check for the areas its branch changes (batch.run_fast_check)."""
+    from colony import batch as runner
+
+    return runner.run_fast_check(config, args)
+
+
 def merge(config: dict, args) -> int:
     """Land a branch on the base after a passing fast check, or open its pull request (merge.run)."""
     from colony import merge as lander
@@ -1833,6 +1840,11 @@ def build_parser() -> argparse.ArgumentParser:
                                       "problems, walk, running steps and minutes")
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
+
+    p = sub.add_parser("fast-check", help="a builder: run [project] fast_check for the check areas this branch "
+                                          "changes, and end on a passed, failed or not run line for the done line")
+    p.add_argument("--dry-run", action="store_true", help="print the command and run nothing")
+    p.set_defaults(run=fast_check)
 
     p = sub.add_parser("merge", help="hack mode: merge a branch into the base after a passing fast check, "
                                      "else open its pull request")
