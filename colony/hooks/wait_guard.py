@@ -89,9 +89,9 @@ PUSH_CONFIG = (r"^(push\.default|remote\.pushdefault|remote\..+\.(push|mirror)|"
 FALSE = ("", "false", "no", "off", "0")  # the values git reads as false, and "" for a setting not there
 # Commands that can change the branch checked out, git config or the folder for a later push on the same line, which
 # the guard reads before the line runs.
-LINE_CHANGES_GIT = {"checkout", "switch", "config", "branch", "remote"}
+LINE_CHANGES_GIT = {"checkout", "switch", "config", "branch", "remote", "symbolic-ref"}
 LINE_CHANGES = {"cd", "pushd", "popd"}
-GIT_VARIABLE = re.compile(r"^GIT_\w*(=|$)")
+GIT_VARIABLE = re.compile(r"^(GIT_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where git finds its repo and its config
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
 PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
                 "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person.")
@@ -544,7 +544,9 @@ def pushes(command: str, cwd: str) -> list[str]:
                     changed = changed or f"`{name or variables[0]}`"
                 continue
             index, here, overrides = 1, cwd, []
-            own = f"`{variables[0]}`" if variables else ""  # a GIT_ variable set for this command alone
+            own = f"`{variables[0]}`" if variables else ""  # a variable set for this command alone
+            if any(word in ("-C", "--chdir") or word.startswith("--chdir=") for word in before):
+                own = own or "`env --chdir`"  # env runs the command in another folder
             while index < len(program) and program[index].startswith("-"):
                 option, value = program[index], program[index + 1] if index + 1 < len(program) else ""
                 if option == "-C" and value:

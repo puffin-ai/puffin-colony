@@ -284,7 +284,9 @@ def test_a_forced_push_names_its_branch_after_a_command_on_the_line_that_can_cha
                     "git config push.default matching && git push -f", "cd ../other && git push -f",
                     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push -f",
                     "export GIT_DIR=../other/.git; git push -f", "git --git-dir=../other/.git push -f",
-                    "git checkout main && git push -f origin HEAD"):
+                    "git checkout main && git push -f origin HEAD",
+                    "git symbolic-ref HEAD refs/heads/main && git push -f", "env -C ../other git push -f",
+                    "HOME=/tmp/elsewhere git push -f", "export XDG_CONFIG_HOME=/tmp/elsewhere; git push -f"):
         run = push_guard(command, on_main)
         assert run.returncode == 2 and "on this line can change" in run.stderr, command
     for command in ("git rebase main && git push -f", "npm test && git push --force-with-lease",
