@@ -9,7 +9,7 @@ for <name>: <one sentence> (from <name>)
 ```
 
 - `<name>` is `lead`, a builder's name such as `builder-2`, `researcher` or `spec`, or, on the coordination issue and the Needs issues, a lead's name such as `ana-lead`. Names ignore case.
-- A line stays under 300 characters.
+- A line's sentence is at most 300 characters. What Colony adds around it, `for <name>:` and `(from <you>)`, doesn't count.
 - One comment can hold several lines. Markdown around a line, such as a quote mark, a bullet, bold or code ticks, is ignored.
 - A line never carries a secret. `colony post`, `colony say` and the hooks refuse one that holds a token's shape, or the value of an env variable whose name says it is a key, token, secret or password.
 - You can post a line too. Yours carries no `(from …)`, or is signed with your GitHub login.
@@ -32,7 +32,7 @@ colony say sam-lead "I merge into dev at 15:00, hold yours till then?"
 
 ## Line kinds
 
-A line from a builder to its lead is only `done`, `question:`, `blocked:` or `urgent:`. A line from the lead to a builder is only `start:`, `answer:` or `urgent:`. `colony post` refuses any other, since progress belongs in the board's fields, which wake no one. Lead-to-lead lines, `colony say`, and a lead's lines for `@<login>` or `@all` are free text, still under 300 characters.
+A line from a builder to its lead is only `done`, `question:`, `blocked:` or `urgent:`. A line from the lead to a builder is only `start:`, `answer:`, `stop:` or `urgent:`. `colony post` refuses any other, since progress belongs in the board's fields, which wake no one. Lead-to-lead lines, `colony say`, and a lead's lines for `@<login>` or `@all` are free text. A line's sentence is at most 300 characters; the `for <name>: … (from <you>)` that Colony adds around it doesn't count. `colony post` and `colony say` take several sentences too, each its own line, and post them as one comment, so either all of them go out or none does.
 
 | Kind | From → to | Example | Reaches the lead |
 | --- | --- | --- | --- |
@@ -45,6 +45,8 @@ A line from a builder to its lead is only `done`, `question:`, `blocked:` or `ur
 | Urgent | builder → lead | `for lead: urgent: the base branch fails to build since #40 (from builder-3)` | at once |
 | Pop-up | hook → lead | `for ana-lead: urgent: builder-2 waits for a person's approval on <computer> (from builder-2)` | at once |
 | Stopped | hook → lead | `for ana-lead: builder-2 stopped on an error (<code>) at <time> (from builder-2)` | in the digest |
+| Stuck | a helper's status → lead | `urgent: auth's Bash call has waited 11 minutes for an answer, likely a permission prompt in its window on Ana-Mac: answer it there, or open the helper again` | at once, once per stretch |
+| Slept | the lead's wait | `urgent: this computer slept for 40 minutes, so its helpers, merges and waits stopped: check them` | at once |
 | Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>; check its session` | in the digest |
 | Yours | you → lead | `for lead: ship the batch as it is` | at once |
 | Your answer | you → lead | `for ana-lead: yes, keep 30 seconds`, on your Needs issue | at once |
@@ -67,11 +69,11 @@ Agents post through their person's own `gh` login, so the comment's author can't
 Each session keeps one `colony wait` running in the background, all session. The wait:
 
 1. reads `$COLONY_SESSION` to learn whose lines to take;
-2. asks `gh api` for the repo's issue comments changed since its last read, every 15 seconds;
+2. asks `gh api` for the repo's issue comments changed since its last read, every 15 seconds, through one copy every wait on this computer shares, `~/.colony/polls/<repo>.json`, so a computer reads GitHub once per 15 seconds however many sessions it runs; when GitHub answers with its rate limit, the wait sleeps until the limit resets, up to 10 minutes, says so once, and goes on;
 3. sends the last ETag with each request, so a quiet poll comes back as `304 Not Modified` and costs nothing against GitHub's rate limit;
 4. prints the lines that are due, each as `#<issue> <line>`, and exits.
 
-The agent reads what it printed, starts the wait again at once, and then acts on the lines. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
+The agent reads what it printed, starts the wait again at once, and then acts on the lines. A session keeps one wait: a newer one takes over, and the older one stops at its next poll, printing that a newer wait runs, so the agent starts no other. When a full issue moves to a fresh one, its closing note copies the open lines as `carried: …`, which wake no one a second time. A builder's lines are due as soon as they arrive, so a builder gets a line from its lead within about 15 seconds.
 
 A session's first wait reads the last hour, so a start line the lead posted while the builder was opening still counts. The wait keeps its read time, its ETag, the lines it has gathered and the lines it has already printed in `~/.colony/<project>/<session>.json`. Its `unread` key lists the lines for this session it hasn't printed yet, each as `{card, author, body, url}`, for the prompt hook. Gathered lines stay there until they print, so a restart loses none. After 40 failed polls in a row, about 10 minutes, the wait prints the error and exits. A 401 from GitHub adds the hint `run: gh auth login`.
 

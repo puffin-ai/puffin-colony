@@ -1,6 +1,6 @@
 # The colony playbook
 
-The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
+The lead, the builders, the spec agent, the researcher and the tester follow this file literally. `{base}` is the branch pull requests go to, `{install}` installs packages in a new worktree, `{fast_check}` is a builder's quick check, and `{checks}` is the full check a batch runs. `{worktrees}` is the folder `[project] worktrees` names in `.colony/colony.toml`, and `{project}` is `[project] name`: every worktree goes in that folder, never beside the clone, where it would fill the person's folder, such as their Desktop. Every agent follows the rules in `.colony/rules/` and the repo's own `CLAUDE.md` or `AGENTS.md`, and writes docs in `knowledge/` by the page types in `knowledge/.types/`.
 
 ## Leads and helpers
 
@@ -25,7 +25,7 @@ A subagent works inside your card and your folders, under the same rules, and yo
 
 ## Lines
 
-Agents talk only in lines. A line is one comment on a card (a GitHub issue), under 300 characters:
+Agents talk only in lines. A line is one comment on a card (a GitHub issue), with a sentence of at most 300 characters:
 
     for <name>: <one sentence> (from <name>)
 
@@ -40,13 +40,14 @@ Every line starts with its kind, and `colony post` refuses any other. A builder 
 The lead sends a builder only these three:
 - `start: …`: hands out work, such as `start: this card`.
 - `answer: …`: answers a question, such as `answer: yes, keep 30 s`.
-- `urgent: …`: anything that can't wait, such as `urgent: stop this card`.
+- `stop: …`: takes work back, such as `stop: drop this task, verify takes it`. The builder commits and pushes what it has, posts `done` with the branch and commit, and starts nothing new until the next `start:`.
+- `urgent: …`: anything that can't wait, such as `urgent: main is red, hold your merge`.
 
 Progress never goes in a line: it goes in the board's fields, which wake no one.
 
 A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`. The lead's wait also adds a `stale:` line for each card In progress whose Last update on the board is over 2.5 hours old.
 
-Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `ana-lead`: `colony say sam-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text, still under 300 characters. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
+Leads talk to each other on the issue `Colony: coordination`, each by its claimed name, such as `ana-main-lead`: `colony say sam-web-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text. A sentence is at most 300 characters, not counting what Colony adds around it, and several sentences in one `colony post` or `colony say` go out together as one comment. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
 
 ## Stop list
 
@@ -66,7 +67,7 @@ Only the lead talks with the person, in its chat and on the Needs issue. Every m
 - Shows a picture where it helps: a small table of who does what, or the steps as a short flow.
 - Stays short, under 200 words, in everyday words, and explains a technical term the first time it appears.
 - Asks at most one question, with its choices and your pick first.
-- Ends with one line, `Needs you: <what waits on the person>`, or `Needs you: nothing`.
+- Ends with `Needs you`, each open decision with its default, when it waits on the person.
 
 ## Tiers
 
@@ -86,8 +87,8 @@ The lead picks a tier for each request before it writes a card:
 ## Needs you
 
 Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements, and merging.
-- `colony needs "<question>" --default "<your pick>"` posts the line `for <person>-lead: <Person> decides: <question> Default: <your pick> (from <person>-lead)` there, and makes the issue the first time. `--person <p>` asks another person.
-- Keep working on the default. The person answers with `for <person>-lead: <answer>`, which your wait brings at once, and the answer wins: undo what the default built when it differs.
+- `colony needs "<question>" --default "<your pick>"` posts the line `for <lead>: <Person> decides: <question> Default: <your pick> (from <lead>)` there, where `<lead>` is your claimed name, such as `ana-main-lead`, and makes the issue the first time. `--person <p>` asks another person.
+- Keep working on the default. The person answers with `for <lead>: <answer>`, which your wait brings at once, and the answer wins: undo what the default built when it differs.
 - Tell the person in chat only when something is urgent or blocks the work, and point at the line.
 
 ## The board
@@ -97,7 +98,7 @@ The cards live on a GitHub Project, `Colony: <project>`, which `colony board ini
 | Field | Values | Who sets it |
 | --- | --- | --- |
 | Status | To do, In progress, In review, Done | the lead |
-| Lead | the lead whose card it is, `<person>-lead` | `colony card new` |
+| Lead | the lead whose card it is, by its claimed name, such as `ana-main-lead` | `colony card new` |
 | Helper | the builder working on it | the lead |
 | Size | S, M, L | `colony card new` |
 | Last update | `YYYY-MM-DD HH:MM UTC` | every `colony board set` stamps it |
@@ -115,20 +116,24 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 In hack mode, follow the Hack section instead.
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
+You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, unless it said a newer `colony wait` runs, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 How much you tell the person is their setting. When `colony` prints that they want a quiet lead, `[people.<person>] quiet_lead = true`, act on notifications silently, and write to the person only to converse or when they must act; your own status lines go on the board, never in chat. By default, `quiet_lead = false`, keep the person posted on progress as cards start, finish and merge.
 
+The person comes first: when they write while lines wait, answer them, then act on the lines. When they ask you to stop writing, such as "don't write to me", act as a quiet lead until they write to you again. When your wait says a helper's call waits on a prompt, tell the person in one line which window to look at; `colony who` shows each helper's folder, branch and any call that waits. Tell the person something is live only from the `Live:` line `colony who` prints, never because it merged.
+
+When a card waits on another person's work, ask their lead with `colony need @<login> "<what>"`, and close it with `colony need --done N<n>` once it lands. Hand a file over with `colony share <file> --to @<login>`, never by pasting it into a line.
+
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
 
-1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. A card is titled `<builder>: <what>`, with up to 3 done-when results, the folders it touches, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S`. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at 10 open cards of yours, so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
+1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. The register is `[knowledge] future_work` in `.colony/colony.toml` when set, else `knowledge/future-work.md`, or `.colony/future-work.md` with no vault. A card is titled `<builder>: <what>`, with up to 3 done-when results, a `Folders:` line naming the folders it touches, such as `Folders: src/, tests/`, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, Folders: <folders>, and predicted: S, 20 min>" --size S`. It refuses a body with no `Folders:` line, since `colony take` refuses such a card. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at `[limits] open_cards_per_lead` open cards of yours in `.colony/colony.toml` (10 by default), so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
 2. When the cards need helpers, ask the person every time, in one tap: run `colony helpers <n>`, which prints the question "Open them myself, or you paste?" with the last answer as the default. On "open", run `colony helpers <n> --open`: cmux windows when you run in a terminal or cmux, else background sessions, and tell the person to paste `colony view` into a cmux terminal to see them. On "paste", run `colony helpers <n> --paste` and give the person its `colony join <lead>` lines for any computer, such as one whose account has room in `colony who`. Each joined helper connects to you by itself. Up to `max_builders` (default 4) run on this machine.
 3. Hand a card out with a line on it, `colony post <n> <builder> "start: this card"`, and `colony board set <n> Status="In progress" Helper=<builder>`.
 4. When a `done` line arrives, run `colony tier --head origin/<branch>` (see Tiers), set `Status="In review"`, and merge that builder's branch into the batch so far, so a conflict shows now:
-   - First card of a batch: `git fetch origin && git worktree add --detach ../next-<batch> origin/{base}`. `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day.
-   - Each card: `git fetch origin && git -C ../next-<batch> merge --no-ff --no-edit origin/<branch>`.
-   - On a conflict: `git -C ../next-<batch> merge --abort`, and send the builder a line, `colony post <n> <builder> "start: merge origin/<other branch> into your branch, resolve the conflict in <files>, push, and post done again"`.
-5. Every 3 to 5 done cards, or when the person asks, run the batch as a background command: `colony batch --name <batch> --card <n>=<branch> --card <n>=<branch> ...`. It runs `{checks}`, a fresh reviewer with the risk list and a browser walk, sends each problem to its card's fixer, and loops until 0 open problems. Its pull request says `Closes #<n>` for each card, and it ends with `colony tidy`. Then `git worktree remove --force ../next-<batch>`. `colony status --name <batch>` shows where it stands.
+   - First card of a batch: `git fetch origin && git worktree add --detach {worktrees}/{project}-next-<batch> origin/{base}`. `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day.
+   - Each card: `git fetch origin && git -C {worktrees}/{project}-next-<batch> merge --no-ff --no-edit origin/<branch>`.
+   - On a conflict: `git -C {worktrees}/{project}-next-<batch> merge --abort`, and send the builder a line, `colony post <n> <builder> "start: merge origin/<other branch> into your branch, resolve the conflict in <files>, push, and post done again"`.
+5. Every 3 to 5 done cards, or when the person asks, run the batch as a background command: `colony batch --name <batch> --card <n>=<branch> --card <n>=<branch> ...`. It runs `{checks}`, a fresh reviewer with the risk list and a browser walk, sends each problem to its card's fixer, and loops until 0 open problems. Its pull request says `Closes #<n>` for each card, and it ends with `colony tidy`. Then `git worktree remove --force {worktrees}/{project}-next-<batch>`. `colony status --name <batch>` shows where it stands.
    - It prints `done in round N. <link>`: go to step 6.
    - It prints `stopped: <why>`: give the cause to the builder who owns it as a card, then run a new batch under the next name.
 6. After each batch, two things, both as background commands:
@@ -153,8 +158,8 @@ In hack mode, follow the Hack section instead.
 
 You build fast: a fresh reviewer, the full checks and a browser walk check quality afterwards. Your name is the one you were given.
 
-1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
-2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add ../<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
+1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
+2. Make the change on its own branch, in its own worktree, inside the card's folders: `git fetch origin && git worktree add {worktrees}/{project}-<name>-<n> -b <name>/<n> origin/{base}`, then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 4. Run `colony fast-check` once, when the change and its tests are done, and fix what it reports; run it again only after a fix. It runs `{fast_check}` for the check areas your branch changes, and ends on one line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no check area, such as a docs-only card, or the output only says NOT RUN.
 5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`. A `not run` line goes in as it is: never call a check that ran nothing a pass.
@@ -168,17 +173,17 @@ Ask no person anything. When you are unsure, send the lead a question with your 
 
 The spec agent writes a FEATURE's spec before any card exists. Its steps are in `.colony/prompts/spec.md`, and the person approves the requirements before the lead cuts a card.
 
-1. Make a card for it: `colony card new "spec: <feature>" --body "<the request, and FEATURE>" --size L`.
+1. Make a card for it: `colony card new "spec: <feature>" --body "<the request, and FEATURE; a last line Folders: knowledge/specs/>" --size L`.
 2. Open the spec agent as its own session with `colony spec "<the person's request in their words>, card #<n>"`. Its first prompt is `.colony/prompts/spec.md`, with the request on its `The feature:` line, and it runs as the session `spec`, on the account `colony` picks.
 3. It writes the requirements, the design and the tasks in `knowledge/specs/plans/<feature>/`, posts each open question with `colony needs`, asks the person to approve the requirements, and pushes `spec/<feature>`. It changes no code.
 4. Tell the person in chat that the approval blocks the feature. Until the person says yes, cut no card from it, and keep the other cards moving.
-5. On the yes, put `spec/<feature>` into the next batch as the spec card's branch, and turn each task of its tasks page into a card, with the task's contract as the card's body.
+5. On the yes, put `spec/<feature>` into the next batch as the spec card's branch, and turn each task of its tasks page into a card, with the task's contract and a `Folders:` line as the card's body.
 
 ## Researcher
 
 The researcher answers one outside question nobody here knows yet, with cited sources. Its steps are in `.colony/prompts/researcher.md`.
 
-1. Make a card for the question: `colony card new "research: <topic>" --body "<the question>" --size M`.
+1. Make a card for the question: `colony card new "research: <topic>" --body "<the question; a last line Folders: knowledge/research/>" --size M`.
 2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.
@@ -208,7 +213,7 @@ Other agents, such as Codex, use `tools/board`. `tools/board unread` prints ever
 
 ### Hack lead
 
-You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
+You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. Your person comes first: when they write while board lines wait, answer them, then act on the lines. When a task waits on another person's work, ask their lead with `colony need @<login> "<what>"`, close it with `colony need --done N<n>` once it lands, and hand files over with `colony share <file> --to @<login>`. When your wait says a helper's call waits on a prompt, tell your person in one line which window to look at; `colony who` shows each helper's folder, branch and any call that waits. Tell your person something is live only from the `Live:` line `colony who` prints, never because it merged. When they ask to skip the checks for speed, tell them to run `colony gate off` in their own terminal: you can't switch it off yourself. When they ask you to stop writing, such as "don't write to me", stay quiet until they write to you again: write only when they must act, and put your status lines on the board. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, unless it said a newer `colony wait` runs, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
 
 1. Turn your person's request into tasks of one concern each, inside your person's folders. Before a task edits a folder another person owns, ask its owner on the board, `colony post @<login> "<what you need there>"`, and wait for their yes. Only the team lead reassigns work or moves a folder.
 2. Do a small task yourself. For the rest, open builders, up to `max_builders` (default 4): `colony open <name>`.
@@ -216,16 +221,16 @@ You talk with your person, split their part of the demo into tasks inside the fo
 4. When a builder's `done` line says its branch landed, check the fast check's line in it. Post on the board for the team, `colony post @all "<what landed and what it changes for others>"`, when it touches anything others use.
 5. When a `colony merge` opened a pull request instead, read why. A conflict or a failing check goes back to its builder as a line with the files, `colony post <builder> "start: fix <what> in <files>, then run colony merge again"`. When `[gate] merge_after_fast_check` is false, tell your person the link: they merge.
 6. Tell your person what landed, under Talking with the person, and ask only what you can't decide. Answer builders yourself, `colony post <builder> "answer: <your answer>"`.
-7. Before the demo, the team lead posts `@all freeze: only fixes from now`. After it, hand out fixes alone. Then one lead, once, runs `colony batch --review --name <demo>` as a background command, where `<demo>` is a short name such as `demo-1`. One fresh reviewer reads `origin/{base}` as it stands, the demo build, beside the fast check, and writes its report. No fixers run. It pushes the report on its own branch and posts one line on the board with the open count and the report's link. Hand out fixes for what would break the demo, and leave the rest for after it.
+7. `colony who` prints the time left before the demo first: plan backward from it, and give your person the time left in each status. When the freeze starts, `[hack] freeze_minutes` (60) before `[hack] demo`, the team lead's `colony wait` posts `@all freeze: only fixes from now` by itself. After it, hand out fixes alone. Then one lead, once, runs `colony batch --review --name <demo>` as a background command, where `<demo>` is a short name such as `demo-1`. One fresh reviewer reads `origin/{base}` as it stands, the demo build, beside the fast check, and writes its report. No fixers run. It pushes the report on its own branch and posts one line on the board with the open count and the report's link. Hand out fixes for what would break the demo, and leave the rest for after it.
 
 ### Hack builder
 
 You build one task at a time for your own person's lead. Your name is the one you were given.
 
-1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, then act on the line. A `start:` line from your lead gives you a task.
-2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add ../<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. Run the install command there. Work only there.
-3. Run `{fast_check}`, and fix what it reports. Write a test for a bug fix or for new logic.
-4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass.
+1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start:` line from your lead gives you a task.
+2. Make the change on its own branch, in its own worktree, inside the task's folders: `git fetch origin && git worktree add {worktrees}/{project}-<login>-<task> -b <login>/<task> origin/{base}`, where `<login>` is your person's and `<task>` is a short name, such as `login-form`. When the branch lands, the next `colony merge` removes the worktree if it is clean, so finish each task by committing or dropping what it holds. Run the install command there. Work only there.
+3. Run only the tests for what you changed, and fix what they report. Write a test for a bug fix or for new logic. Don't run the whole `{fast_check}` yourself: `colony merge` runs it once, on the merged result, and a second run of it by every helper makes merges slow.
+4. Commit only the files you changed, never with `git add -A`, and run `colony merge <login>/<task>`. It merges your branch into `{base}`, runs the fast check on the result, and pushes `{base}` only on a pass. When it fails, it names the failing tests and the log: fix those.
 5. Post one line: `colony post lead "done, <login>/<task> landed, <the fast check's last line>"`. When `colony merge` opened a pull request instead, post `colony post lead "blocked: <login>/<task> did not land: <why>, <the PR link>"`.
 6. Take the next task at once.
 

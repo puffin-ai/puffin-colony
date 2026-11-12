@@ -72,6 +72,7 @@ DETAIL = re.compile(r"^\s*(E\s|→|\w*Error\b)")  # a failure's detail line: pyt
 # `npm ERR!`, or a Python traceback.
 FAILURE_SIGNAL = re.compile(r"^\S*make(\[\d+\])?: \*\*\*|\berror(\[\w+\])?:|\berror TS\d+|\bError \d+\b|npm ERR!|"
                             r"Traceback \(most recent call last\)", re.I)
+DURATION = re.compile(r"\d+(\.\d+)?m?s\b")  # a duration in a check's line, such as 3s or 120ms, which varies by run
 RERUN_MAX = 10  # a run with more failing tests than this reruns none of them
 RERUN_SECONDS = 600  # one test's rerun past this counts as failed again
 RATE_LIMIT = re.compile(r"rate_limit_error|exceed your account's rate limit|\brate[ _]limit(ed)?\b", re.I)
@@ -226,12 +227,40 @@ def trailer(config: dict) -> str:
     return config["project"].get("trailer") or f"Assisted-by: claude-code:{config['roles']['fixer']['model']}"
 
 
+def main_checkout(root: Path) -> Path | None:
+    """The repo's main checkout, which every worktree of it shares: the folder that holds its .git."""
+    run = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=root, capture_output=True, text=True)
+    if run.returncode or not run.stdout.strip():
+        return None
+    common = Path(run.stdout.strip())
+    common = common if common.is_absolute() else (root / common).resolve()
+    return common.parent if common.name == ".git" else None
+
+
+def env_file(config: dict, root: Path) -> Path | None:
+    """[project] check_env_file: an absolute path, else the file in `root`, else in the repo's main checkout, since
+    a worktree, such as a helper's or the merge's, has no copy of an untracked file such as .env.local. None when
+    the setting is empty; a ColonyError when no such file is found."""
+    named = config["project"].get("check_env_file")
+    if not named:
+        return None
+    path = Path(named).expanduser()
+    main = main_checkout(root)
+    places = [path] if path.is_absolute() else list(dict.fromkeys([root / path, *([main / path] if main else [])]))
+    found = next((place for place in places if place.is_file()), None)
+    if found is None:
+        raise cli.ColonyError(f"[project] check_env_file names {named}, which is in neither "
+                              f"{' nor '.join(str(place.parent) for place in places)}: put it there, or clear the "
+                              "setting")
+    return found
+
+
 def checks_env(config: dict, root: Path) -> dict:
-    """The environment for the checks: check_env_file's values (a path from the repo `root`) added, and provider keys
-    dropped at a zero budget."""
-    project, env = config["project"], dict(os.environ)
-    if project.get("check_env_file"):
-        for line in (root / Path(project["check_env_file"]).expanduser()).read_text().splitlines():
+    """The environment for the checks: check_env_file's values (env_file) added, and provider keys dropped at a zero
+    budget."""
+    env = dict(os.environ)
+    if (found := env_file(config, root)) is not None:
+        for line in found.read_text().splitlines():
             key, sep, value = line.strip().removeprefix("export ").partition("=")
             if sep and key and not key.startswith("#"):
                 env[key.strip()] = value.strip().strip("'\"")
@@ -1121,6 +1150,63 @@ def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, st
     return passed, last, failures, minutes
 
 
+def failure_key(finding: Finding) -> str:
+    """What makes two runs' failures the same one: the test it names, else its text without durations."""
+    return test_id(finding) or DURATION.sub("", finding.text)
+
+
+def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
+    """The batch's start commit, and the failures `cmd` shows there alone, without the cards, each as failure_key:
+    none when it passes there, or when the install fails there, which tells nothing. It runs once per command in a
+    batch, in a worktree of its own that it removes after, and state.json keeps the answer."""
+    sha = b.git("merge-base", "HEAD", b.start)
+    known = b.state.setdefault("start_checks", {})
+    if cmd in known:
+        return sha, set(known[cmd])
+    wt = b.worktrees / f"{b.tag}-batch-{b.name}-start"
+    step, started, clock = f"start-checks-r{r}", time.time(), time.strftime("%H:%M")
+    b.running(step, True)
+    try:
+        if wt.exists():
+            _git(b.root, "worktree", "remove", "--force", str(wt))
+        _git(b.root, "worktree", "add", "--detach", str(wt), sha)
+        try:
+            b.install(wt)
+        except Stop:
+            return sha, set()
+        log = b.reports / f"checks-start-{r}.log"
+        with log.open("wb") as out:
+            command, shell, env = portable.shell(cmd, b.check_env())
+            proc = subprocess.Popen(command, shell=shell, cwd=wt, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                    stderr=subprocess.STDOUT, **portable.own_group())
+            b.track(proc)
+            try:
+                code = proc.wait()
+            finally:
+                b.track(proc, on=False)
+        failing = {failure_key(f) for f in parse_check_failures(log.read_text(errors="replace"))} if code else set()
+    finally:
+        _git(b.root, "worktree", "remove", "--force", str(wt), check=False)
+        b.running(step, False)
+        b.minute(step, (time.time() - started) / 60, clock=clock)
+    known[cmd] = sorted(failing)
+    b.save()
+    return sha, failing
+
+
+def split_on_start(b: Batch, r: int, cmd: str, failures: list[Finding]) -> tuple[list[Finding], list[Finding], str]:
+    """Split a failing round's check findings into the cards' own and the ones the start commit shows alone
+    (start_failures), note the latter in checks-<r>.md, and return both with the start commit. No fixer gets one the
+    start commit shows: the cards are not to blame for it."""
+    sha, there = start_failures(b, r, cmd)
+    on_start = [f for f in failures if failure_key(f) in there]
+    if on_start:
+        with (b.reports / f"checks-{r}.md").open("a") as out:
+            out.write("".join(f"- fails on {b.start} alone at {sha[:9]} too, so no fixer gets it: {f.text}\n"
+                              for f in on_start))
+    return [f for f in failures if f not in on_start], on_start, sha
+
+
 def checks_yardstick(b: Batch) -> float | None:
     """The minutes a round's checks take with every area: `[checks] minutes`, else this batch's own run of them,
     else None."""
@@ -1181,11 +1267,14 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
                              f"review-r{r}", review_report, parse_open) if b.review else None
         walking = pool.submit(walk_round, b, r, head, changed) if walk else None
+        on_start, start_sha = [], ""
         if proc is None:
             passed, line, check_findings, check_minutes = True, "skipped: the change touches no check area", [], 0.0
             (b.reports / f"checks-{r}.md").write_text(f"checks: skipped\n\n{line}\n")
         else:
             passed, line, check_findings, check_minutes = run_checks(b, r, cmd, proc, log, started, clock)
+            if not passed and check_findings and not b.checks_only and not b.demo:
+                check_findings, on_start, start_sha = split_on_start(b, r, cmd, check_findings)
         if review:
             review.result()
         walked = walking.result() if walking else None
@@ -1196,14 +1285,20 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     open_count = parse_open(review_text) if b.review else 0
     walk_text = walk_report.read_text() if walk else ""
     walk_result = parse_walk(walk_text) if walk else "skipped"
-    signature = sorted(re.sub(r"\d+(\.\d+)?m?s\b", "", f.text) for f in check_findings)
+    signature = sorted(DURATION.sub("", f.text) for f in check_findings)
     checks = "skipped" if proc is None else "fail" if not passed else "not run" if line.startswith(ONLY_NOT_RUN) \
         else "pass"
     b.state["rounds"].append({"round": r, "head": head, "open": open_count if b.review else "skipped", "walk": walk_result,
                               "checks": checks, "checks_cmd": cmd if proc is not None else "", "checks_line": line,
                               "checks_signature": signature, "areas": areas,
-                              "failed_areas": failed_areas(b, areas, check_findings)})
+                              "failed_areas": failed_areas(b, areas, check_findings),
+                              "on_start": [f.text for f in on_start]})
     b.save()
+    if not passed and on_start and not check_findings:
+        names = ", ".join(test_id(f) or f.text for f in on_start[:3])
+        raise Stop(f"every failing check also fails on {b.start} alone at {start_sha[:9]}, without the cards ({names}): "
+                   f"the cards are not to blame, so no fixer runs. Fix {b.start}, or the checks' setup, then run the "
+                   "batch again")
     if not passed and prev and prev["checks"] == "fail" and prev["checks_signature"] == signature:
         raise Stop(f"the checks failed the same way in rounds {r - 1} and {r}")
     findings = []
@@ -1466,6 +1561,9 @@ def plan(b: Batch) -> str:
     if checks.get("rerun"):
         lines.append(f"  a failing test whose output names a timeout or a time limit runs once more by itself: "
                      f"$ {checks['rerun']}")
+    if not b.checks_only:
+        lines.append(f"  a round whose checks fail runs them once more on {b.start} alone, without the cards: a failure "
+                     "there too goes to no fixer, and stops the batch when it is the only one left")
     if settings.get("paid_checks") and provider_dollars(b.config) > 0:
         lines.append(f"  paid checks, once in the round that otherwise passes, with COLONY_SPEND_CEILING at most "
                      f"${provider_dollars(b.config):.2f}: $ {settings['paid_checks']}")
@@ -1559,6 +1657,17 @@ def tidy_at_end(b: Batch) -> None:
         print(f"colony batch {b.name}: tidy did not run: {e}")
 
 
+def note_remote_database(b: Batch) -> None:
+    """Note, at most once a day, a database the checks' env names on another computer: every check run writes to
+    it, this batch's and its base check's among them, and a shared one slows as runs pile up."""
+    from colony import merge  # merge imports this module, so it comes in here
+
+    if hosts := merge.remote_databases(b.check_env()):
+        merge.note_once(b.config, "database", f"the checks' env names a database on {', '.join(hosts)}, which isn't on "
+                        "this computer: every check run writes to it, this batch's among them, and a shared one slows "
+                        "as runs pile up; give the checks a database of their own")
+
+
 def run_rounds(b: Batch) -> int:
     """Assemble the cards, then gate and fix round by round, at most MAX_ROUNDS rounds, until the PR opens or a stop
     rule fires. When the last round passes its checks with findings still open, each becomes a card (carry_over) and
@@ -1566,6 +1675,7 @@ def run_rounds(b: Batch) -> int:
     rounds = min(int(b.config["gate"].get("max_rounds", MAX_ROUNDS)), MAX_ROUNDS)
     try:
         assemble(b)
+        note_remote_database(b)
         for r in range(1, rounds + 1):
             findings = gate(b, r, last=r == rounds)
             if not findings:
