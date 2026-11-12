@@ -683,6 +683,90 @@ def test_colony_view_builds_one_cmux_command_per_running_session(home, config, c
     assert default[-1] == "claude attach dd44"  # the default folder stays unset, or the login is lost
 
 
+def test_blocked_sessions_are_the_colony_sessions_claude_agents_lists_as_blocked(home, config, monkeypatch):
+    (home / ".claude").mkdir()
+    listed = [{"id": "aa11", "name": "demo-builder-1", "state": "blocked"},
+              {"id": "bb22", "name": "demo-builder-2", "state": "working"},
+              {"id": "cc33", "name": "other-builder-3", "state": "blocked"}]
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, json.dumps(listed), ""))
+    blocked = cli.blocked_sessions(config)
+    assert list(blocked) == ["builder-1"] and blocked["builder-1"]["id"] == "aa11"
+    assert cli.attach_text(blocked["builder-1"]) == "claude attach aa11"
+    assert cli.attach_text({"id": "aa11", "config_dir": str(home / ".claude-work")}) == \
+        f"CLAUDE_CONFIG_DIR={home / '.claude-work'} claude attach aa11"
+
+
+# A background helper never waits unseen on the .mcp.json question
+
+SERVERS = ["playwright", "context7"]
+
+
+@pytest.mark.parametrize("root, key, windows", [
+    ("C:\\Users\\ana\\repo", "C:/Users/ana/repo", True),  # Claude Code writes both forms on Windows
+    ("C:\\Users\\ana\\repo", "c:\\users\\ana\\repo\\", True),
+    ("/Users/ana/repo", "/Users/ana/repo/", False),  # macOS
+    ("/home/ana/repo", "/home/ana/repo", False),  # Linux
+])
+def test_the_repos_own_project_entry_answers_its_mcp_servers_on_every_system(home, monkeypatch, root, key, windows):
+    folder = home / ".claude-work"
+    folder.mkdir()
+    monkeypatch.setattr(cli, "mcp_servers", lambda path: SERVERS)
+    state = folder / ".claude.json"
+    state.write_text(json.dumps({"projects": {
+        key + "-other": {"enableAllProjectMcpServers": True},  # another repo's answer counts for nothing here
+        key: {"enabledMcpjsonServers": [], "disabledMcpjsonServers": []}}}))
+    assert cli.unanswered_mcp(str(folder), root, windows) == SERVERS
+    state.write_text(json.dumps({"projects": {key: {"enabledMcpjsonServers": ["playwright"]}}}))
+    assert cli.unanswered_mcp(str(folder), root, windows) == ["context7"]
+    state.write_text(json.dumps({"projects": {key: {"enabledMcpjsonServers": ["playwright"],
+                                                    "disabledMcpjsonServers": ["context7"]}}}))
+    assert cli.unanswered_mcp(str(folder), root, windows) == []  # a no is an answer too: no prompt waits
+    state.write_text(json.dumps({"projects": {key: {"enableAllProjectMcpServers": True}}}))
+    assert cli.unanswered_mcp(str(folder), root, windows) == []
+
+
+def test_a_posix_path_keeps_its_case_and_a_windows_one_does_not():
+    assert cli.portable.same_path("C:\\Users\\Ana\\Repo", "c:/users/ana/repo/", windows=True)
+    assert not cli.portable.same_path("/home/Ana/repo", "/home/ana/repo", windows=False)
+    assert not cli.portable.same_path("/home/ana/repo", "/home/ana/repo2", windows=False)
+
+
+def test_the_repos_settings_files_answer_its_mcp_servers_and_no_mcp_json_asks_nothing(home, host):
+    folder = str(home / ".claude-work")
+    assert cli.unanswered_mcp(folder, str(host)) == []  # no .mcp.json: Claude Code asks nothing
+    (host / ".mcp.json").write_text(json.dumps({"mcpServers": {name: {} for name in SERVERS}}))
+    assert cli.unanswered_mcp(folder, str(host)) == SERVERS
+    (host / ".claude").mkdir()
+    (host / ".claude" / "settings.local.json").write_text(json.dumps({"enabledMcpjsonServers": ["playwright"]}))
+    assert cli.unanswered_mcp(folder, str(host)) == ["context7"]
+    (host / ".claude" / "settings.json").write_text(json.dumps({"enableAllProjectMcpServers": True}))
+    assert cli.unanswered_mcp(folder, str(host)) == []
+
+
+def test_open_them_stops_before_a_background_helper_would_wait_on_the_mcp_question(home, config, github, capsys,
+                                                                                    monkeypatch):
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    monkeypatch.setattr(cli, "cmux_usable", lambda: False)
+    host = cli.repo_root()
+    (host / ".mcp.json").write_text(json.dumps({"mcpServers": {name: {} for name in SERVERS}}))
+    helpers(config, open=True)  # the dry run says it would stop, and opens nothing
+    assert "would stop: a background session would wait unseen on Claude Code's one-time question" in \
+        capsys.readouterr().out
+    ran, real_run = [], subprocess.run
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv, **kwargs: ran.append(argv) or real_run(argv, **kwargs))
+    with pytest.raises(cli.ColonyError) as stopped:
+        helpers(config, open=True, dry_run=False)
+    text = str(stopped.value)
+    assert "(playwright, context7)" in text and f"in {host}" in text and "Colony changes no setting" in text
+    assert not any("--bg" in argv for argv in ran)  # no helper opened
+    assert not (host / ".claude").exists()  # and no setting written
+    (host / ".claude").mkdir()
+    (host / ".claude" / "settings.local.json").write_text(json.dumps({"enabledMcpjsonServers": SERVERS}))
+    helpers(config, open=True)
+    assert "would stop" not in capsys.readouterr().out
+
+
 # A pasted image goes on the card's branch
 
 

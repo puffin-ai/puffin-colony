@@ -179,6 +179,58 @@ def _state(config_dir: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+MCP_ANSWERS = ("enabledMcpjsonServers", "disabledMcpjsonServers")  # where Claude Code keeps each .mcp.json answer
+
+
+def mcp_servers(root: Path) -> list[str]:
+    """The server names in the repo's .mcp.json, or none when it is missing or unreadable."""
+    try:
+        data = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return list(servers) if isinstance(servers, dict) else []
+
+
+def unanswered_mcp(config_dir: str, root: str, windows: bool = portable.WINDOWS) -> list[str]:
+    """The repo's .mcp.json servers Claude Code would still ask about in a session on this account in `root`, a
+    question a background session waits on where nobody sees it. A server is answered when one of these says so: the
+    repo's project entry in the account's state file, the repo's .claude/settings.local.json (written when the person
+    answers once) or .claude/settings.json, or the account's settings.json, with enableAllProjectMcpServers, or the
+    server's name in enabledMcpjsonServers or disabledMcpjsonServers. Nothing here changes a setting."""
+    servers = mcp_servers(Path(root))
+    if not servers:
+        return []
+    projects = _state(config_dir).get("projects")
+    sources = [entry for key, entry in projects.items() if portable.same_path(key, root, windows)] \
+        if isinstance(projects, dict) else []
+    for path in (Path(root, ".claude", "settings.local.json"), Path(root, ".claude", "settings.json"),
+                 Path(config_dir).expanduser() / "settings.json"):
+        try:
+            sources.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    answered: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("enableAllProjectMcpServers") is True:
+            return []
+        for key in MCP_ANSWERS:
+            names = source.get(key)
+            if isinstance(names, list):
+                answered.update(name for name in names if isinstance(name, str))
+    return [name for name in servers if name not in answered]
+
+
+def mcp_step(unanswered: list[str], root: str, account: str, config_dir: str) -> str:
+    """The one-time step that answers Claude Code's .mcp.json question for an account, which the person takes."""
+    claude = "claude" if is_default_dir(config_dir) else f"CLAUDE_CONFIG_DIR={config_dir} claude"
+    return (f"a background session would wait unseen on Claude Code's one-time question about this repo's .mcp.json "
+            f"servers ({', '.join(unanswered)}). Answer it once: run `{claude}` in {root} for account {account}, "
+            f"pick an answer, close it, then run this again. Colony changes no setting for you")
+
+
 def signed_in(config_dir: str) -> bool:
     """Whether the account's state file records a claude login."""
     return bool(_state(config_dir).get("oauthAccount"))
@@ -534,8 +586,9 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     background.
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
-    `claude attach`. A dry run prints the command, the env names (never their values) and where it would
-    open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
+    `claude attach`. A background session stops before it opens when Claude Code would first ask the account about
+    the repo's .mcp.json servers, since nobody would see that question (unanswered_mcp). A dry run prints the command,
+    the env names (never their values) and where it would open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
     session is a helper of one lead: the lead `colony join` picked, else the lead that runs the command ($COLONY_LEAD).
     """
     from colony.wait import LEAD_ENV
@@ -552,12 +605,17 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     mode = where_to_open(args)
     where = {"cmux": f"a new cmux workspace at {root}", "terminal": f"this terminal at {root}",
              "background": f"a background session at {root}; follow it in the Claude app or with `claude attach`"}[mode]
+    unanswered = unanswered_mcp(config_dir, root) if mode == "background" else []
     if args.dry_run:
         print("command:", shlex.join(argv))
         print("env:", " ".join(env))
         print(f"dry run: {title} on account {account}, in {where}")
         print(f"why: {why}")
+        if unanswered:
+            print(f"would stop: {mcp_step(unanswered, root, account, config_dir)}")
         return 0
+    if unanswered:
+        raise ColonyError(f"{title} not opened: {mcp_step(unanswered, root, account, config_dir)}")
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
     print(f"Opening {title} on account {account}, in {where}. Why: {why}.", flush=True)
@@ -1135,6 +1193,21 @@ def running_sessions(config: dict) -> list[dict]:
                     f"{config['project']['name']}-"):
                 found.append({**agent, "config_dir": folder})
     return found
+
+
+def blocked_sessions(config: dict) -> dict[str, dict]:
+    """Each running Colony session `claude agents` lists as blocked, which waits on a prompt nobody sees, by its
+    session name without the `<project>-`, in lower case, such as builder-1."""
+    prefix = f"{config['project']['name']}-"
+    return {agent["name"][len(prefix):].lower(): agent for agent in running_sessions(config)
+            if agent.get("state") == "blocked"}
+
+
+def attach_text(agent: dict) -> str:
+    """The command that attaches to a running session on its own account."""
+    if is_default_dir(agent["config_dir"]):
+        return f"claude attach {agent['id']}"
+    return f"CLAUDE_CONFIG_DIR={agent['config_dir']} claude attach {agent['id']}"
 
 
 def view_commands(config: dict) -> list[list[str]]:
