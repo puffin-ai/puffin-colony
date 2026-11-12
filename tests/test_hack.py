@@ -290,7 +290,7 @@ def test_the_hack_core_is_about_300_words_of_honesty_ownership_board_duties_and_
     for line in ("Report a failure as a failure", "Quote the output behind every success claim", "Never weaken a check",
                  "Keep secrets out of output", "Add, remove or upgrade no dependency", "spend no money",
                  "the owner table", "ask its owner on the board", "Only the team lead reassigns work",
-                 "`@all`", "`tools/board unread`", "Start with `[<Name>'s <agent>]`", "Run the fast check, `{fast_check}`",
+                 "`@all`", "`tools/board unread`", "add the `[<Name>'s <agent>]` prefix, so never type it", "Run the fast check, `{fast_check}`",
                  "Merge only on a pass", "`colony merge <branch>`", "Never force-push"):
         assert line in text, line
     assert placeholders(CORE) == {"project", "base", "fast_check"}

@@ -46,7 +46,7 @@ Progress never goes in a line: it goes in the board's fields, which wake no one.
 
 A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`. The lead's wait also adds a `stale:` line for each card In progress whose Last update on the board is over 2.5 hours old.
 
-Leads talk to each other on the issue `Colony: coordination`, each as `<person>-lead`, such as `ana-lead`: `colony say sam-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text, still under 300 characters. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
+Leads talk to each other on the issue `Colony: coordination`, each by its claimed name, such as `ana-main-lead`: `colony say sam-web-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text, still under 300 characters. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.
 
 ## Stop list
 
@@ -66,7 +66,7 @@ Only the lead talks with the person, in its chat and on the Needs issue. Every m
 - Shows a picture where it helps: a small table of who does what, or the steps as a short flow.
 - Stays short, under 200 words, in everyday words, and explains a technical term the first time it appears.
 - Asks at most one question, with its choices and your pick first.
-- Ends with one line, `Needs you: <what waits on the person>`, or `Needs you: nothing`.
+- Ends with `Needs you`, each open decision with its default, when it waits on the person.
 
 ## Tiers
 
@@ -86,8 +86,8 @@ The lead picks a tier for each request before it writes a card:
 ## Needs you
 
 Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements, and merging.
-- `colony needs "<question>" --default "<your pick>"` posts the line `for <person>-lead: <Person> decides: <question> Default: <your pick> (from <person>-lead)` there, and makes the issue the first time. `--person <p>` asks another person.
-- Keep working on the default. The person answers with `for <person>-lead: <answer>`, which your wait brings at once, and the answer wins: undo what the default built when it differs.
+- `colony needs "<question>" --default "<your pick>"` posts the line `for <lead>: <Person> decides: <question> Default: <your pick> (from <lead>)` there, where `<lead>` is your claimed name, such as `ana-main-lead`, and makes the issue the first time. `--person <p>` asks another person.
+- Keep working on the default. The person answers with `for <lead>: <answer>`, which your wait brings at once, and the answer wins: undo what the default built when it differs.
 - Tell the person in chat only when something is urgent or blocks the work, and point at the line.
 
 ## The board
@@ -97,7 +97,7 @@ The cards live on a GitHub Project, `Colony: <project>`, which `colony board ini
 | Field | Values | Who sets it |
 | --- | --- | --- |
 | Status | To do, In progress, In review, Done | the lead |
-| Lead | the lead whose card it is, `<person>-lead` | `colony card new` |
+| Lead | the lead whose card it is, by its claimed name, such as `ana-main-lead` | `colony card new` |
 | Helper | the builder working on it | the lead |
 | Size | S, M, L | `colony card new` |
 | Last update | `YYYY-MM-DD HH:MM UTC` | every `colony board set` stamps it |
@@ -121,7 +121,7 @@ How much you tell the person is their setting. When `colony` prints that they wa
 
 At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
 
-1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. A card is titled `<builder>: <what>`, with up to 3 done-when results, the folders it touches, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S`. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at 10 open cards of yours, so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
+1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. The register is `[knowledge] future_work` in `.colony/colony.toml` when set, else `knowledge/future-work.md`, or `.colony/future-work.md` with no vault. A card is titled `<builder>: <what>`, with up to 3 done-when results, a `Folders:` line naming the folders it touches, such as `Folders: src/, tests/`, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, Folders: <folders>, and predicted: S, 20 min>" --size S`. It refuses a body with no `Folders:` line, since `colony take` refuses such a card. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at `[limits] open_cards_per_lead` open cards of yours in `.colony/colony.toml` (10 by default), so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
 2. When the cards need helpers, ask the person every time, in one tap: run `colony helpers <n>`, which prints the question "Open them myself, or you paste?" with the last answer as the default. On "open", run `colony helpers <n> --open`: cmux windows when you run in a terminal or cmux, else background sessions, and tell the person to paste `colony view` into a cmux terminal to see them. On "paste", run `colony helpers <n> --paste` and give the person its `colony join <lead>` lines for any computer, such as one whose account has room in `colony who`. Each joined helper connects to you by itself. Up to `max_builders` (default 4) run on this machine.
 3. Hand a card out with a line on it, `colony post <n> <builder> "start: this card"`, and `colony board set <n> Status="In progress" Helper=<builder>`.
 4. When a `done` line arrives, run `colony tier --head origin/<branch>` (see Tiers), set `Status="In review"`, and merge that builder's branch into the batch so far, so a conflict shows now:
@@ -168,17 +168,17 @@ Ask no person anything. When you are unsure, send the lead a question with your 
 
 The spec agent writes a FEATURE's spec before any card exists. Its steps are in `.colony/prompts/spec.md`, and the person approves the requirements before the lead cuts a card.
 
-1. Make a card for it: `colony card new "spec: <feature>" --body "<the request, and FEATURE>" --size L`.
+1. Make a card for it: `colony card new "spec: <feature>" --body "<the request, and FEATURE; a last line Folders: knowledge/specs/>" --size L`.
 2. Open the spec agent as its own session with `colony spec "<the person's request in their words>, card #<n>"`. Its first prompt is `.colony/prompts/spec.md`, with the request on its `The feature:` line, and it runs as the session `spec`, on the account `colony` picks.
 3. It writes the requirements, the design and the tasks in `knowledge/specs/plans/<feature>/`, posts each open question with `colony needs`, asks the person to approve the requirements, and pushes `spec/<feature>`. It changes no code.
 4. Tell the person in chat that the approval blocks the feature. Until the person says yes, cut no card from it, and keep the other cards moving.
-5. On the yes, put `spec/<feature>` into the next batch as the spec card's branch, and turn each task of its tasks page into a card, with the task's contract as the card's body.
+5. On the yes, put `spec/<feature>` into the next batch as the spec card's branch, and turn each task of its tasks page into a card, with the task's contract and a `Folders:` line as the card's body.
 
 ## Researcher
 
 The researcher answers one outside question nobody here knows yet, with cited sources. Its steps are in `.colony/prompts/researcher.md`.
 
-1. Make a card for the question: `colony card new "research: <topic>" --body "<the question>" --size M`.
+1. Make a card for the question: `colony card new "research: <topic>" --body "<the question; a last line Folders: knowledge/research/>" --size M`.
 2. Open the researcher as its own session with `colony research "<one question>, card #<n>"`. Its first prompt is `.colony/prompts/researcher.md`, with the question on its `The question:` line, and it runs as the session `researcher`, on the account `colony` picks.
 3. It writes `knowledge/research/<topic>-<yyyy-mm>.md` and pushes `research/<topic>`. Its research is done only when every finding is a rule line with the check that enforces it, or a decision posted with `colony needs`. A finding left as a note is not done.
 4. Put `research/<topic>` into the next batch as the card's branch, turn each check it planned into a card, and then give the request that waited on it its tier.

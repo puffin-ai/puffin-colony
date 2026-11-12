@@ -86,7 +86,8 @@ def changes(gh):  # noqa: F811
 def test_card_new_refuses_a_lead_at_its_open_card_limit(gh, capsys):  # noqa: F811
     full = [card(n, "In progress") for n in range(1, 11)] + [card(11, "Done"), card(12, "To do", lead="sam-lead")]
     quiet(gh, items=full)
-    args = parse("card", "new", "builder-1: the export button", "--body", "predicted: S, 20 min", "--size", "S")
+    args = parse("card", "new", "builder-1: the export button", "--body", "Folders: src/\npredicted: S, 20 min",
+                 "--size", "S")
     with pytest.raises(cli.ColonyError, match="ana-lead has 10 open cards, and \\[limits\\] open_cards_per_lead is "
                                               "10: close or finish one first"):
         args.run(CONFIG, args)
@@ -95,11 +96,23 @@ def test_card_new_refuses_a_lead_at_its_open_card_limit(gh, capsys):  # noqa: F8
     gh.answer("issue create", "https://github.com/acme/demo/issues/40\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_40"})
-    args = parse("card", "new", "builder-1: the export button", "--body", "b", "--size", "S", "--lead", "sam-lead")
+    args = parse("card", "new", "builder-1: the export button", "--body", "Folders: src/", "--size", "S", "--lead",
+                 "sam-lead")
     assert args.run(CONFIG, args) == 0
-    args = parse("card", "new", "builder-1: the import button", "--body", "b", "--size", "M")
+    args = parse("card", "new", "builder-1: the import button", "--body", "Folders: src/", "--size", "M")
     assert args.run({**CONFIG, "limits": {"open_cards_per_lead": 11}}, args) == 0
     assert len(gh.called("issue", "create")) == 2
+
+
+BODY = "done when: it signs in\nFolders: src/, tests/"
+
+
+@pytest.mark.parametrize("body", ["done when: it signs in", "the folders are src/ and tests/", "Folders:"])
+def test_card_new_refuses_a_body_with_no_folders_line_since_take_would_refuse_the_card(gh, body):  # noqa: F811
+    args = parse("card", "new", "builder-2: the login form", "--body", body, "--size", "M")
+    with pytest.raises(cli.ColonyError, match="names the folders it touches on a `Folders:` line"):
+        args.run(CONFIG, args)
+    assert gh.calls() == []
 
 
 def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lead_and_size(gh, capsys):  # noqa: F811
@@ -107,10 +120,10 @@ def test_card_new_makes_the_issue_and_puts_it_on_the_board_as_to_do_with_its_lea
     gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_41"})
-    args = parse("card", "new", "builder-2: the  login form", "--body", "done when: it signs in", "--size", "M")
+    args = parse("card", "new", "builder-2: the  login form", "--body", BODY, "--size", "M")
     assert args.run(CONFIG, args) == 0
     assert gh.called("issue", "create") == [["issue", "create", "--repo", "acme/demo", "--title",
-                                             "builder-2: the login form", "--body", "done when: it signs in"]]
+                                             "builder-2: the login form", "--body", BODY]]
     head = ["project", "item-edit", "--project-id", "PVT_3", "--id", "PVTI_41", "--field-id"]
     assert gh.called("project", "item-edit") == [head + ["F2", "--single-select-option-id", "F2-0"],
                                                  head + ["F3", "--text", "ana-lead"],
@@ -129,7 +142,8 @@ def test_card_new_prints_the_median_of_the_last_cards_of_its_size_beside_the_pre
     gh.answer("issue create", "https://github.com/acme/demo/issues/41\n")
     gh.answer("fields(first", fields_answer(*FULL))
     gh.answer("project item-add", {"id": "PVTI_41"})
-    args = parse("card", "new", "builder-2: the export", "--body", "predicted: M, 45 min", "--size", "M")
+    args = parse("card", "new", "builder-2: the export", "--body", "Folders: src/\npredicted: M, 45 min", "--size",
+                 "M")
     assert args.run(CONFIG, args) == 0
     assert capsys.readouterr().out.splitlines()[-1] == "predicted 45 min; the last 3 M cards took a median of 120 min"
 
@@ -139,7 +153,7 @@ def test_card_new_prints_the_median_of_the_last_cards_of_its_size_beside_the_pre
 def test_card_new_refuses_a_duplicate_of_an_open_card_by_its_number(gh, title):  # noqa: F811
     quiet(gh, issues=[{"number": 7, "title": "Colony: coordination"},
                       {"number": 12, "title": "builder-2: Add dark mode to settings"}])
-    args = parse("card", "new", title, "--body", "b", "--size", "S")
+    args = parse("card", "new", title, "--body", "Folders: src/", "--size", "S")
     with pytest.raises(cli.ColonyError, match="#12 is already open as 'builder-2: Add dark mode to settings'"):
         args.run(CONFIG, args)
     assert changes(gh) == []

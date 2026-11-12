@@ -546,15 +546,17 @@ def test_the_stale_hours_come_from_the_config(gh):  # noqa: F811
 
 def test_the_retro_prompt_is_filled_in_for_the_batch():
     config = {**CONFIG, "project": {**CONFIG["project"], "fast_check": "make fast"},
-              "gate": {"rules": [".colony/rules/*.md", "CLAUDE.md"]}}
+              "gate": {"rules": [".colony/core.md", ".colony/rules/*.md", "CLAUDE.md", "apps/web/AGENTS.md", "docs/*.md"]}}
     prompt = cycle.retro_prompt(config, "2026-11-05", Path("/r/reports"), Path("/w/demo-retro"),
                                 "demo/retro-2026-11-05", Path("/w/demo-retro/retro.md"), "Assisted-by: x")
     assert "{" not in prompt and "}" not in prompt
     for text in ("Batch 2026-11-05", str(Path("/r/reports")), f"{Path('/w/demo-retro')}, on branch demo/retro-2026-11-05",
-                 "`.colony/rules/*.md`, `CLAUDE.md`", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
+                 "the file of `.colony/rules/*.md`, `docs/*.md` it belongs", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
                  f"Write {Path('/w/demo-retro/retro.md')}", "`lessons: N`", "rule line plus a check", "decision",
                  "never as a note alone"):
         assert text in prompt, text
+    # The core, CLAUDE.md and AGENTS.md are only the person's to change: a lesson for one is a decision.
+    assert "`.colony/core.md`, `CLAUDE.md` and `AGENTS.md`, which only the person asks for and reviews" in prompt
 
 
 def test_retro_dry_run_finds_the_reports_and_prints_the_plan_and_prompt(repo, tmp_path, capsys, monkeypatch):
