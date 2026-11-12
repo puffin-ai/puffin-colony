@@ -20,6 +20,7 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
 | `colony spec "<feature>"` | Opens the spec agent on a FEATURE, with `.colony/prompts/spec.md` as its first prompt. The lead runs it. |
+| `colony fix-links [--dry-run]` | Windows only. Turns on git's `core.symlinks`, and turns every symbolic link git wrote as a one-line text file back into a link, in the repo and all its worktrees. It replaces only an untouched stub, whose text is still the link's target, keeps and names an edited one, and prints the counts. It needs Developer Mode, and changes nothing without it. `colony` and `colony join` say in one line when a repo needs it. On macOS and Linux it does nothing. |
 | `colony tools [tool …]` | Prints the tools setup offers, each with its default, or writes the named ones: `playwright`, `context7`, `role-skills`, `starter-skills`, `ui-design`, `test-first`. Setup runs it. |
 
 ## Lines
@@ -102,7 +103,7 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `hooks install`, `upgrade` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |

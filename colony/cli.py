@@ -931,6 +931,40 @@ def here(args) -> int:
     return 0
 
 
+def fix_links(args) -> int:
+    """`colony fix-links`: on Windows, turn on git's core.symlinks and turn every symbolic link git wrote as a plain
+    text file back into a link, in the repo and all its worktrees, then print the counts. It replaces only an untouched
+    stub, whose text is exactly its target, and keeps and names an edited one. On macOS and Linux it does nothing."""
+    if not portable.WINDOWS:
+        print(f"{NAME} fix-links: nothing to do, since git makes real links on this system.")
+        return 0
+    root = repo_root()
+    if not portable.can_symlink():
+        raise ColonyError(f"this computer can't make symbolic links: {portable.DEVELOPER_MODE}, then run "
+                          f"`{portable.FIX_LINKS}` again. Nothing changed.")
+    if args.dry_run:
+        print(f"Would turn on core.symlinks in {root} and restore the plain-file links in its "
+              f"{len(portable.checkouts(root))} checkouts. Nothing ran.")
+        return 0
+    report = portable.repair_links(root)
+    print(f"core.symlinks is on. Restored {report['restored']} links in {report['checkouts']} checkouts; "
+          f"{report['already']} were links already, {report['missing']} missing.")
+    if report["edited"]:
+        print(f"Kept {len(report['edited'])} edited, since their text is no longer the link's target:")
+        for path in report["edited"]:
+            print(f"- {path}")
+    return 0
+
+
+def warn_links() -> None:
+    """Say in one line when this repo's symbolic links are plain text files on Windows, and how to fix it. Quiet
+    outside a git checkout, and on macOS and Linux."""
+    top = _out(["git", "rev-parse", "--show-toplevel"])
+    note = portable.links_note(Path(top)) if top else ""
+    if note:
+        print(note, file=sys.stderr)
+
+
 def skill_install(args) -> int:
     """`colony skill-install`: copy the colony-setup skill into a Claude settings folder's skills/, so a session in
     any repo, before setup, knows how to set Colony up."""
@@ -1777,6 +1811,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=setup)
 
+    p = sub.add_parser("fix-links", help="Windows: turn on git's core.symlinks and turn the links git wrote as text "
+                                         "files back into links, in the repo and every worktree")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
+    p.set_defaults(run=fix_links)
+
     p = sub.add_parser("skill-install", help=f"copy the {SETUP_SKILL} skill into a Claude settings folder, so a "
                                              "session in any repo can set Colony up")
     p.add_argument("--config-dir", metavar="DIR", help="the settings folder, $CLAUDE_CONFIG_DIR or ~/.claude by default")
@@ -1800,11 +1839,13 @@ def main(argv=None) -> int:
     if not getattr(args, "dry_run", False):
         first_run()
     try:
+        if args.command in (None, "join"):
+            warn_links()
         if args.command is None and in_claude_code():
             return here(args)
         if args.command is None and not config_path().exists():
             return setup(args)
-        if args.command in ("tools", "setup", "skill-install"):  # each runs before colony.toml exists
+        if args.command in ("tools", "setup", "skill-install", "fix-links"):  # each runs before colony.toml exists
             return args.run(args)
         config = load_config()
         feature = FEATURES.get(args.command)
