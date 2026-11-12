@@ -1585,6 +1585,17 @@ def tidy_at_end(b: Batch) -> None:
         print(f"colony batch {b.name}: tidy did not run: {e}")
 
 
+def note_remote_database(b: Batch) -> None:
+    """Note, at most once a day, a database the checks' env names on another computer: every check run writes to
+    it, this batch's and its base check's among them, and a shared one slows as runs pile up."""
+    from colony import merge  # merge imports this module, so it comes in here
+
+    if hosts := merge.remote_databases(b.check_env()):
+        merge.note_once(b.config, "database", f"the checks' env names a database on {', '.join(hosts)}, which isn't on "
+                        "this computer: every check run writes to it, this batch's among them, and a shared one slows "
+                        "as runs pile up; give the checks a database of their own")
+
+
 def run_rounds(b: Batch) -> int:
     """Assemble the cards, then gate and fix round by round, at most MAX_ROUNDS rounds, until the PR opens or a stop
     rule fires. When the last round passes its checks with findings still open, each becomes a card (carry_over) and
@@ -1592,6 +1603,7 @@ def run_rounds(b: Batch) -> int:
     rounds = min(int(b.config["gate"].get("max_rounds", MAX_ROUNDS)), MAX_ROUNDS)
     try:
         assemble(b)
+        note_remote_database(b)
         for r in range(1, rounds + 1):
             findings = gate(b, r, last=r == rounds)
             if not findings:

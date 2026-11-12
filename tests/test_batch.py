@@ -780,6 +780,21 @@ def test_a_fixer_gets_only_the_cards_own_failures_and_the_start_points_stop_the_
     assert list(state["start_checks"].values()) == [["tests/test_db.py::test_connects"]]  # run once, then kept
 
 
+
+def test_a_check_env_that_names_a_remote_database_gets_a_note_with_its_host_alone(repo, config, stubs, capsys,
+                                                                                   tmp_path, monkeypatch):
+    # Checks that share one hosted database slow each other down; a batch's checks and its base check add more.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    env = tmp_path / "check.env"
+    env.write_text("DATABASE_URL=postgres://app:s3cret@ep-cool-1.neon.tech/db\nTEST_DB=postgres://localhost/test\n")
+    config["project"]["check_env_file"] = str(env)
+    config["gate"].update(review=False, walk=False)
+    assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 0
+    out = capsys.readouterr().out
+    assert "note: the checks' env names a database on ep-cool-1.neon.tech" in out
+    assert "s3cret" not in out and "localhost" not in out
+
+
 RATE_STUB = r'''#!/usr/bin/env python3
 import json, os, sys, time
 prompt = sys.argv[sys.argv.index("-p") + 1]
