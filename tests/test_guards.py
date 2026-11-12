@@ -266,6 +266,33 @@ def test_a_forced_push_with_no_refspec_is_refused_when_git_config_cant_say_what_
     assert push_guard("git push --tags -f", on_main).returncode == 0
 
 
+def test_a_plain_push_with_no_refspec_is_refused_when_git_config_forces_deletes_or_mirrors_the_base(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    for command in ("git -c 'remote.origin.push=+refs/heads/*:refs/heads/*' push",
+                    "git -c remote.origin.push=:refs/heads/main push", "git -c remote.origin.mirror=true push"):
+        assert push_guard(command, on_main).returncode == 2, command
+    git_in(on_main, "config", "remote.origin.mirror", "true")
+    run = push_guard("git push", on_main)
+    assert run.returncode == 2 and "remote.origin.mirror" in run.stderr
+    for command in ("git push origin ana/login", "git push fork", "git -c remote.origin.mirror=false push"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
+def test_a_forced_push_names_its_branch_after_a_command_on_the_line_that_can_change_what_it_pushes(on_main):
+    git_in(on_main, "checkout", "-q", "-b", "ana/login")
+    for command in ("git checkout main && git push -f", "git switch main; git push --force-with-lease",
+                    "git config push.default matching && git push -f", "cd ../other && git push -f",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push -f",
+                    "export GIT_DIR=../other/.git; git push -f", "git --git-dir=../other/.git push -f",
+                    "git checkout main && git push -f origin HEAD"):
+        run = push_guard(command, on_main)
+        assert run.returncode == 2 and "on this line can change" in run.stderr, command
+    for command in ("git rebase main && git push -f", "npm test && git push --force-with-lease",
+                    "git checkout main && git push -f origin ana/login", "git checkout main && git push",
+                    "git push -f && git checkout main"):
+        assert push_guard(command, on_main).returncode == 0, command
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A fresh git repo to run in, with HOME in the temporary folder."""
