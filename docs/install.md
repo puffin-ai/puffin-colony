@@ -70,6 +70,7 @@ Colony runs on Windows with [Git for Windows](https://gitforwindows.org), which 
 - It runs your repo's commands, such as `checks` and `fast_check`, through Git's bash, so a `colony.toml` written on a Mac works unchanged.
 - It restarts itself once in Python's UTF-8 mode, so it reads gh's output and your files as UTF-8.
 - Its hooks run `python3`. Put `%USERPROFILE%\.local\bin`, where `uv tool install` and `uv python install --default` write, before `%LOCALAPPDATA%\Microsoft\WindowsApps` on your PATH. Or turn off the python and python3 aliases under Settings > Apps > Advanced app settings > App execution aliases, which only open the Microsoft Store.
+- Turn on Developer Mode (Settings > System > For developers), so git can make symbolic links. Without it, or with git's `core.symlinks` off, git writes each link as a one-line text file, and a linked rule or skill silently never loads. `colony` and `colony join` say so in one line, and `colony fix-links` repairs the repo and all its worktrees.
 - cmux is macOS only, so helpers open in this terminal or as background sessions.
 - To run the tests: `uv run --with pytest python -X utf8 -m pytest tests`.
 

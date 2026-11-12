@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks asking' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; [ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks asking",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks asking' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks asking",
             "async": true
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks stopped' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; [ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks stopped",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks stopped' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && exec \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks stopped",
             "async": true
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks unread' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; [ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks unread' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
             "timeout": 20
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks unread' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; [ -n \"$COLONY_SESSION\" ] && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks unread' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks unread; exit 0",
             "timeout": 20
           }
         ]

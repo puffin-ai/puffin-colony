@@ -15,7 +15,7 @@ A config with no `mode` counts as `startup`, so a repo set up before modes works
 | For | A team, for hours or a weekend | One person, a small project | A company's whole life cycle |
 | Leads | One per person, as peers, each named `<login>-main-lead` | One | One per person, with a digest |
 | Builders | Optional. Each person's lead may open them | Yes | Yes |
-| Messages | One pinned board issue, with `@login` and `@all` mentions, and the prompt hook | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, and the digest |
+| Messages | One pinned board issue, with `@login` and `@all` mentions, the prompt hook, and a 2-minute digest | Lines on cards, and the prompt hook | Lines on cards, the coordination issue, and the digest |
 | Owner table | Yes, per person, in `AGENTS.md` | No | Optional |
 | Gate | The fast check only. `colony merge <branch>` merges into the base after a passing fast check, when setup's yes allows it. `--review` adds one reviewer before the demo | The checks and a reviewer. The browser walk is optional | The checks, a reviewer and the walk, up to 3 rounds; a finding still open after them becomes a card |
 | Knowledge vault, specs, research, card board, retro | No | Off, and each can be turned on | Yes |

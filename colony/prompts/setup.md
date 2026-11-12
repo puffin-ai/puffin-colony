@@ -93,7 +93,7 @@ Each preset ships three levels in `{package}/presets/<preset>/`, where `<preset>
 
 ## 5. Write the playbook and the briefs
 
-1. Copy `{package}/playbook.md` to `{dir}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{install}`, `{fast_check}` and `{checks}`, with this project's value, and drop the sentence that explains the placeholders. When `<vault>` is not `knowledge`, write it in place of `knowledge/` there. Change nothing else.
+1. Copy `{package}/playbook.md` to `{dir}/playbook.md`, replace each placeholder in braces, such as `{base}`, `{install}`, `{fast_check}`, `{checks}`, `{worktrees}` (`[project] worktrees`) and `{project}` (`[project] name`), with this project's value, and drop the sentence that explains the placeholders. When `<vault>` is not `knowledge`, write it in place of `knowledge/` there. Change nothing else.
 2. Copy `{package}/prompts/spec.md` and `{package}/prompts/researcher.md` into `{dir}/prompts/`. They are the briefs the playbook's Spec and Researcher sections start, and the ones `{name} spec` and `{name} research` open a session with. In each copy, replace `{project}` with the project's name and `{knowledge}` with `<vault>`. Leave the `The feature:` and `The question:` lines as they are: they are filled in each time.
 
 ## 6. Lay out the knowledge vault
@@ -160,16 +160,17 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
    - The repo as `owner/name` and its default branch, and the folders at the top of the repo, for the owner question.
    - Any `CLAUDE.md` or `AGENTS.md` at the top, and the settings folders on this computer, by name only.
    - The person's name, from `git config user.name`, and GitHub login, from `gh api user --jq .login`.
-2. **Ask everything in one message.** This is the only other time you ask. Number these 5 questions, and give your default after each, so "defaults" is a full answer:
+2. **Ask everything in one message.** This is the only other time you ask. Number these 6 questions, and give your default after each, so "defaults" is a full answer:
    1. Who is on the team? Each person's GitHub login and name, and which one is the team lead, who alone reassigns work. Default: you alone, as the lead.
    2. Who owns which folders? Default: with you alone, the whole repo; with a team, "not yet" for each person, until the team splits the folders at kickoff.
    3. Which branch does work land on? Default: `main`.
    4. May agents merge into it themselves after a passing fast check? Default: yes.
-   5. When is the demo? Default: not set.
+   5. When is the demo? A date and time with your time zone, such as `2026-11-08 17:00 -08:00`. This one has no default: the countdown and the freeze run from it.
+   6. Where is the app live, and how does it deploy? Default: the base deploys by itself on each merge through the host's GitHub app, such as Vercel's, whose deployments Colony reads; name the live URL.
 
-   When an answer is unclear, take the default and say so.
+   When an answer is unclear, take the default and say so. When question 5 has no answer, ask it again, alone, until it has one.
 3. **Open and pin the board.** Look for an open issue titled exactly `Board: <project>`, with `gh issue list --repo <owner/name> --state open --search '"Board: <project>" in:title' --json number,title`, and reuse it when there is one. Otherwise:
-   - Fill `{package}/templates/hack/board-issue.md`: `{project}` is the project's name, `{lead}` the team lead as `<Name> (`<login>`)`, `{demo}` the demo time or `the time the team sets`, and `{team}` one line per person, `- <Name>, `<login>`: owns <their folders, or not yet>`. Write logins without `@` here, so the issue doesn't subscribe each teammate to every post.
+   - Fill `{package}/templates/hack/board-issue.md`: `{project}` is the project's name, `{lead}` the team lead as `<Name> (`<login>`)`, `{demo}` the demo time from question 5, and `{team}` one line per person, `- <Name>, `<login>`: owns <their folders, or not yet>`. Write logins without `@` here, so the issue doesn't subscribe each teammate to every post.
    - Write it to a file in a temporary folder outside the repo, and run `gh issue create --repo <owner/name> --title "Board: <project>" --body-file <that file>`. The issue's number is the end of the URL it prints.
    - Pin it with `gh issue pin <number> --repo <owner/name>`. When pinning fails, say why in one line and go on: the board works unpinned.
 4. **Write the config.** Write `{dir}/{name}.toml` with only these keys, from step 1 and the answers:
@@ -182,12 +183,17 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        fast_check = "<the fast check>"
        checks = "<the fast check again: hack's gate runs it alone>"
        install = "<the install command>"
+       deploy_environment = "<question 6's GitHub deployment environment, Production by default>"
 
        [gate]
        merge_after_fast_check = true    # false on a no to question 4
 
        [messages]
        board = <the board issue's number>
+
+       [hack]
+       demo = "<question 5, such as 2026-11-08T17:00:00-08:00>"
+       team_lead = "<the team lead's login, from question 1>"
 
        [people]
        logins = ["<login>", "<login>"]

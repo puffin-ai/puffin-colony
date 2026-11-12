@@ -312,10 +312,10 @@ def test_setup_asks_the_mode_first_with_a_line_for_each_and_startup_by_default()
 def test_the_hack_branch_asks_only_the_hack_questions():
     asked = hack_steps().split("2. **Ask everything in one message.**", 1)[1].split("3. **", 1)[0]
     questions = re.findall(r"^   (\d)\. (.+)$", asked, re.M)
-    assert [number for number, _ in questions] == ["1", "2", "3", "4", "5"]
+    assert [number for number, _ in questions] == ["1", "2", "3", "4", "5", "6"]
     for (_, question), words in zip(questions, (("GitHub login and name", "team lead"), ("owns which folders",),
                                                 ("Default: `main`",), ("merge", "fast check", "Default: yes"),
-                                                ("demo",))):
+                                                ("demo", "no default"), ("live", "deploy"))):
         assert all(word in question for word in words), question
     assert "yes-or-no list" not in hack_steps()
 
@@ -365,6 +365,9 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
                      ("<the fast check again: hack's gate runs it alone>", "npm test"), ("<the fast check>", "npm test"),
                      ("<the install command>", "npm ci"),
                      ("<the board issue's number>", "12"), ('["<login>", "<login>"]', '["ana", "ben"]'),
+                     ("<question 5, such as 2026-11-08T17:00:00-08:00>", "2026-11-08T17:00:00-08:00"),
+                     ("<the team lead's login, from question 1>", "ana"),
+                     ("<question 6's GitHub deployment environment, Production by default>", "Production"),
                      ('{ <login> = "<Name>", <login> = "<Name>" }', '{ ana = "Ana", ben = "Ben" }'),
                      ("[accounts.<login>]", "[accounts.ana]"), ('"<login>"', '"ana"')):
         assert old in text, old
@@ -400,6 +403,15 @@ def test_the_lead_and_builder_sections_send_a_hack_session_to_the_hack_section()
         assert "In hack mode, follow the Hack section instead." in playbook_section(name)
 
 
+def test_the_lead_section_holds_the_person_rules_and_the_alarms_every_mode_needs():
+    # These began in the Hack section alone, but the person, the watchdog's alarms, the Live line, colony need and
+    # colony share are there for a lead in every mode.
+    lead = playbook_section("Lead")
+    for rule in ("The person comes first", "\"don't write to me\"", "a helper's call waits on a prompt",
+                 "only from the `Live:` line", "`colony need @<login> \"<what>\"`", "`colony share <file> --to @<login>`"):
+        assert rule in lead, rule
+
+
 def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_cards():
     hack = playbook_section("Hack")
     for part in ("### The board", "### Hack lead", "### Hack builder"):
@@ -414,7 +426,7 @@ def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_card
 
 
 def test_the_hack_section_holds_only_the_placeholders_setup_fills_in_the_playbook():
-    assert set(PLACEHOLDER.findall(playbook_section("Hack"))) <= {"base", "fast_check"}
+    assert set(PLACEHOLDER.findall(playbook_section("Hack"))) <= {"base", "fast_check", "worktrees", "project"}
 
 
 def test_a_hack_lead_and_builder_open_on_the_hack_section(tmp_path, monkeypatch):
@@ -453,3 +465,80 @@ def test_the_builder_section_keeps_builders_fast_without_dropping_a_required_tes
                  "`predicted:`", "A bug fix still carries its regression test",
                  "a test the repo's own rules demand still goes in"):
         assert rule in builder, rule
+
+
+def test_a_hack_lead_gathers_done_lines_for_its_digest_and_takes_the_rest_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    lead = wait.lead_session(CONFIG, "ana-main-lead")
+    assert wait.taken("for ana-main-lead: done, T12 landed at 1a2b3c4 (from staff)", lead, "") == [
+        ("for ana-main-lead: done, T12 landed at 1a2b3c4 (from staff)", False)]
+    assert wait.taken("for ana-main-lead: question: which table? I'm going with cases (from staff)", lead, "")[0][1]
+    assert wait.taken("@ana can you look at the form? (from ben-main-lead)", lead, "") == [
+        ("@ana can you look at the form? (from ben-main-lead)", False)]
+    assert wait.taken("@ana can you look?", lead, "")[0][1]  # the person's own line comes at once
+
+
+def test_hack_mode_gathers_the_leads_lines_for_two_minutes():
+    import tomllib
+    preset = tomllib.loads((PACKAGE / "modes" / "hack.toml").read_text())
+    assert preset["messages"]["lead_digest_minutes"] == 2
+
+
+# The demo's clock: [hack] demo sets the countdown and the freeze
+
+DEMO = {**CONFIG, "hack": {"demo": "2026-11-08 17:00 -08:00", "team_lead": "ana"}}
+
+
+def pst(text: str):
+    from datetime import datetime
+    return datetime.fromisoformat(f"2026-11-08T{text}:00-08:00")
+
+
+def test_the_countdown_names_the_time_left_and_the_freeze():
+    from colony import demo
+    assert demo.countdown(DEMO, pst("13:40")) == ("Demo at 17:00 UTC-08:00, in 3 h 20 min; the freeze starts at 16:00, "
+                                                  "in 2 h 20 min.")
+    assert demo.countdown(DEMO, pst("16:15")) == ("Freeze: the demo at 17:00 UTC-08:00 is in 45 min, so only fixes "
+                                                  "from now.")
+    assert demo.countdown(DEMO, pst("17:05")) == "The demo time, 17:00 UTC-08:00, has passed."
+    assert demo.countdown(CONFIG) == ""
+
+
+def test_a_demo_time_needs_its_time_zone():
+    from colony import demo
+    with pytest.raises(cli.ColonyError, match="needs its time zone"):
+        demo.countdown({"hack": {"demo": "2026-11-08 17:00"}})
+
+
+def test_the_team_leads_wait_posts_the_freeze_once_when_the_last_hour_starts(tmp_path, monkeypatch):
+    from colony import demo, transport
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sent = []
+    monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: sent.append(line) or 7)
+    demo.freeze_check(DEMO, "ana")(now=pst("15:59"))
+    assert sent == []
+    for _ in range(2):
+        demo.freeze_check(DEMO, "ana")(now=pst("16:01"))
+    demo.freeze_check(DEMO, "ben")(now=pst("16:01"))  # not the team lead
+    assert sent == ["@all freeze: the demo is at 17:00 UTC-08:00, in 59 min: only fixes from now. Merge what is "
+                    "ready, then rehearse on the last [merged] build"]
+
+
+def test_the_leads_wait_runs_the_freeze_check_at_each_poll(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    checks = []
+    monkeypatch.setattr(wait, "poll", lambda repo, state, me: state["pending"].append(["for lead: hi", True]))
+    me = wait.Session(name=cli.LEAD, names=frozenset({cli.LEAD}))
+    assert wait.wait("acme/demo", "demo", me, freeze=lambda: checks.append(1)) == 0
+    assert checks == [1]
+
+
+def test_the_hack_rules_let_the_person_trade_checks_for_speed_and_put_building_first():
+    text = CORE.read_text()
+    assert "even an hour before the demo" not in text  # a line that makes a lead refuse its person
+    assert "Your person may trade checks for speed" in text and "name what went unchecked" in text
+    assert "Build first" in text and "only when your person asks, or after the freeze" in text
+    assert "a teammate's yes to the same package counts" in text
+    hack = playbook_section("Hack")
+    assert "don't write to me" in hack and "until they write to you again" in hack
