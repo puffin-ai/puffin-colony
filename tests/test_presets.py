@@ -16,7 +16,12 @@ PUFFIN_RULES = ("performance", "full-stack", "accessibility", "coding", "design-
                 "docs", "conversation", "skills")
 HONESTY = ("Report a failure as a failure", "Quote the output behind every success claim", "Never weaken a check",
            "Keep secrets out of output", "Add, remove or upgrade no dependency", "spend no money")
-POINTERS = (".colony/rules/", "AGENTS.md", ".colony/playbook.md", "conversation.md", "skills.md")
+POINTERS = (".colony/rules/", "AGENTS.md", ".colony/playbook.md", "skills.md")
+KNOWLEDGE_RULES = PACKAGE / "knowledge" / "rules"
+# The words every session of a role loads before any work, per preset: the core, the CLAUDE.md pointer line, and every
+# shipped skill's description. A line one role alone uses belongs in that role's skill, which loads only for it.
+ALWAYS_LOADED_BUDGET = {"lean": 1150, "puffin": 1325, "hack": 1100}
+LEAN_CORE_BEFORE = 595  # the lean core's words before its role-only lines moved into the role skills
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][\w-]*)\}")
 
 
@@ -116,3 +121,50 @@ def test_every_shipped_skill_has_a_skill_md_with_its_name_and_a_description(name
 def test_the_starter_set_is_every_shipped_skill_beside_the_role_skills():
     assert set(guards.STARTER_SKILLS) == set(shipped_skills()) - set(cli.ROLE_SKILLS) - {cli.SETUP_SKILL}
     assert len(guards.STARTER_SKILLS) == 10
+
+
+def skill_description(name: str) -> str:
+    return re.search(r"^description: (.*)$", (SKILLS / name / "SKILL.md").read_text(), re.M)[1]
+
+
+def pointer_line() -> str:
+    """The line setup adds at the end of CLAUDE.md beside `@.colony/core.md`."""
+    return re.search(r"``( This repo runs .*?) ``", cli.package_file("prompts", "setup.md"))[1]
+
+
+@pytest.mark.parametrize("preset", sorted(ALWAYS_LOADED_BUDGET))
+def test_the_always_loaded_words_stay_under_the_budget(preset):
+    words = len((PRESETS / preset / "core.md").read_text().split()) + len(pointer_line().split()) + 2
+    words += sum(len(skill_description(name).split()) for name in shipped_skills())
+    assert words <= ALWAYS_LOADED_BUDGET[preset], words
+
+
+def test_the_lean_core_is_a_third_shorter_than_before_its_role_lines_moved():
+    assert len((PRESETS / "lean" / "core.md").read_text().split()) <= LEAN_CORE_BEFORE * 2 // 3
+
+
+@pytest.mark.parametrize("preset", ["lean", "puffin"])
+def test_each_core_leaves_the_lines_one_role_uses_to_that_roles_skill(preset):
+    core = (PRESETS / preset / "core.md").read_text()
+    for line in ("colony wait", "A builder talks only to its lead", "The lead answers first", "conversation.md",
+                 "What to open for a task", "Add no shim"):
+        assert line not in core, line
+    builder = (SKILLS / "colony-builder" / "SKILL.md").read_text()
+    lead = (SKILLS / "colony-lead" / "SKILL.md").read_text()
+    for line in ("run_in_background", "Run the fast check before you end a turn", "existing helper",
+                 "one concern", "You talk only to your lead", "`testing.md`", "`security-and-privacy.md`",
+                 "Update the docs that describe a behavior"):
+        assert line in builder, line
+    for line in ("run_in_background", "Only you talk with the person", "`.colony/rules/conversation.md`",
+                 "Update the docs that describe a behavior", "docs-life-cycle.md"):
+        assert line in lead, line
+
+
+@pytest.mark.parametrize("path", sorted((PRESETS / "puffin" / "essentials").glob("*.md")), ids=lambda path: path.stem)
+def test_each_puffin_essentials_file_holds_the_shim_line_the_core_gave_up(path):
+    assert "You must add no shim before the first release to users" in path.read_text()
+
+
+def test_the_docs_life_cycle_rule_loads_only_for_the_vault():
+    front = re.match(r"---\n(.*?)\n---\n", (KNOWLEDGE_RULES / "docs-life-cycle.md").read_text(), re.S)[1]
+    assert front.split("paths:\n", 1)[1].splitlines() == ['  - "**/{knowledge}/**"']

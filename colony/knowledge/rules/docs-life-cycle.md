@@ -1,12 +1,11 @@
 ---
 type: rule
 created: 2026-11-05
-description: Where the vault's pages enter the software life cycle, from the research and specs before a card to the living specs and wiki changed with the code and the one docs commit of each batch. Read before planning a FEATURE, changing a capability's code, or closing a batch.
+description: Where the vault's pages enter the software life cycle, from the research and specs before a card to the living specs and wiki changed with the code and the one docs commit of each batch. The lead reads it before planning a FEATURE or closing a batch, and it loads for every vault page.
 assisted-by: claude-code:claude-fable-5
 enforced-by: colony check-docs for links, types, and the living spec cap, human review in the pull request
 paths:
   - "**/{knowledge}/**"
-  - "**/{apps}/**"
 ---
 
 # Docs life cycle

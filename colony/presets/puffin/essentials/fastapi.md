@@ -22,6 +22,7 @@ This is the service, `{service}`: Python with FastAPI, Pydantic, SQLAlchemy, and
 10. You must parse every outside or stored JSON value through its Pydantic model or a `TypeAdapter`, never a cast. (`coding.md`, Async and requests)
 11. You must give a model call that reads outside text no tool that writes, sends, or deletes, must hand it outside text only as a labeled tool result, and must build instructions only from the one prompt module. (`security-and-privacy.md`, Model calls and outside text)
 12. You must give a bug fix or new logic a test that fails without the change. (`testing.md`, In both apps)
+13. You must add no shim before the first release to users, such as a redirect, a re-export, an alias, or a fallback reader for an old shape, and must change every caller instead and delete the old name. (`design-principles.md`)
 
 ## Facts the code does not show
 
