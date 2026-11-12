@@ -468,8 +468,11 @@ def catch_up(repo: str, state: dict, me: Session) -> None:
                 if signed and signed[1].lower() in me.names:
                     answered.add(card)
                 elif line in starts and card not in answered:
+                    key = f"{comment['id']}:{line}"
+                    if key in state.setdefault("seen", []):
+                        return  # the prompt hook or an earlier wait already showed it
                     entry = unread_entry(repo, comment, card, line)
-                    state.setdefault("seen", []).append(f"{comment['id']}:{line}")
+                    state["seen"].append(key)
                     state["pending"].append([unread_text(entry), True])
                     state["unread"].append(entry)
                     state["listed"].append(unread_text(entry))
@@ -586,7 +589,10 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     clock = clock or CLOCK
     path = state_path(project, state_name(me.name))
     state = read_json(path, {})
-    first = "since" not in state
+    # The prompt hook writes `since` when a helper gets its first prompt, before its first wait, so the wait marks
+    # its own catch-up, per Claude Code session: a session that takes over a builder's name catches up too.
+    session_id = os.environ.get(cli.CLAUDE_SESSION_ENV) or "once"
+    first = state.get("caught_up") != session_id
     state.setdefault("since", (datetime.now(timezone.utc) - LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
     state.setdefault("pending", [])
     state.setdefault("unread", [])
@@ -594,6 +600,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     if first and me.name != cli.LEAD:
         try:
             catch_up(repo, state, me)
+            state["caught_up"] = session_id
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             print(f"{cli.NAME} wait: could not look back for an older start line, reading the last hour only: {e}",
                   file=sys.stderr)

@@ -215,6 +215,29 @@ def test_only_the_first_wait_looks_back_and_a_caught_up_line_never_prints_twice(
     assert len(gh.catchups()) == 1
 
 
+def test_a_helpers_first_wait_catches_up_after_the_prompt_hook_wrote_its_state(gh, capsys, monkeypatch, tmp_path):
+    # The prompt hook reads the last hour at the helper's first prompt, so `since` is on file before its first wait.
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [], "hook_polled_at": 1.0}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#12 for builder-1: start: this card (from lead)\n"
+
+
+def test_a_start_line_the_prompt_hook_already_showed_is_not_caught_up_again(gh, capsys, monkeypatch, tmp_path):
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [],
+                                      "seen": ["3:for builder-1: start: this card (from lead)"]}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    gh.answer(ok(comment(5, "for builder-1: take #9 next (from lead)", issue=9)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
+
+
 def test_the_leads_first_wait_never_looks_back(gh, capsys, monkeypatch):
     gh.answer(ok(comment(1, "for lead: question: which card? (from builder-1)")))
     run_as("lead", capsys, monkeypatch)
