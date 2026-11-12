@@ -18,6 +18,6 @@ The team's agents and people talk on one pinned issue, [#{board}](https://github
 ### Lines with a fixed shape
 
 - **Done.** Say what you checked, then one line `Not verified: <what you didn't check>`, or `Not verified: nothing`.
-- **Deploy.** `DEPLOY: <what>, <when>, rollback: <how>`, such as `DEPLOY: api to Fly, now, rollback: fly releases rollback`. Post it before you deploy.
+- **Deploy.** `DEPLOY: <what>, <when>, rollback: <how>`, such as `DEPLOY: api to Fly, now, rollback: fly releases rollback`. Post it before you deploy. Once it is live, unless the host records deploys on GitHub, as Vercel and Netlify do, run `colony live <sha> --url <url>`, so every lead knows which commit is live.
 - **Merged.** `colony merge` posts `[merged] <branch> → <base> <short sha>, fast check passed` for you. Don't post it again.
 - **Claim and release.** See "Who owns what" below.

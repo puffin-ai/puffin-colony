@@ -52,7 +52,7 @@ BATCH = [99]  # a batch running on another card, so DIGEST_LINE's done waits for
 def comment(id, body, updated="2026-11-05T10:00:00Z", issue=7, login="ana-gh"):
     """One issue comment as GitHub's REST API answers it. Agents post through their person's login."""
     return {"id": id, "issue_url": f"https://api.github.com/repos/acme/demo/issues/{issue}", "body": body,
-            "updated_at": updated, "user": {"login": login}}
+            "updated_at": updated, "user": {"login": login}, "author_association": "COLLABORATOR"}
 
 
 def ok(*comments, etag='W/"e1"'):
@@ -213,6 +213,29 @@ def test_only_the_first_wait_looks_back_and_a_caught_up_line_never_prints_twice(
     code, out, _ = run_as("builder-1", capsys, monkeypatch)
     assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
     assert len(gh.catchups()) == 1
+
+
+def test_a_helpers_first_wait_catches_up_after_the_prompt_hook_wrote_its_state(gh, capsys, monkeypatch, tmp_path):
+    # The prompt hook reads the last hour at the helper's first prompt, so `since` is on file before its first wait.
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [], "hook_polled_at": 1.0}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#12 for builder-1: start: this card (from lead)\n"
+
+
+def test_a_start_line_the_prompt_hook_already_showed_is_not_caught_up_again(gh, capsys, monkeypatch, tmp_path):
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [],
+                                      "seen": ["3:for builder-1: start: this card (from lead)"]}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    gh.answer(ok(comment(5, "for builder-1: take #9 next (from lead)", issue=9)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
 
 
 def test_the_leads_first_wait_never_looks_back(gh, capsys, monkeypatch):
@@ -445,16 +468,16 @@ def test_say_posts_a_line_for_another_lead_on_the_coordination_issue(gh, tmp_pat
 
 @pytest.mark.parametrize("session, to, why", [
     ("builder-1", "sam-lead", "say is for leads"),
-    ("lead", "sam", "another lead's name"),
+    ("lead", "sam", "say is for another lead.*use colony post sam"),
     ("lead", "ana-lead", "another lead's name"),
 ])
 def test_say_is_for_a_lead_and_names_another_lead(gh, monkeypatch, session, to, why):
     monkeypatch.setenv("COLONY_SESSION", session)
     with pytest.raises(cli.ColonyError, match=why):
         wait.say(CONFIG, Namespace(person=None, to=to, sentence="hello"))
-    with pytest.raises(cli.ColonyError, match="under 300 characters"):
+    with pytest.raises(cli.ColonyError, match="at most 300 characters"):
         monkeypatch.setenv("COLONY_SESSION", "lead")
-        wait.say(CONFIG, Namespace(person=None, to="sam-lead", sentence="word " * 60))
+        wait.say(CONFIG, Namespace(person=None, to="sam-lead", sentence="word " * 61))
     assert gh.calls() == []
 
 
@@ -623,3 +646,70 @@ def test_a_line_between_leads_waits_for_the_digest_unless_it_is_urgent(gh, monke
     assert hurried == "for ana-web-lead: urgent: builder-7 waits on your API (from ana-main-lead)"
     web = wait.Session(cli.LEAD, frozenset({"ana-web-lead"}))
     assert wait.taken(calm, web, "5") == [(calm, False)] and wait.taken(hurried, web, "5") == [(hurried, True)]
+
+
+def test_a_newer_wait_for_the_same_session_makes_the_older_one_stop(gh, monkeypatch, capsys):
+    me = wait.Session(name="builder-2", names=frozenset({"builder-2"}), leads=frozenset({"lead"}))
+
+    def a_second_wait_starts(repo, state, session):
+        wait.write_json(wait.state_path("demo", "builder-2-listener"), {"pid": -1, "token": "newer"})
+        state["pending"].append(["for builder-2: start: card 4 (from lead)", True])
+        return False
+    monkeypatch.setattr(wait, "poll", a_second_wait_starts)
+    assert wait.wait("acme/demo", "demo", me, clock=Clock()) == 0
+    out = capsys.readouterr().out
+    assert out == "colony wait: a newer colony wait for builder-2 runs, so this one stopped: start no other\n"
+    assert not wait.state_path("demo", "builder-2").exists()  # the newer wait reads the line itself
+
+
+def test_a_mention_in_a_line_for_another_session_wakes_no_lead():
+    ana = wait.Session("lead", frozenset({"lead", "ana-main-lead"}), logins=frozenset({"ana"}))
+    assert wait.taken("[Sam's Claude] @ana can you take the export? (from sam-main-lead)", ana, "")
+    assert wait.taken("@all main is green (from sam-main-lead)", ana, "")
+    assert not wait.taken("for builder-1: start: the form, then tell @ana on the board (from sam-main-lead)", ana, "")
+    assert not wait.taken("for sam-main-lead: question: should I ask @ana first? (from builder-1)", ana, "")
+
+
+def test_post_all_means_at_all_and_say_to_a_helper_points_to_post(gh, monkeypatch, capsys):
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    assert wait.post(CONFIG, Namespace(person=None, card=41, to="all", sentence="main is red", urgent=False)) == 0
+    assert "@all main is red" in capsys.readouterr().out
+    with pytest.raises(cli.ColonyError, match="for one of your helpers, use colony post builder-2"):
+        wait.say(CONFIG, Namespace(person=None, to="builder-2", sentence="hello"))
+
+
+def test_sessions_on_one_computer_share_one_read_of_the_board(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(wait, "SHARED_POLL", True)
+    reads = []
+    page = [comment(1, "for builder-1: start: the form (from lead)", "2026-11-05T10:00:01Z"),
+            comment(2, "for builder-2: start: the export (from lead)", "2026-11-05T10:00:02Z")]
+
+    def gh_get(path, etag):
+        reads.append(path)
+        return 200, 'W/"e1"', page
+    monkeypatch.setattr(wait, "gh_get", gh_get)
+    one, two = ({"since": "2026-11-05T09:00:00Z", "pending": []} for _ in range(2))
+    wait.poll("acme/demo", one, wait.Session("builder-1", frozenset({"builder-1"})))
+    wait.poll("acme/demo", two, wait.Session("builder-2", frozenset({"builder-2"})))
+    assert len(reads) == 1  # the second session read what the first one fetched
+    assert [line for line, _ in one["pending"]] == ["#7 for builder-1: start: the form (from lead)"]
+    assert [line for line, _ in two["pending"]] == ["#7 for builder-2: start: the export (from lead)"]
+
+
+def test_a_rate_limited_read_waits_for_githubs_reset_and_never_gives_up(gh, monkeypatch, capsys):
+    calls = []
+
+    def poll(repo, state, me):
+        calls.append(1)
+        if len(calls) <= 3:
+            raise wait.RateLimited("GitHub's rate limit", 120)
+        state["pending"].append(["for builder-1: start: the form (from lead)", True])
+        return False
+    monkeypatch.setattr(wait, "poll", poll)
+    monkeypatch.setattr(wait, "GIVE_UP", 2)
+    clock = Clock()
+    me = wait.Session("builder-1", frozenset({"builder-1"}))
+    assert wait.wait("acme/demo", "demo", me, clock=clock) == 0
+    assert clock.naps.count(120) == 3
+    assert capsys.readouterr().err.count("GitHub's rate limit") == 1

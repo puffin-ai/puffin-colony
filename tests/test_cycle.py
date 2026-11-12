@@ -497,6 +497,30 @@ def items_answer(*cards):
 NOW = datetime(2026, 11, 5, 13, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def no_running_sessions(monkeypatch):
+    """No Colony session runs, so no stale line asks the real `claude agents`."""
+    monkeypatch.setattr(cli, "running_sessions", lambda config: [])
+
+
+def test_a_stale_helper_blocked_on_a_prompt_names_the_attach_command(gh, monkeypatch, tmp_path):  # noqa: F811
+    work = str(tmp_path / "work")
+    monkeypatch.setattr(cli, "running_sessions", lambda config: [
+        {"id": "aa11", "name": "demo-builder-2", "state": "blocked", "config_dir": "~/.claude"},
+        {"id": "bb22", "name": "demo-builder-3", "state": "blocked", "config_dir": work},
+        {"id": "cc33", "name": "demo-builder-4", "state": "working", "config_dir": "~/.claude"}])
+    gh.answer("project list", LISTED)
+    gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 09:00 UTC", "builder-2"),
+                                          (13, "In progress", "2026-11-05 09:00 UTC", "Builder-3"),
+                                          (14, "In progress", "2026-11-05 09:00 UTC", "builder-4")))
+    assert cycle.stale_lines(CONFIG, NOW) == [
+        "#12 stale: builder-2 waits on a prompt in its background session, with no update since 2026-11-05 09:00 UTC;"
+        " answer it with `claude attach aa11`",
+        "#13 stale: Builder-3 waits on a prompt in its background session, with no update since 2026-11-05 09:00 UTC;"
+        f" answer it with `CLAUDE_CONFIG_DIR={work} claude attach bb22`",
+        "#14 stale: builder-4 shows no update since 2026-11-05 09:00 UTC; check its session"]
+
+
 def test_a_card_in_progress_with_no_update_for_2_5_hours_is_stale_once(gh):  # noqa: F811
     gh.answer("project list", LISTED)
     gh.answer("items(first", items_answer((12, "In progress", "2026-11-05 10:29 UTC", "builder-2"),
@@ -546,15 +570,17 @@ def test_the_stale_hours_come_from_the_config(gh):  # noqa: F811
 
 def test_the_retro_prompt_is_filled_in_for_the_batch():
     config = {**CONFIG, "project": {**CONFIG["project"], "fast_check": "make fast"},
-              "gate": {"rules": [".colony/rules/*.md", "CLAUDE.md"]}}
+              "gate": {"rules": [".colony/core.md", ".colony/rules/*.md", "CLAUDE.md", "apps/web/AGENTS.md", "docs/*.md"]}}
     prompt = cycle.retro_prompt(config, "2026-11-05", Path("/r/reports"), Path("/w/demo-retro"),
                                 "demo/retro-2026-11-05", Path("/w/demo-retro/retro.md"), "Assisted-by: x")
     assert "{" not in prompt and "}" not in prompt
     for text in ("Batch 2026-11-05", str(Path("/r/reports")), f"{Path('/w/demo-retro')}, on branch demo/retro-2026-11-05",
-                 "`.colony/rules/*.md`, `CLAUDE.md`", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
+                 "the file of `.colony/rules/*.md`, `docs/*.md` it belongs", "(`make check`)", "Run `make fast`", "`Assisted-by: x`",
                  f"Write {Path('/w/demo-retro/retro.md')}", "`lessons: N`", "rule line plus a check", "decision",
                  "never as a note alone"):
         assert text in prompt, text
+    # The core, CLAUDE.md and AGENTS.md are only the person's to change: a lesson for one is a decision.
+    assert "`.colony/core.md`, `CLAUDE.md` and `AGENTS.md`, which only the person asks for and reviews" in prompt
 
 
 def test_retro_dry_run_finds_the_reports_and_prints_the_plan_and_prompt(repo, tmp_path, capsys, monkeypatch):

@@ -34,6 +34,8 @@ DISPLAY = "Puffin Colony"
 DIR = f".{NAME}"  # the folder a host repo keeps Colony's files in: the config, rules, playbook and reports
 CONFIG_NAME = f"{NAME}.toml"
 SESSION_ENV, PERSON_ENV = f"{NAME.upper()}_SESSION", f"{NAME.upper()}_PERSON"
+CLAUDE_SESSION_ENV = "CLAUDE_CODE_SESSION_ID"  # Claude Code gives each command and hook its session's id
+CLAUDE_SESSION_ID = re.compile(r"[A-Za-z0-9-]{1,100}")
 LEAD = "lead"
 LEAD_PROMPT = "Run `colony` and do what it prints, then read {dir}/playbook.md, {section} section, and start."
 BUILDER_PROMPT = "Read {dir}/playbook.md, {section} section. You are {builder}. Start the wait."
@@ -157,6 +159,8 @@ def load_config(path=None) -> dict:
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = portable.native(os.path.expanduser(project[key]))
+    if project.get("worktrees") and not os.path.isabs(project["worktrees"]):  # such as "../worktrees", from the clone
+        project["worktrees"] = portable.native(os.path.normpath(path.resolve().parent.parent / project["worktrees"]))
     return config
 
 
@@ -177,6 +181,58 @@ def _state(config_dir: str) -> dict:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+MCP_ANSWERS = ("enabledMcpjsonServers", "disabledMcpjsonServers")  # where Claude Code keeps each .mcp.json answer
+
+
+def mcp_servers(root: Path) -> list[str]:
+    """The server names in the repo's .mcp.json, or none when it is missing or unreadable."""
+    try:
+        data = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return list(servers) if isinstance(servers, dict) else []
+
+
+def unanswered_mcp(config_dir: str, root: str, windows: bool = portable.WINDOWS) -> list[str]:
+    """The repo's .mcp.json servers Claude Code would still ask about in a session on this account in `root`, a
+    question a background session waits on where nobody sees it. A server is answered when one of these says so: the
+    repo's project entry in the account's state file, the repo's .claude/settings.local.json (written when the person
+    answers once) or .claude/settings.json, or the account's settings.json, with enableAllProjectMcpServers, or the
+    server's name in enabledMcpjsonServers or disabledMcpjsonServers. Nothing here changes a setting."""
+    servers = mcp_servers(Path(root))
+    if not servers:
+        return []
+    projects = _state(config_dir).get("projects")
+    sources = [entry for key, entry in projects.items() if portable.same_path(key, root, windows)] \
+        if isinstance(projects, dict) else []
+    for path in (Path(root, ".claude", "settings.local.json"), Path(root, ".claude", "settings.json"),
+                 Path(config_dir).expanduser() / "settings.json"):
+        try:
+            sources.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    answered: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if source.get("enableAllProjectMcpServers") is True:
+            return []
+        for key in MCP_ANSWERS:
+            names = source.get(key)
+            if isinstance(names, list):
+                answered.update(name for name in names if isinstance(name, str))
+    return [name for name in servers if name not in answered]
+
+
+def mcp_step(unanswered: list[str], root: str, account: str, config_dir: str) -> str:
+    """The one-time step that answers Claude Code's .mcp.json question for an account, which the person takes."""
+    claude = "claude" if is_default_dir(config_dir) else f"CLAUDE_CONFIG_DIR={config_dir} claude"
+    return (f"a background session would wait unseen on Claude Code's one-time question about this repo's .mcp.json "
+            f"servers ({', '.join(unanswered)}). Answer it once: run `{claude}` in {root} for account {account}, "
+            f"pick an answer, close it, then run this again. Colony changes no setting for you")
 
 
 def signed_in(config_dir: str) -> bool:
@@ -474,8 +530,9 @@ def session_settings(config: dict, env: dict[str, str], masked: bool = False) ->
     shows the env's names alone, for a dry run."""
     base = config["project"]["base"]
     worktrees = Path(config["project"].get("worktrees", "")).expanduser() if config["project"].get("worktrees") else None
+    # Only the worktrees folder, where the playbook puts every worktree: never the folder the clone sits in, which
+    # can hold the person's private folders, such as their Desktop.
     folders = [str(worktrees)] if worktrees else []
-    folders.append(str(repo_root().parent))  # the playbook's ../<name>-<n> worktrees sit beside the clone
     settings = {
         "env": {key: "…" if masked else value for key, value in env.items() if key != "CLAUDE_CONFIG_DIR"},
         "permissions": {"allow": list(ROUTINE),
@@ -534,8 +591,9 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     background.
 
     A background session runs under Remote Control, so the person follows it in the Claude app, or with
-    `claude attach`. A dry run prints the command, the env names (never their values) and where it would
-    open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
+    `claude attach`. A background session stops before it opens when Claude Code would first ask the account about
+    the repo's .mcp.json servers, since nobody would see that question (unanswered_mcp). A dry run prints the command,
+    the env names (never their values) and where it would open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
     session is a helper of one lead: the lead `colony join` picked, else the lead that runs the command ($COLONY_LEAD).
     """
     from colony.wait import LEAD_ENV
@@ -552,12 +610,17 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     mode = where_to_open(args)
     where = {"cmux": f"a new cmux workspace at {root}", "terminal": f"this terminal at {root}",
              "background": f"a background session at {root}; follow it in the Claude app or with `claude attach`"}[mode]
+    unanswered = unanswered_mcp(config_dir, root) if mode == "background" else []
     if args.dry_run:
         print("command:", shlex.join(argv))
         print("env:", " ".join(env))
         print(f"dry run: {title} on account {account}, in {where}")
         print(f"why: {why}")
+        if unanswered:
+            print(f"would stop: {mcp_step(unanswered, root, account, config_dir)}")
         return 0
+    if unanswered:
+        raise ColonyError(f"{title} not opened: {mcp_step(unanswered, root, account, config_dir)}")
     if shutil.which("claude") is None:
         raise ColonyError("claude is not on PATH")
     print(f"Opening {title} on account {account}, in {where}. Why: {why}.", flush=True)
@@ -660,10 +723,15 @@ def current_account(config: dict) -> str:
     """The account this process runs on: the one whose folder is $CLAUDE_CONFIG_DIR, or the default folder's when it
     is unset, else the folder's own name."""
     folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
-    for name, account in config.get("accounts", {}).items():
-        if (is_default_dir(account["config_dir"]) and not folder) or (
-                folder and Path(account["config_dir"]).expanduser() == Path(folder).expanduser()):
-            return name
+    found = [name for name, account in config.get("accounts", {}).items()
+             if (is_default_dir(account["config_dir"]) and not folder) or (
+                 folder and Path(account["config_dir"]).expanduser() == Path(folder).expanduser())]
+    # Two people can share a settings folder, such as ~/.claude on a team's computer: then this session's person,
+    # $COLONY_PERSON, picks between them, so a lead is never labeled with the other person's account.
+    person = os.environ.get(PERSON_ENV, "").lower()
+    mine = [name for name in found if str(config["accounts"][name].get("person", "")).lower() == person]
+    if mine or found:
+        return (mine or found)[0]
     return Path(folder).name if folder else "default"
 
 
@@ -681,6 +749,50 @@ def lead_line(config: dict) -> str:
         lines.append(f"lead: {name} on account {held.get('account', 'unknown')}, heartbeat {age} ago" if wait.fresh(held)
                      else f"lead: none running as {name} on this computer (its heartbeat is {age} old)")
     return "\n".join(lines) or "lead: none running on this computer (no heartbeat)"
+
+
+def identity_path(session: str) -> Path:
+    """Where a Claude Code session's Colony identity is kept: ~/.colony/sessions/<its id>.json."""
+    return Path.home() / f".{NAME}" / "sessions" / f"{session}.json"
+
+
+def remember_identity(*pairs: tuple[str, str]) -> bool:
+    """Keep this session's identity, its $COLONY_SESSION, $COLONY_LEAD, $COLONY_PERSON and token, in a file only its
+    owner reads, named after the Claude Code session ($CLAUDE_CODE_SESSION_ID), so its later commands and hooks
+    load it (load_identity) and no command carries the token. False outside a Claude Code session that names
+    itself, where the env line stays the way."""
+    session = os.environ.get(CLAUDE_SESSION_ENV, "")
+    if not CLAUDE_SESSION_ID.fullmatch(session):
+        return False
+    path = identity_path(session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(f".{path.name}.{os.getpid()}")
+    with os.fdopen(os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as held:
+        json.dump({key: value for key, value in pairs if value}, held)
+    os.replace(part, path)
+    return True
+
+
+def load_identity() -> None:
+    """Put this Claude Code session's saved identity (remember_identity) into the environment, under any value the
+    environment already holds, which wins."""
+    session = os.environ.get(CLAUDE_SESSION_ENV, "")
+    if not CLAUDE_SESSION_ID.fullmatch(session):
+        return
+    try:
+        held = json.loads(identity_path(session).read_text())
+    except (OSError, ValueError):
+        return
+    for key, value in held.items() if isinstance(held, dict) else ():
+        if key.startswith(f"{NAME.upper()}_") and isinstance(value, str):
+            os.environ.setdefault(key, value)
+
+
+def identity_note(*pairs: tuple[str, str]) -> str:
+    """How this session runs its commands as itself: kept for its Claude Code session, or the env line to put first."""
+    if remember_identity(*pairs):
+        return f"this Claude Code session keeps who it is, so run {NAME} commands as they are, with no env before them"
+    return f"start every {NAME} command with `{env_line(*pairs)}`"
 
 
 def env_line(*pairs: tuple[str, str]) -> str:
@@ -731,12 +843,16 @@ def rename_line(name: str) -> str:
     return RENAME.replace("{name}", name)
 
 
-def lead_env(config: dict, args, name: str, token: str) -> str:
-    """The env line a claimed lead starts every colony command with."""
+def lead_pairs(config: dict, args, name: str, token: str) -> list[tuple[str, str]]:
+    """A claimed lead's identity: its session, name, person and token."""
     from colony import wait
 
-    return env_line((SESSION_ENV, LEAD), (wait.LEAD_ENV, name), (PERSON_ENV, person_of(config, args)),
-                    (wait.TOKEN_ENV, token))
+    return [(SESSION_ENV, LEAD), (wait.LEAD_ENV, name), (PERSON_ENV, person_of(config, args)), (wait.TOKEN_ENV, token)]
+
+
+def lead_env(config: dict, args, name: str, token: str) -> str:
+    """The env line a claimed lead starts every colony command with."""
+    return env_line(*lead_pairs(config, args, name, token))
 
 
 def claim(config: dict, args) -> int:
@@ -744,6 +860,8 @@ def claim(config: dict, args) -> int:
     which no other live lead holds. No folders: the rest of the repo."""
     from colony import presence
 
+    if getattr(args, "add", False) or getattr(args, "release", False):
+        return change_claim(config, args, [args.stream, *args.folders])
     name, token = claim_lead(config, args, args.stream, args.folders)
     if not token:
         over = ", ".join(map(presence.folder, args.folders)) or "the rest of the repo"
@@ -751,9 +869,57 @@ def claim(config: dict, args) -> int:
         return 0
     print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
     print(rename_line(name))
-    print(f"Start every {NAME} command with `{lead_env(config, args, name, token)}`, and start `{NAME} wait` in the "
+    print(f"{identity_note(*lead_pairs(config, args, name, token)).capitalize()}, and start `{NAME} wait` in the "
           "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
           f"{DIR}/{presence.LEADS_FILE} with your next change.")
+    return 0
+
+
+def change_claim(config: dict, args, paths: list[str]) -> int:
+    """`colony claim --add|--release <path> ...`: the lead this session holds takes more paths, which no other live
+    lead holds, or gives some back, and its status comment and the other leads hear it at once: on the board in hack
+    mode, on the coordination issue in startup mode; solo mode has one person. A lead keeps at least one path, since
+    none would mean the rest of the repo."""
+    from colony import presence, transport, wait
+
+    name = os.environ.get(wait.LEAD_ENV, "").lower()
+    if not name:
+        raise ColonyError(f"claim --add and --release change the lead this session holds: first claim one, `{NAME} "
+                          "claim <stream> <path> ...`")
+    paths = list(dict.fromkeys(presence.folder(path) for path in paths))
+    leads = presence.registry()
+    held = [str(path) for path in leads.get(name, {}).get("folders", [])]
+    if args.add:
+        alive, _, note = presence.everyone(config)
+        if note:
+            print(note, file=sys.stderr)
+        clash = [f"{mine} overlaps {theirs} of {lead}" for lead, owned in presence.held_by_others(alive, name).items()
+                 for mine in paths for theirs in owned if presence.overlaps(mine, theirs)]
+        if clash:
+            raise ColonyError(f"another live lead holds those paths: {'; '.join(clash)}. Ask its owner on the board")
+        held, line = list(dict.fromkeys([*held, *paths])), f"taking {', '.join(paths)}: ask {name} before you edit them"
+    else:
+        kept = [path for path in held if path not in paths]
+        if not kept:
+            raise ColonyError(f"a lead holds at least one path, and {name} would hold none: release fewer")
+        held, line = kept, f"{', '.join(path for path in paths if path not in kept)} released"
+    leads[name] = {"person": leads.get(name, {}).get("person") or person_of(config, args), "folders": held}
+    presence.write_registry(leads)
+    print(f"{name} holds {', '.join(held)}.")
+    path = wait.state_path(config["project"]["name"], f"{name}-status")
+    state = wait.read_json(path, {})
+    state = state if isinstance(state, dict) else {}
+    state.pop("status_at", None)  # other leads see the change now, not at the next 5-minute edit
+    try:
+        presence.keep(config, presence.mine(config, args, name, "lead"), state)
+        wait.write_json(path, state)
+    except (ColonyError, OSError, ValueError, KeyError) as e:
+        print(f"{NAME}: the status comment shows it at the next `{NAME} wait`: {e}", file=sys.stderr)
+    if mode(config) != "solo":  # other people's leads hear it: on the board, or the coordination issue
+        try:
+            transport.send(config, f"@{wait.ALL}", f"@{wait.ALL} {line}")
+        except ColonyError as e:
+            print(f"{NAME}: the other leads didn't hear it: {e}", file=sys.stderr)
     return 0
 
 
@@ -810,7 +976,7 @@ def here(args) -> int:
             return 0
         print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
         print(rename_line(name))
-        print(f"Next: start every {NAME} command with `{lead_env(config, args, name, token)}`, start `{NAME} wait` in "
+        print(f"Next: {identity_note(*lead_pairs(config, args, name, token))}; start `{NAME} wait` in "
               "the background within 2 minutes, load the colony-lead skill, and ask the person what they want.")
         return 0
     held = sorted({folder for status in leads for folder in status.folders})
@@ -823,6 +989,40 @@ def here(args) -> int:
           + (f", avoiding {', '.join(held)}" if held else "")
           + f". It names this lead {person.lower()}-<stream>-lead and prints the env line every command starts with.")
     return 0
+
+
+def fix_links(args) -> int:
+    """`colony fix-links`: on Windows, turn on git's core.symlinks and turn every symbolic link git wrote as a plain
+    text file back into a link, in the repo and all its worktrees, then print the counts. It replaces only an untouched
+    stub, whose text is exactly its target, and keeps and names an edited one. On macOS and Linux it does nothing."""
+    if not portable.WINDOWS:
+        print(f"{NAME} fix-links: nothing to do, since git makes real links on this system.")
+        return 0
+    root = repo_root()
+    if not portable.can_symlink():
+        raise ColonyError(f"this computer can't make symbolic links: {portable.DEVELOPER_MODE}, then run "
+                          f"`{portable.FIX_LINKS}` again. Nothing changed.")
+    if args.dry_run:
+        print(f"Would turn on core.symlinks in {root} and restore the plain-file links in its "
+              f"{len(portable.checkouts(root))} checkouts. Nothing ran.")
+        return 0
+    report = portable.repair_links(root)
+    print(f"core.symlinks is on. Restored {report['restored']} links in {report['checkouts']} checkouts; "
+          f"{report['already']} were links already, {report['missing']} missing.")
+    if report["edited"]:
+        print(f"Kept {len(report['edited'])} edited, since their text is no longer the link's target:")
+        for path in report["edited"]:
+            print(f"- {path}")
+    return 0
+
+
+def warn_links() -> None:
+    """Say in one line when this repo's symbolic links are plain text files on Windows, and how to fix it. Quiet
+    outside a git checkout, and on macOS and Linux."""
+    top = _out(["git", "rev-parse", "--show-toplevel"])
+    note = portable.links_note(Path(top)) if top else ""
+    if note:
+        print(note, file=sys.stderr)
 
 
 def skill_install(args) -> int:
@@ -1137,6 +1337,21 @@ def running_sessions(config: dict) -> list[dict]:
     return found
 
 
+def blocked_sessions(config: dict) -> dict[str, dict]:
+    """Each running Colony session `claude agents` lists as blocked, which waits on a prompt nobody sees, by its
+    session name without the `<project>-`, in lower case, such as builder-1."""
+    prefix = f"{config['project']['name']}-"
+    return {agent["name"][len(prefix):].lower(): agent for agent in running_sessions(config)
+            if agent.get("state") == "blocked"}
+
+
+def attach_text(agent: dict) -> str:
+    """The command that attaches to a running session on its own account."""
+    if is_default_dir(agent["config_dir"]):
+        return f"claude attach {agent['id']}"
+    return f"CLAUDE_CONFIG_DIR={agent['config_dir']} claude attach {agent['id']}"
+
+
 def view_commands(config: dict) -> list[list[str]]:
     """One cmux command per running Colony session: a workspace that attaches to it on its own account."""
     commands = []
@@ -1305,11 +1520,11 @@ def join(config: dict, args) -> int:
             wait.write_json(wait.state_path(config["project"]["name"], f"{name}-status"), state)
         except (ColonyError, OSError, ValueError, KeyError) as e:
             print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
-        env = env_line((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
+        how = identity_note((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
         tell_lead_joined(config, args.lead_name, name)
         print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
         print(rename_line(name))
-        print(f"Next: start every {NAME} command with `{env}`, start `{NAME} wait` in the background now, which tells "
+        print(f"Next: {how}; start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
               f"{section(config, 'Builder')} section. Never ask the person anything: your lead gives you cards.")
         return 0
@@ -1415,10 +1630,20 @@ def take(config: dict, args) -> int:
                               f"{lead}, and take no card in another lead's folders")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
+    start = f"origin/{config['project']['base']}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"origin/{card_branch(args.card)}"],
                       capture_output=True).returncode == 0:
-        print(f"Its images are on origin/{card_branch(args.card)}: start your branch from there, not from the base.")
+        start = f"origin/{card_branch(args.card)}"
+        print(f"Its images are on {start}, so your branch starts there, not from the base.")
+    print("Make its worktree with:\n  " + worktree_command(config, me, args.card, start))
     return 0
+
+
+def worktree_command(config: dict, me: str, card: int, start: str) -> str:
+    """The command that makes a builder's worktree for a card, `<worktrees>/<project>-<me>-<n>` on the branch
+    `<me>/<n>`, with forward slashes, which git takes on every system and Bash keeps as they are."""
+    folder = Path(config["project"]["worktrees"]).expanduser() / f"{config['project']['name']}-{me}-{card}"
+    return f"git fetch origin && git worktree add {shlex.quote(folder.as_posix())} -b {me}/{card} {start}"
 
 
 def batch(config: dict, args) -> int:
@@ -1430,10 +1655,56 @@ def batch(config: dict, args) -> int:
 
 def status(config: dict, args) -> int:
     """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
-    from colony import batch as runner
+    from colony import batch as runner, demo, live
 
+    if line := demo.countdown(config):
+        print(line)
+    if line := live.summary(config, repo_root()):
+        print(line)
     print(lead_line(config))
     return runner.batch_status(config, args)
+
+
+def share_file(config: dict, args) -> int:
+    """Share a file on the colony-shared branch (share.share)."""
+    from colony import share
+
+    return share.share(config, args)
+
+
+def need(config: dict, args) -> int:
+    """Ask another lead for something and track it (share.need)."""
+    from colony import share
+
+    return share.need(config, args)
+
+
+def stop_sessions(config: dict, args) -> int:
+    """Stop this project's Colony sessions on this computer (stop.stop)."""
+    from colony import stop
+
+    return stop.stop(config, args)
+
+
+def handoff(config: dict, args) -> int:
+    """Hand this person's open work to another person's lead (stop.handoff)."""
+    from colony import stop
+
+    return stop.handoff(config, args)
+
+
+def live(config: dict, args) -> int:
+    """Post which commit is live, for a deploy GitHub doesn't record (live.post)."""
+    from colony import live as deploys
+
+    return deploys.post(config, args)
+
+
+def gate(config: dict, args) -> int:
+    """Switch the fast check off or on for colony merge on this computer (merge.gate)."""
+    from colony import merge as merger
+
+    return merger.gate(config, args)
 
 
 def wait(config: dict, args) -> int:
@@ -1441,6 +1712,13 @@ def wait(config: dict, args) -> int:
     from colony import wait as watcher
 
     return watcher.run(config, args)
+
+
+def fast_check(config: dict, args) -> int:
+    """Run a builder's fast check for the areas its branch changes (batch.run_fast_check)."""
+    from colony import batch as runner
+
+    return runner.run_fast_check(config, args)
 
 
 def merge(config: dict, args) -> int:
@@ -1520,8 +1798,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=view)
     p = sub.add_parser("claim", help="this session becomes the lead <person>-<stream>-lead over folders no live lead "
                                      "holds")
-    p.add_argument("stream", help="a short name for this lead's stream of work, such as engine")
-    p.add_argument("folders", nargs="*", metavar="folder", help="the folders it holds; none for the rest of the repo")
+    p.add_argument("stream", help="a short name for this lead's stream of work, such as engine; with --add or "
+                                  "--release, the first path")
+    p.add_argument("folders", nargs="*", metavar="path", help="the folders, with a trailing slash, and files it holds, "
+                                                              "such as web/ or src/app.ts; none for the rest of the repo")
+    p.add_argument("--add", action="store_true", help="the lead this session holds takes these paths too")
+    p.add_argument("--release", action="store_true", help="the lead this session holds gives these paths back")
     p.add_argument("--person", help="whose session this is")
     p.set_defaults(run=claim)
     p = sub.add_parser("image", help="the lead: save a pasted image for a card on its branch card/<n>, for every "
@@ -1571,11 +1853,46 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
 
+    p = sub.add_parser("fast-check", help="a builder: run [project] fast_check for the check areas this branch "
+                                          "changes, and end on a passed, failed or not run line for the done line")
+    p.add_argument("--dry-run", action="store_true", help="print the command and run nothing")
+    p.set_defaults(run=fast_check)
+
     p = sub.add_parser("merge", help="hack mode: merge a branch into the base after a passing fast check, "
                                      "else open its pull request")
-    p.add_argument("branch", help="the branch to land, such as ana/login-form")
+    p.add_argument("branch", nargs="+", help="the branch to land, such as ana/login-form, or several, which land "
+                                             "together with one check")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=merge)
+    p = sub.add_parser("share", help="put a file on the colony-shared branch, which no one merges, and post its link")
+    p.add_argument("file", help="the file to share, such as docs/spec.md")
+    p.add_argument("--to", default="", help="who it is for, such as @ben; @all by default")
+    p.add_argument("--public", action="store_true", help="share it though the repo is public, so anyone can read it")
+    p.set_defaults(run=share_file)
+    p = sub.add_parser("need", help="a lead: ask another lead for something and track it, list the open ones, or "
+                                    "close one")
+    p.add_argument("to", nargs="?", help="the other lead, such as ben-main-lead, or @ben")
+    p.add_argument("what", nargs="*", help="what you need, in one sentence")
+    p.add_argument("--done", metavar="N<n>", help="close an open need, such as N3, and thank the other lead")
+    p.set_defaults(run=need)
+    p = sub.add_parser("stop", help="stop this project's Colony sessions on this computer, never this one, and tell "
+                                    "the board")
+    p.add_argument("names", nargs="*", metavar="name", help="the sessions to stop, such as staff; none for all of them")
+    p.add_argument("--force", action="store_true", help="stop one whose folder holds uncommitted work too")
+    p.set_defaults(run=stop_sessions)
+    p = sub.add_parser("handoff", help="hack mode: hand this person's open work and claimed paths to another person's "
+                                       "lead")
+    p.add_argument("to", metavar="@login", help="the other person's login, such as @ben")
+    p.set_defaults(run=handoff)
+    p = sub.add_parser("live", help="whoever deploys by hand tells every lead which commit is live")
+    p.add_argument("sha", help="the commit you deployed, such as 1a2b3c4")
+    p.add_argument("--url", default="", help="where it is live, such as https://myapp.com")
+    p.set_defaults(run=live)
+    p = sub.add_parser("gate", help="hack mode: the person switches the fast check off or on for colony merge on this "
+                                    "computer, and the board hears it")
+    p.add_argument("state", choices=("off", "on", "status"), help="off (the person, at their own terminal), on, or "
+                                                                  "status to see which")
+    p.set_defaults(run=gate)
 
     p = sub.add_parser("sync", help="merge origin/<base> into a branch; a conflict only in generated files is rebuilt "
                                     "with regen, any other stops it")
@@ -1590,6 +1907,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--print", action="store_true", help="print the setup prompt, and run nothing")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=setup)
+
+    p = sub.add_parser("fix-links", help="Windows: turn on git's core.symlinks and turn the links git wrote as text "
+                                         "files back into links, in the repo and every worktree")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
+    p.set_defaults(run=fix_links)
 
     p = sub.add_parser("skill-install", help=f"copy the {SETUP_SKILL} skill into a Claude settings folder, so a "
                                              "session in any repo can set Colony up")
@@ -1610,14 +1932,17 @@ def main(argv=None) -> int:
     if portable.needs_utf8():
         return portable.relaunch_in_utf8(sys.argv[1:] if argv is None else list(argv))
     args = build_parser().parse_args(argv)
+    load_identity()
     if not getattr(args, "dry_run", False):
         first_run()
     try:
+        if args.command in (None, "join"):
+            warn_links()
         if args.command is None and in_claude_code():
             return here(args)
         if args.command is None and not config_path().exists():
             return setup(args)
-        if args.command in ("tools", "setup", "skill-install"):  # each runs before colony.toml exists
+        if args.command in ("tools", "setup", "skill-install", "fix-links"):  # each runs before colony.toml exists
             return args.run(args)
         config = load_config()
         feature = FEATURES.get(args.command)

@@ -139,6 +139,12 @@ def test_config_is_read_from_the_repo_and_expands_home(home, config):
     assert config["project"]["worktrees"] == str(home / "trees")
 
 
+def test_a_relative_worktrees_folder_starts_from_the_clone_on_every_system(host):
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG.replace('worktrees = "~/trees"', 'worktrees = "../trees"'))
+    assert cli.load_config()["project"]["worktrees"] == str(host.parent / "trees")
+
+
 def test_config_names_a_missing_key(host):
     (host / "colony.toml").write_text(CONFIG.replace('base = "dev"\n', ""))
     with pytest.raises(cli.ColonyError, match="'base'"):
@@ -469,8 +475,8 @@ def test_routine_git_gh_and_colony_commands_never_stop_a_session_to_ask(home, ho
     assert {"Bash(git:*)", "Bash(gh:*)", "Bash(colony:*)"} <= set(permissions["allow"])
     assert {"Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push origin dev:*)"} <= set(
         permissions["deny"])
-    assert str(home / "trees") in permissions["additionalDirectories"]  # worktrees = "~/trees"
-    assert str(host.parent) in permissions["additionalDirectories"]  # the playbook's ../<name>-<n>
+    # Only the worktrees folder: the folder the clone sits in, such as a Desktop of private folders, stays out.
+    assert permissions["additionalDirectories"] == [str(home / "trees")]  # worktrees = "~/trees"
     assert args.index("--settings") < args.index("--permission-mode") < len(args) - 1  # the prompt stays last
 
 
@@ -526,9 +532,9 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "post", "batch", "status", "merge", "sync", "tier",
+COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
-            "tidy", "idea", "card", "release", "setup", "skill-install", "tools")
+            "tidy", "idea", "card", "release", "setup", "fix-links", "skill-install", "tools")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

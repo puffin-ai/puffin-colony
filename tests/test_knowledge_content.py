@@ -37,7 +37,7 @@ PROMPT_PLACEHOLDERS = {
     # Setup fills its own names; the vault's, the presets', the playbook's, the briefs' and the hack templates'
     # placeholders appear as text for the setup session to fill.
     "setup": {"package", "dir", "name", "display"} | PLACEHOLDERS
-             | {"web_app", "service", "fast_check", "checks", "base", "install", "project"}
+             | {"web_app", "service", "fast_check", "checks", "base", "install", "project", "worktrees"}
              | {"repo", "board", "lead", "demo", "team", "owners"},
 }
 
