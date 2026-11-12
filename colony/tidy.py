@@ -3,8 +3,9 @@
 - `colony idea "<one line>"` appends a dated line to the future-work register: `<vault>/future-work.md`, or
   `.colony/future-work.md` where there is no vault (hack and solo). An idea is never an issue.
 - `colony card new "<title>" --body … --size S|M|L [--lead <name>]` makes a card, which is an issue only when its work
-  starts this week. It refuses when the lead already has `[limits] open_cards_per_lead` open cards, counted by the
-  board's Lead field, and when an open issue's title says the same thing. It puts the card on the board as To do.
+  starts this week. It refuses a body with no `Folders:` line, when the lead already has `[limits]
+  open_cards_per_lead` open cards, counted by the board's Lead field, and when an open issue's title says the same
+  thing. It puts the card on the board as To do.
 - `check_kind` is the rule for a card line: a helper sends its lead only done, question, blocked and urgent lines, and
   a lead sends its helpers start, answer and urgent lines. Lead-to-lead lines are free text. `colony post` applies it.
 - The coordination issue and each Needs issue rotate at `[limits] issue_comments` comments (`rotate`): the old one
@@ -226,7 +227,11 @@ def make_card(config: dict, title: str, body: str, size: str, lead: str, capped:
 
 def card_new(config: dict, args) -> int:
     """`colony card new "<title>" --body … --size S|M|L [--lead <name>]`: make a card and put it on the board as To
-    do, with its Lead and Size. It refuses at the lead's open-card limit, and on a duplicate of an open issue."""
+    do, with its Lead and Size. It refuses a body with no `Folders:` line, since `colony take` refuses such a card
+    later, at the lead's open-card limit, and on a duplicate of an open issue."""
+    if not wait.hack(config) and not cli.card_folders(args.body or ""):  # hack mode refuses every card, in make_card
+        raise cli.ColonyError("a card's --body names the folders it touches on a `Folders:` line, such as "
+                              "`Folders: apps/web/, tests/`: `colony take` refuses a card without one")
     title, lead = " ".join(args.title.split()), (args.lead or wait.lead_name(config, args)).lower()
     number = make_card(config, title, args.body, args.size, lead)
     print(f"#{number} {title} (Status=To do, Lead={lead}, Size={args.size})")
@@ -718,12 +723,16 @@ def add_commands(sub) -> None:
 
     p = sub.add_parser("card", help="make a card: an issue on the board, only for work that starts this week")
     card_sub = p.add_subparsers(dest="card_command", metavar="card-command", required=True)
-    q = card_sub.add_parser("new", help="make a card, refusing at the lead's open-card limit and on a duplicate")
+    q = card_sub.add_parser("new", help="make a card, refusing a body with no Folders: line, at the "
+                                                    "lead's open-card limit and on a duplicate")
     q.add_argument("title", help="the card's title, such as \"builder-2: the login form\"")
-    q.add_argument("--body", required=True, help="the task, up to 3 done-when results, the folders, and the "
-                                                 "prediction line, such as predicted: S, 20 min")
+    q.add_argument("--body", required=True, help="the task, up to 3 done-when results, a `Folders:` line "
+                                                 "such as `Folders: apps/web/, tests/` (required: `colony take` "
+                                                 "refuses a card without one), and the prediction line, such as "
+                                                 "predicted: S, 20 min")
     q.add_argument("--size", required=True, choices=board.SIZES, help="the card's size")
-    q.add_argument("--lead", help="the lead whose card it is, <person>-lead, you by default")
+    q.add_argument("--lead", help="the lead whose card it is, by its claimed name such as ana-main-lead, "
+                                   "you by default")
     q.add_argument("--person", help="whose lead you are, when colony.toml names several people")
     q.set_defaults(run=card_new)
     relax_batch(sub)

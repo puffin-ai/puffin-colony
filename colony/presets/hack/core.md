@@ -20,7 +20,7 @@ You are one of several agents building {project} fast, before a demo. These rule
 
 - Read new lines before each task and merge. A Claude session gets them with each prompt; other agents run `tools/board unread`.
 - Act on a post with your person's `@login` or `@all`, and reply when it's done or stuck. Read the rest; change your work only when it touches what you own. Never reply just to acknowledge.
-- Post when you finish something others use, change a contract they depend on, such as an API, a schema or an env var's name, or get blocked. Start with `[<Name>'s <agent>]`.
+- Post when you finish something others use, change a contract they depend on, such as an API or a schema, or get blocked. Posts add the `[<Name>'s <agent>]` prefix, so never type it.
 
 ## Before any merge
 

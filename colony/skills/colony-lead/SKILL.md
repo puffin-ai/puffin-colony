@@ -12,6 +12,7 @@ Read `.colony/playbook.md`, the Lead section, or the Hack section in hack mode, 
 - A line to another lead waits for its 10-minute digest. Mark it `--urgent` only when work stops on it: a helper of yours is blocked on that lead, or your question stops work, as in `colony say <lead> "<what stops, and what you need>" --urgent`.
 
 - Make a card with `colony card new`, never a bare `gh issue create`, and only for work that starts this week. Anything later is one line, `colony idea "<the idea>"`.
+- Give every card's body a `Folders:` line, such as `Folders: src/, tests/`. `colony card new` refuses a body without one, and `colony take` checks a helper's card against it and your folders.
 - Name the files on a card when you know them, beside its folders, because finding code costs a builder about 40% of a small change's calls.
 - Keep a card to one concern and up to 3 done-when results, so its builder can finish it in one sitting.
 - Read a builder's diff only when its `done` line needs a decision. The batch's fresh reviewer reads every diff in full.
