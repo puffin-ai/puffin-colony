@@ -17,12 +17,15 @@ fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
 It also refuses, in every mode and even in the background, a `git push` that force-pushes or deletes the base branch,
 `[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
-can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec or a deletion. A force push rewrites the
-branch every teammate builds on, and makes each of them rebase. A plain push, and a forced push of tags alone, pass.
+can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec, a deletion, or `--prune` with a pattern
+such as refs/heads/*, which it matches against those branches. It reads options as git does, so a prefix git accepts,
+such as `--del`, counts as the whole option. A force push rewrites the branch every teammate builds on, and makes each
+of them rebase. A plain push, and a forced push of tags alone, pass.
 A line whose quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -66,8 +69,15 @@ RAW_GIT = re.compile(r"git")  # in a line shlex can't read, any git with a push 
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
-GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}  # git's, before `push`
-PUSH_VALUE_OPTIONS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+                     "--config-env"}  # git's, before `push`
+# git push's long options, as `git push --git-completion-helper` lists them. Git reads a word that is a prefix of
+# only one of them as that option, and refuses a prefix of several.
+PUSH_OPTIONS = ("verbose", "quiet", "repo", "all", "branches", "mirror", "delete", "tags", "dry-run", "porcelain",
+                "force", "force-with-lease", "force-if-includes", "recurse-submodules", "thin", "receive-pack",
+                "exec", "set-upstream", "progress", "prune", "no-verify", "verify", "follow-tags", "signed",
+                "atomic", "push-option", "ipv4", "ipv6")
+PUSH_VALUE_OPTIONS = {"repo", "recurse-submodules", "receive-pack", "exec", "push-option"}  # take the next word
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
 PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
                 "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person.")
@@ -343,51 +353,70 @@ def protected_branches(cwd: str) -> list[str]:
     return list(dict.fromkeys([base_branch(cwd), default_branch(cwd)]))
 
 
+def long_options(word: str) -> set[str]:
+    """The git push options a --word names: the one it spells out, else each one it is a prefix of. Git refuses a
+    prefix of several, so reading it as each of them refuses nothing git would run."""
+    name = word[2:].partition("=")[0]
+    if name in PUSH_OPTIONS:
+        return {name}
+    if name.startswith("no-"):  # a negation takes no value, and forces or deletes nothing
+        return set()
+    return {option for option in PUSH_OPTIONS if option.startswith(name)}
+
+
+def reached(target: str, protected: list[str]) -> str:
+    """The protected branch a refspec's destination names, or matches when it is a pattern such as refs/heads/*, or
+    "". Git's * matches across slashes, as fnmatch's does."""
+    for branch in protected:
+        if any(fnmatch.fnmatchcase(name, target) for name in (branch, f"refs/heads/{branch}")):
+            return branch
+    return ""
+
+
 def push_rewrites(arguments: list[str], protected: list[str], cwd: str) -> str:
     """Why a `git push` with these arguments, the words after `push`, rewrites or deletes a protected branch, or ""."""
-    force = delete = everything = mirror = tags = False
+    force = delete = everything = mirror = prune = tags = False
     positional: list[str] = []
-    skip = False
+    skip = options_end = False
     for word in arguments:
         if skip:
             skip = False
-        elif word in PUSH_VALUE_OPTIONS:
-            skip = True
-        elif word == "--force" or word.startswith("--force-with-lease"):
-            force = True
-        elif word == "--mirror":
-            mirror = True
-        elif word == "--delete":
-            delete = True
-        elif word in ("--all", "--branches"):
-            everything = True
-        elif word == "--tags":
-            tags = True
+        elif options_end or not word.startswith("-") or word == "-":
+            positional.append(word)
+        elif word == "--":
+            options_end = True
         elif word.startswith("--"):
-            continue
-        elif word.startswith("-") and len(word) > 1:
+            named = long_options(word)
+            force = force or bool(named & {"force", "force-with-lease"})
+            delete, mirror, prune = delete or "delete" in named, mirror or "mirror" in named, prune or "prune" in named
+            everything = everything or bool(named & {"all", "branches"})
+            tags = tags or named == {"tags"}  # tags alone pass, so only a word that can mean nothing else counts
+            skip = "=" not in word and bool(named) and named <= PUSH_VALUE_OPTIONS
+        else:
             letters, option, value = word[1:].partition("o")  # -o takes the rest as its value, as in -odeploy
             force, delete, skip = force or "f" in letters, delete or "d" in letters, bool(option and not value)
-        else:
-            positional.append(word)
     if mirror:
         return "`git push --mirror` overwrites every branch on the remote"
     if force and everything:
         return f"a force push of every branch rewrites {' and '.join(protected)}"
+    if prune and everything:
+        return f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has its name"
     targets = []  # (the branch a refspec updates, how it rewrites it, or "")
     for spec in positional[1:]:
         plus, spec = spec.startswith("+"), spec.lstrip("+")
         source, colon, destination = spec.partition(":")
-        deletes = delete or bool(colon and not source)
-        how = "deletes" if deletes else "force-pushes" if force or plus else ""
-        targets.append((destination if colon else source, how))
+        target = destination if colon else source
+        how = ("deletes" if delete or (colon and not source) else "force-pushes" if force or plus
+               else "can delete" if prune and "*" in target else "")  # --prune deletes only through a pattern
+        targets.append((target, how))
     if len(positional) <= 1 and not tags:  # no refspec: git pushes the branch checked out, or with --tags only tags
         targets.append(("HEAD", "deletes" if delete else "force-pushes" if force else ""))
     for target, how in targets:
         if target == "HEAD":
             target = current_branch(cwd)
-        if how and target.removeprefix("refs/heads/") in protected:
-            return f"this push {how} {target.removeprefix('refs/heads/')}"
+        branch = reached(target, protected) if how else ""
+        if branch:
+            return f"this push {how} {branch}"
     return ""
 
 

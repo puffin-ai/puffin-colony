@@ -117,6 +117,20 @@ REWRITES_BASE = [
     "npm test && git push --force origin main",
     "git push --tags -f origin main",
     "git push -fo ci.skip origin +main",
+    # Git reads any unambiguous prefix of a long option as the option.
+    "git push --del origin main",
+    "git push --mir origin",
+    "git push --force-w origin main",
+    "git push -uf origin main",
+    # --prune deletes what a pattern reaches and no local branch matches, and a pattern reaches the base.
+    "git push --prune origin 'refs/heads/*:refs/heads/*'",
+    "git push --pru origin 'refs/heads/*'",
+    "git push --all --prune origin",
+    "git push origin '+refs/heads/*:refs/heads/*'",
+    # An option that takes the next word as its value, here or before `push`, hides no remote or push.
+    "git push --recurse-submodules check -f origin",
+    "git --config-env core.editor=EDITOR push --force origin main",
+    "git push -f -- origin main",
 ]
 LEAVES_BASE = [
     "git push origin main",
@@ -130,6 +144,10 @@ LEAVES_BASE = [
     "git push origin --tags --force",
     "git push -odeploy origin main",  # -o's value, not -d
     "git push -fodeploy origin ana/login",
+    "git push --dry origin main",  # --dry-run, which forces nothing
+    "git push --prune origin main",  # --prune deletes only through a pattern
+    "git push --prune origin 'refs/heads/ana/*:refs/heads/ana/*'",
+    "git push origin '+refs/heads/ana/*:refs/heads/ana/*'",
 ]
 
 
