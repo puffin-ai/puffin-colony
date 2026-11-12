@@ -21,3 +21,4 @@ Every change in this folder obeys the lines below. The full rules in `.colony/ru
 9. You must store an instant in UTC beside its IANA zone name. (`coding.md`)
 10. You must give a bug fix or new logic a test that fails without the change, and must never read the real clock, sleep, or reach a real provider in a test. (`testing.md`)
 11. You must not add, remove, or upgrade a dependency without the person's yes. (`.colony/playbook.md`, Stop list)
+12. You must add no shim before the first release to users, such as a redirect, a re-export, an alias, or a fallback reader for an old shape, and must change every caller instead and delete the old name. (`design-principles.md`)

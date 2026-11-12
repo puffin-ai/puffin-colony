@@ -70,11 +70,11 @@ Delete the example's comments that no longer help.
 
 Each preset ships three levels in `{package}/presets/<preset>/`, where `<preset>` is question 3's answer: `core.md`, always loaded; `essentials/`, the numbered must-lines for each app folder; and `rules/`, the full rules, which are the reviewer's checklist. In every file you copy, replace each placeholder with this repo's value, and change nothing else, apart from the puffin preset's cuts. The puffin files hold 4 placeholders: `{web_app}` (the Next.js web app's folder), `{service}` (the Python service's folder), `{fast_check}` and `{checks}`. The lean files hold `{fast_check}` and `{checks}`.
 
-1. **The core.** Copy `{package}/presets/<preset>/core.md` to `{dir}/core.md`, and for `own`, copy `{package}/presets/lean/core.md`. Cut a row of the puffin core's task table whose rule file this repo doesn't get.
+1. **The core.** Copy `{package}/presets/<preset>/core.md` to `{dir}/core.md`, and for `own`, copy `{package}/presets/lean/core.md`.
 2. **The full rules**, into `{dir}/rules/`:
    - `lean`: copy every file of `{package}/presets/lean/rules/`. Where a rule speaks of the source folders, the test folder or a check, write this repo's real paths and commands in.
    - `puffin`: follow "The puffin preset" below.
-   - `own`: copy only `conversation.md` and `skills.md` from `{package}/presets/lean/rules/`, which the core points to, and list the repo's own rule files, such as `CONTRIBUTING.md` or a standards page, in `[gate] rules`.
+   - `own`: copy only `conversation.md` and `skills.md` from `{package}/presets/lean/rules/`, which the lead's skill and the core point to, and list the repo's own rule files, such as `CONTRIBUTING.md` or a standards page, in `[gate] rules`.
    - Put question 5's answers, if any, in `{dir}/rules/project.md` as must-not lines, whichever preset was chosen.
 3. **The essentials.** For each app found in step 1, write its essentials from `{package}/presets/<preset>/essentials/`: with `puffin`, `nextjs.md` for the Next.js web app, `fastapi.md` for the Python service, and `generic.md` for any other app; with `lean`, `generic.md` for every app.
    - Write it to `<app>/AGENTS.md`. When that file exists, add the essentials at its end and keep every line already there.
