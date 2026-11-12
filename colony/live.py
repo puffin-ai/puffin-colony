@@ -1,11 +1,15 @@
 """Which commit is live, and which merges on the base aren't yet. A merge is not a deploy, so without this a lead
-asked "is it live?" can only guess.
+asked "is it live?" can only guess. The question comes in every mode once work merges, so `colony who` and `colony
+status` answer it in each.
 
 The live commit comes from GitHub's deployments, which hosts such as Vercel and Netlify record for each deploy: the
-newest successful one to `[hack] deploy_environment` (Production by default). A deploy GitHub doesn't know, such as one
-run by hand, is announced with `colony live <sha> [--url <url>]`, which posts `@all live: <sha> is live on <url>` on
-the board, and every lead reads it. `colony who` and `colony status` print the newer of the two, and the branches
-merged into the base since then, which aren't live yet.
+newest successful one to `[project] deploy_environment` (Production by default; hack configs from before it name it
+under `[hack]`). A deploy GitHub doesn't know, such as one run by hand, is announced with `colony live <sha> [--url
+<url>]`, which posts `@all live: <sha> is live on <url>` on the board, or on the coordination issue outside hack mode,
+and every lead reads it. `colony who` and `colony status` print the newer of the two, and what landed on the base
+since then, which isn't live yet: `colony merge`'s merges, GitHub's pull request merges and squashes, and a count of
+the other commits. Outside hack mode a project may deploy nothing, such as a library, so the line shows only a known
+deploy.
 """
 from __future__ import annotations
 
@@ -19,7 +23,10 @@ from colony import cli, presence, wait
 
 LIVE_LINE = re.compile(r"\blive: ([0-9a-f]{7,40}) is live(?: on (\S+))?")
 SHA = re.compile(r"[0-9a-f]{7,40}")
-MERGED = re.compile(r"^Merge (\S+) into ")
+COLONY_MERGE = re.compile(r"^Merge (\S+) into ")  # colony merge's
+PULL_MERGE = re.compile(r"^Merge pull request (#\d+) from [^/\s]+/(\S+)")  # GitHub's merge button: from <owner>/<branch>
+LOCAL_MERGE = re.compile(r"^Merge (?:remote-tracking )?branch '([^']+)'")  # git merge on a computer
+SQUASHED = re.compile(r"^(.*\S) \((#\d+)\)$")  # GitHub's squash and merge: "<title> (#13)"
 DEPLOYMENTS = 20  # the newest deployments read, newest first
 
 
@@ -33,8 +40,10 @@ class Live:
 
 
 def environment(config: dict) -> str:
-    """The deployment environment that is the live app: [hack] deploy_environment, Production by default."""
-    return str(config.get("hack", {}).get("deploy_environment") or "Production")
+    """The deployment environment that is the live app: [project] deploy_environment, else the [hack] key that hack
+    configs from before it hold, else Production."""
+    return str(config.get("project", {}).get("deploy_environment")
+               or config.get("hack", {}).get("deploy_environment") or "Production")
 
 
 def from_deployments(config: dict) -> Live | None:
@@ -76,17 +85,36 @@ def newest(*found: Live | None) -> Live | None:
     return max(known, key=lambda one: one.at) if known else None
 
 
-def not_live(root: Path, ref: str, sha: str) -> list[str]:
-    """The branches merged into `ref` after `sha`, oldest first, from their merge commits' "Merge <branch> into"."""
-    run = subprocess.run(["git", "log", "--merges", "--first-parent", "--format=%s", "--reverse", f"{sha}..{ref}"],
+def landed_as(subject: str) -> str:
+    """What a commit on the base's first-parent line landed, read from its subject, or "" when it names nothing."""
+    if found := COLONY_MERGE.match(subject):
+        return found[1]
+    if found := PULL_MERGE.match(subject):
+        return f"{found[1]} ({found[2]})"
+    if found := LOCAL_MERGE.match(subject):
+        return found[1]
+    if found := SQUASHED.match(subject):
+        return f"{found[2]} ({found[1]})"
+    return ""
+
+
+def not_live(root: Path, ref: str, sha: str) -> list[str] | None:
+    """What landed on `ref` after `sha`, oldest first: each merge or squashed pull request by name, then a count of
+    the other commits, such as a direct push. None when git can't tell, such as when the clone lacks `sha`."""
+    run = subprocess.run(["git", "log", "--first-parent", "--format=%s", "--reverse", f"{sha}..{ref}"],
                          cwd=root, capture_output=True, text=True)
     if run.returncode:
-        return []
-    return [found[1] for line in run.stdout.splitlines() if (found := MERGED.match(line))]
+        return None
+    landed = [landed_as(line) for line in run.stdout.splitlines()]
+    named = [one for one in landed if one]
+    if others := len(landed) - len(named):
+        named.append(f"{others} other commit{'' if others == 1 else 's'}")
+    return named
 
 
 def summary(config: dict, root: Path) -> str:
-    """One line on what is live and what isn't yet, for `colony who` and `colony status`."""
+    """One line on what is live and what isn't yet, for `colony who` and `colony status`, or "" outside hack mode
+    when no deploy is known."""
     logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
     try:
         # On a public repo anyone can comment: a live: line counts from the team's own logins alone.
@@ -95,12 +123,18 @@ def summary(config: dict, root: Path) -> str:
         comments = []
     found = newest(from_deployments(config), from_board(comments))
     if found is None:
+        if not wait.hack(config):
+            return ""  # a project outside hack mode may deploy nothing, such as a library
         return (f"Live: unknown: GitHub records no {environment(config)} deployment, and no one posted `{cli.NAME} live "
                 "<sha>`. Whoever deploys runs it.")
     where = f" on {found.url}" if found.url else ""
     waiting = not_live(root, f"origin/{config['project']['base']}", found.sha)
-    rest = (f"; merged but not live yet: {', '.join(waiting)}" if waiting
-            else f"; everything merged into {config['project']['base']} is live")
+    if waiting is None:
+        rest = f"; which merges aren't live is unknown: this clone lacks {found.sha[:7]}, so run `git fetch`"
+    elif waiting:
+        rest = f"; merged but not live yet: {', '.join(waiting)}"
+    else:
+        rest = f"; everything merged into {config['project']['base']} is live"
     return f"Live: {found.sha[:7]}{where}, since {found.at}, from {found.source}{rest}."
 
 

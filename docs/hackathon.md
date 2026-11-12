@@ -104,7 +104,7 @@ The demo is the live app, so `colony who` and `colony status` print which commit
 Live: 1a2b3c4 on https://myapp.com, since 2026-11-08T15:44:00Z, from GitHub's Production deployment; merged but not live yet: ana/login, ben/export.
 ```
 
-Colony reads it from GitHub's deployments, which hosts such as Vercel and Netlify record for each deploy: the newest successful one to `[hack] deploy_environment` (`Production` by default). The fastest setup deploys the base by itself on every merge, so merged means live within minutes. When someone deploys by hand, they run `colony live <sha> --url <url>` once it is live, which posts `@all live: <sha> is live on <url>` for every lead.
+Colony reads it from GitHub's deployments, which hosts such as Vercel and Netlify record for each deploy: the newest successful one to `[project] deploy_environment` (`Production` by default). The fastest setup deploys the base by itself on every merge, so merged means live within minutes. When someone deploys by hand, they run `colony live <sha> --url <url>` once it is live, which posts `@all live: <sha> is live on <url>` for every lead.
 
 ## Codex and other agents
 

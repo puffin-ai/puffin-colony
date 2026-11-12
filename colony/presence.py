@@ -373,7 +373,7 @@ def describe(status: Status, now: float) -> str:
 def who(config: dict, args) -> int:
     """`colony who`: every live lead and helper, across people and computers, with their folders and their
     accounts' room, and the gone ones."""
-    from colony import demo, live, wait
+    from colony import demo, live
 
     now = time.time()
     try:
@@ -381,12 +381,12 @@ def who(config: dict, args) -> int:
             print(line)
     except cli.ColonyError as e:
         print(f"{cli.NAME}: {e}", file=sys.stderr)
-    if wait.hack(config):
-        from colony import share
+    from colony import share
 
-        print(live.summary(config, cli.repo_root()))
-        if needs := share.open_needs(config):
-            print(needs)
+    if line := live.summary(config, cli.repo_root()):
+        print(line)
+    if needs := share.open_needs(config):
+        print(needs)
     alive, gone, note = everyone(config, now)
     if note:
         print(note, file=sys.stderr)

@@ -1535,12 +1535,12 @@ def batch(config: dict, args) -> int:
 
 def status(config: dict, args) -> int:
     """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
-    from colony import batch as runner, demo, live, wait as watcher
+    from colony import batch as runner, demo, live
 
     if line := demo.countdown(config):
         print(line)
-    if watcher.hack(config):
-        print(live.summary(config, repo_root()))
+    if line := live.summary(config, repo_root()):
+        print(line)
     print(lead_line(config))
     return runner.batch_status(config, args)
 
@@ -1752,7 +1752,7 @@ def build_parser() -> argparse.ArgumentParser:
                                        "lead")
     p.add_argument("to", metavar="@login", help="the other person's login, such as @ben")
     p.set_defaults(run=handoff)
-    p = sub.add_parser("live", help="hack mode: whoever deploys by hand tells every lead which commit is live")
+    p = sub.add_parser("live", help="whoever deploys by hand tells every lead which commit is live")
     p.add_argument("sha", help="the commit you deployed, such as 1a2b3c4")
     p.add_argument("--url", default="", help="where it is live, such as https://myapp.com")
     p.set_defaults(run=live)

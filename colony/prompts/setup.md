@@ -183,6 +183,7 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        fast_check = "<the fast check>"
        checks = "<the fast check again: hack's gate runs it alone>"
        install = "<the install command>"
+       deploy_environment = "<question 6's GitHub deployment environment, Production by default>"
 
        [gate]
        merge_after_fast_check = true    # false on a no to question 4
@@ -193,7 +194,6 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        [hack]
        demo = "<question 5, such as 2026-11-08T17:00:00-08:00>"
        team_lead = "<the team lead's login, from question 1>"
-       deploy_environment = "<question 6's GitHub deployment environment, Production by default>"
 
        [people]
        logins = ["<login>", "<login>"]

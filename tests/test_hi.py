@@ -82,6 +82,7 @@ class GitHub:
         self.calls: list[tuple] = []
         self.unreadable = ""  # set: reading the comments fails with this error
         self.down = ""  # set: every gh call fails with this error
+        self.deployments: list[dict] = []  # GitHub's deployments, each with its newest status as "status"
         monkeypatch.setattr(presence, "where", lambda config: 5)
         monkeypatch.setattr(wait, "gh", self.gh)
 
@@ -105,6 +106,11 @@ class GitHub:
             return "{}"
         if args[:2] == ("issue", "list"):
             return json.dumps([{"number": 5, "title": wait.COORDINATION}])
+        if args[0] == "api" and "/deployments" in args[1]:
+            if "/statuses" in args[1]:
+                number = int(args[1].split("/deployments/")[1].split("/")[0])
+                return json.dumps([next(d["status"] for d in self.deployments if d["id"] == number)])
+            return json.dumps(self.deployments)
         if args[0] == "api":
             self.comments.append({"id": 100 + len(self.comments), "body": args[3].removeprefix("body="),
                                   "author_association": "OWNER"})
@@ -451,6 +457,28 @@ def test_who_lists_every_live_lead_and_helper_across_computers(home, config, git
     assert "- builder-2 (helper of sam-engine-lead): sam on Sam-PC, account work" in out
     assert "Room: work: 5h 10%." in out
     assert "- ana-lead: ana on " in out
+
+
+def test_who_and_status_print_the_live_commit_outside_hack_mode_too(home, config, github, capsys):
+    # Work merges through pull requests here, and the person asks "is it live?" all the same.
+    assert cli.main(["who"]) == 0
+    assert "Live:" not in capsys.readouterr().out  # no deploy known, as for a library: no line
+    github.deployments = [{"id": 1, "sha": "a" * 40, "environment": "Production",
+                           "status": {"state": "success", "created_at": "2026-11-10T10:00:00Z",
+                                      "environment_url": "https://demo.example"}}]
+    assert cli.main(["who"]) == 0
+    assert "Live: aaaaaaa on https://demo.example, since 2026-11-10T10:00:00Z" in capsys.readouterr().out
+    cli.main(["status"])
+    assert "Live: aaaaaaa on https://demo.example" in capsys.readouterr().out
+
+
+def test_who_lists_this_leads_open_needs_in_every_mode(home, config, github, capsys):
+    from colony import share
+
+    wait.write_json(share.needs_path(cli.load_config()), {"next": 2, "open": [
+        {"n": 1, "to": "@ben", "what": "the export API", "at": time.time() - 600}]})
+    assert cli.main(["who"]) == 0
+    assert "Open needs: 1, the oldest 10 min: `colony need` lists them." in capsys.readouterr().out
 
 
 def test_status_names_each_lead_on_this_computer_with_account_and_heartbeat_age(home, config, capsys):
