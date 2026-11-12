@@ -26,7 +26,8 @@ merge_after_fast_check = true      # `colony merge <branch>` pushes the base aft
 provider_dollars = 0
 
 [messages]
-lead_digest_minutes = 0            # the leads are peers: a line prints as soon as the wait reads it
+lead_digest_minutes = 2            # done lines and talk wait 2 minutes, so the lead isn't woken by each one;
+                                   # urgent:, blocked:, question: and the person's own lines still come at once
 # board = 12                       # the pinned `Board: <project>` issue, which setup opens and writes here
 
 [people]

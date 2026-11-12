@@ -196,3 +196,139 @@ def same_path(a: str, b: str, windows: bool = WINDOWS) -> bool:
         path = path.rstrip("/") or "/"
         return path.casefold() if windows else path
     return key(a) == key(b)
+
+
+LINK_MODE = "120000"  # the index mode git gives a symbolic link
+FIX_LINKS = "colony fix-links"
+DEVELOPER_MODE = "turn on Developer Mode (Settings > System > For developers)"
+
+
+def _git(cwd: Path, *args: str) -> str:
+    """A read-only git command's output in `cwd`, or "" when it fails."""
+    run = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, encoding="utf-8")
+    return run.stdout if run.returncode == 0 else ""
+
+
+def can_symlink() -> bool:
+    """Whether this process may make a symbolic link: always on macOS and Linux. Windows allows it only with Developer
+    Mode on, or as an administrator."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            os.symlink("target", Path(folder) / "link")
+        except OSError:
+            return False
+    return True
+
+
+def index_links(checkout: Path) -> dict[str, str]:
+    """Each symbolic link in a checkout's index, by its path, with its blob's id, which holds the link's target."""
+    links = {}
+    for line in _git(checkout, "ls-files", "-s", "-z").split("\0"):
+        meta, _, path = line.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] == LINK_MODE:
+            links[path] = parts[1]
+    return links
+
+
+def stubs(checkout: Path, links: dict[str, str]) -> list[str]:
+    """The links git wrote as plain files in a checkout, as it does with core.symlinks false: one-line text files
+    holding the target."""
+    return [path for path in links if (checkout / path).is_file() and not (checkout / path).is_symlink()]
+
+
+def symlinks_on(root: Path) -> bool:
+    """Whether git makes real links in this repo: its core.symlinks."""
+    return _git(root, "config", "--bool", "core.symlinks").strip() == "true"
+
+
+def links_note(root: Path) -> str:
+    """One line telling a person on Windows that their repo's symbolic links are plain text files, or would become
+    them, and how to fix it, or "" when they are fine. On Windows, git writes a link as a text file holding its target
+    when core.symlinks is false or it may not make links, so a linked rule or skill silently never loads. macOS and
+    Linux make links always, so there it is always ""."""
+    if not WINDOWS:
+        return ""
+    links = index_links(root)
+    if not links:
+        return ""
+    plain = stubs(root, links)
+    if not plain and symlinks_on(root):
+        return ""
+    allowed = can_symlink()
+    if not plain and allowed:  # core.symlinks is off, but every link is a link: a fresh checkout would break them
+        return (f"colony: this repo has {len(links)} symbolic links but git's core.symlinks is off here, so new "
+                f"checkouts write them as text files. Run `{FIX_LINKS}`.")
+    what = (f"{len(plain)} of this repo's {len(links)} symbolic links are plain text files here"
+            if plain else f"this repo has {len(links)} symbolic links but this computer can't make links")
+    how = f"{DEVELOPER_MODE}, then run `{FIX_LINKS}`" if not allowed else f"run `{FIX_LINKS}`"
+    return f"colony: {what}, so the rules and skills they point to don't load. To fix it, {how}."
+
+
+def checkouts(root: Path) -> list[Path]:
+    """The repo's checkout and every worktree of it that still exists on disk."""
+    found = []
+    for line in _git(root, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            path = Path(line[len("worktree "):])
+            if path.is_dir():
+                found.append(path)
+    return found or [root]
+
+
+def blobs(root: Path, ids: list[str]) -> dict[str, bytes]:
+    """Each blob's content, by its id, read with one `git cat-file --batch`."""
+    if not ids:
+        return {}
+    unique = sorted(set(ids))
+    run = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"], input=("\n".join(unique) + "\n").encode(),
+                         capture_output=True, check=True)
+    out, found, at = run.stdout, {}, 0
+    for _ in unique:
+        end = out.index(b"\n", at)
+        blob_id, _, size = out[at:end].decode().split()
+        at = end + 1
+        found[blob_id] = out[at:at + int(size)]
+        at += int(size) + 1
+    return found
+
+
+def make_link(path: Path, target: str) -> None:
+    """Make `path` a symbolic link to `target`, a relative path with forward slashes as git stores it. Windows needs
+    backslashes in a relative target, and its own kind of link for a folder, as Git for Windows makes them."""
+    if WINDOWS:
+        target = target.replace("/", "\\")
+    os.symlink(target, path, target_is_directory=(path.parent / target).is_dir())
+
+
+def repair_links(root: Path) -> dict:
+    """Turn on core.symlinks and turn each link git wrote as a plain file back into a link, in the repo and every
+    worktree. Only an untouched stub, whose text is exactly its target, becomes a link: an edited one is kept, and
+    named. Returns the counts: `checkouts`, `restored`, `already` (links already), `missing` and `edited` (paths)."""
+    subprocess.run(["git", "-C", str(root), "config", "core.symlinks", "true"], check=True, capture_output=True)
+    report: dict = {"checkouts": 0, "restored": 0, "already": 0, "missing": 0, "edited": []}
+    for checkout in checkouts(root):
+        links = index_links(checkout)
+        if not links:
+            continue
+        report["checkouts"] += 1
+        plain = stubs(checkout, links)
+        report["already"] += sum(1 for path in links if (checkout / path).is_symlink())
+        report["missing"] += sum(1 for path in links if not os.path.lexists(checkout / path))
+        targets = blobs(checkout, [links[path] for path in plain])
+        changed = False
+        for path in plain:
+            file = checkout / path
+            target = targets[links[path]]
+            if file.read_bytes() != target:
+                report["edited"].append(str(file))
+                continue
+            file.unlink()
+            make_link(file, target.decode())
+            report["restored"] += 1
+            changed = True
+        if changed:
+            _git(checkout, "update-index", "-q", "--refresh")
+    return report
