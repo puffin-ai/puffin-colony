@@ -872,6 +872,25 @@ def test_a_lead_adds_and_releases_files_and_never_takes_another_leads(home, conf
         claim("src/app.ts", "src/c.ts", release=True)
 
 
+def test_a_claim_change_tells_the_other_leads_in_startup_mode_and_no_one_in_solo_mode(home, config, github,
+                                                                                    monkeypatch):
+    # Several people lead in startup mode and read the coordination issue; solo mode has one person.
+    from colony import transport
+
+    sent = []
+    monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: sent.append((to, line)) or 5)
+    claim = lambda *paths, **kind: cli.claim(config, argparse.Namespace(  # noqa: E731
+        stream=paths[0], folders=list(paths[1:]), person="ana", dry_run=False, **{"add": False, "release": False, **kind}))
+    assert claim("web", "src/app.ts") == 0
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-web-lead")
+    sent.clear()
+    assert claim("src/b.ts", add=True) == 0
+    assert sent == [("@all", "@all taking src/b.ts: ask ana-web-lead before you edit them")]
+    config["project"]["mode"] = "solo"
+    assert claim("src/b.ts", release=True) == 0
+    assert len(sent) == 1
+
+
 def test_who_reads_only_statuses_the_teams_logins_wrote(home, config, github, capsys):
     config["people"] = {"logins": ["ana", "sam"]}
     github.add(lead(name="sam-api-lead", person="sam", computer="Sam-PC"))

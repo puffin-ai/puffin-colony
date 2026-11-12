@@ -817,8 +817,9 @@ def claim(config: dict, args) -> int:
 
 def change_claim(config: dict, args, paths: list[str]) -> int:
     """`colony claim --add|--release <path> ...`: the lead this session holds takes more paths, which no other live
-    lead holds, or gives some back, and its status comment and, in hack mode, the board say so at once. A lead keeps
-    at least one path, since none would mean the rest of the repo."""
+    lead holds, or gives some back, and its status comment and the other leads hear it at once: on the board in hack
+    mode, on the coordination issue in startup mode; solo mode has one person. A lead keeps at least one path, since
+    none would mean the rest of the repo."""
     from colony import presence, transport, wait
 
     name = os.environ.get(wait.LEAD_ENV, "").lower()
@@ -854,11 +855,11 @@ def change_claim(config: dict, args, paths: list[str]) -> int:
         wait.write_json(path, state)
     except (ColonyError, OSError, ValueError, KeyError) as e:
         print(f"{NAME}: the status comment shows it at the next `{NAME} wait`: {e}", file=sys.stderr)
-    if wait.hack(config):
+    if mode(config) != "solo":  # other people's leads hear it: on the board, or the coordination issue
         try:
             transport.send(config, f"@{wait.ALL}", f"@{wait.ALL} {line}")
         except ColonyError as e:
-            print(f"{NAME}: the board didn't hear it: {e}", file=sys.stderr)
+            print(f"{NAME}: the other leads didn't hear it: {e}", file=sys.stderr)
     return 0
 
 
