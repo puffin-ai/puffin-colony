@@ -45,7 +45,7 @@ A line from a builder to its lead is only `done`, `question:`, `blocked:` or `ur
 | Urgent | builder → lead | `for lead: urgent: the base branch fails to build since #40 (from builder-3)` | at once |
 | Pop-up | hook → lead | `for ana-lead: urgent: builder-2 waits for a person's approval on <computer> (from builder-2)` | at once |
 | Stopped | hook → lead | `for ana-lead: builder-2 stopped on an error (<code>) at <time> (from builder-2)` | in the digest |
-| Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>; check its session` | in the digest |
+| Stale | the board → lead | `#41 stale: builder-2 shows no update since <time>; check its session`, or for a background helper `claude agents` lists as blocked, `` #41 stale: builder-2 waits on a prompt in its background session, with no update since <time>; answer it with `claude attach <id>` `` | in the digest |
 | Yours | you → lead | `for lead: ship the batch as it is` | at once |
 | Your answer | you → lead | `for ana-lead: yes, keep 30 seconds`, on your Needs issue | at once |
 | Lead to lead | lead → lead | `for sam-lead: I merge into dev at 15:00, hold yours till then? (from ana-lead)` | in the digest, or at once with a prefix |
