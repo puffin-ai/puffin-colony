@@ -268,7 +268,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-batch-<batch>-walk` | The walker's worktree, detached at each round's head |
 | `<worktrees>/<project>-fix-<batch>-<card>-r<round>` | A fixer's worktree, removed after its merge |
 | `<worktrees>/<project>-retro-<batch>` | The retro agent's worktree |
-| `<worktrees>/<project>-<builder>-<card>` | A builder's worktree, in the folder `[project] worktrees` names, never beside the clone |
+| `<worktrees>/<project>-merge` | Colony's merge worktree, kept warm between merges |
+| `<worktrees>/<project>-<builder>-<card>` | A builder's worktree, made by the command `colony take` prints, never beside the clone |
 | `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |

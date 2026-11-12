@@ -139,6 +139,12 @@ def test_config_is_read_from_the_repo_and_expands_home(home, config):
     assert config["project"]["worktrees"] == str(home / "trees")
 
 
+def test_a_relative_worktrees_folder_starts_from_the_clone_on_every_system(host):
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG.replace('worktrees = "~/trees"', 'worktrees = "../trees"'))
+    assert cli.load_config()["project"]["worktrees"] == str(host.parent / "trees")
+
+
 def test_config_names_a_missing_key(host):
     (host / "colony.toml").write_text(CONFIG.replace('base = "dev"\n', ""))
     with pytest.raises(cli.ColonyError, match="'base'"):

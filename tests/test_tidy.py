@@ -507,7 +507,67 @@ def test_tidy_removes_a_closed_cards_clean_worktree_and_keeps_a_dirty_one_and_th
     assert not gh.called("issue", "view", "14")
     assert "builder-1/12" in git(repo, "branch", "--list", "builder-1/12")  # the branch stays: only the folder goes
     out = capsys.readouterr().out
-    assert f"worktrees: 1 removed, 1 kept: {dirty} (uncommitted or untracked changes)" in out
+    assert re.search(r"worktrees: 1 removed, \d+ bytes freed, 1 kept: " +
+                     re.escape(f"{dirty} (uncommitted or untracked changes)"), out)
+
+
+def detached(repo, name):
+    """A detached worktree beside the repo, as Colony makes for a walk, a merge or an image."""
+    path = repo.parent / name
+    git(repo, "worktree", "add", "-q", "--detach", str(path))
+    return path
+
+
+def test_tidy_removes_the_worktrees_of_merged_cards_and_ended_batches_merges_and_retros_and_prints_the_space_freed(
+        gh, repo, capsys):  # noqa: F811
+    git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    merged = worktree(repo, "builder-1/12")
+    batch, fix, retro = worktree(repo, "demo/batch-b1"), worktree(repo, "demo/fix-b1-12-r1"), worktree(repo, "demo/retro-b1")
+    walk, merge, image = detached(repo, "demo-batch-b1-walk"), detached(repo, "demo-merge"), detached(repo, "demo-image-7")
+    running, fresh = worktree(repo, "demo/batch-b2"), worktree(repo, "demo/batch-b3")
+    reports = batch / ".colony" / "reports" / "b1"
+    reports.mkdir(parents=True)
+    (reports / "state.json").write_text("{}")  # a batch's own untracked state never keeps its worktree
+    quiet(gh, issues=[{"number": 12, "title": "builder-1: card 12"}])
+    gh.answer("pr list", [{"headRefName": "builder-1/12", "state": "MERGED"},
+                          {"headRefName": "demo/batch-b1", "state": "MERGED"},
+                          {"headRefName": "demo/fix-b1-12-r1", "state": "MERGED"},
+                          {"headRefName": "demo/retro-b1", "state": "CLOSED"},
+                          {"headRefName": "demo/batch-b2", "state": "CLOSED"},
+                          {"headRefName": "demo/batch-b2", "state": "OPEN"}])
+    assert tidy.run_tidy(CONFIG, repo) == 0
+    assert not any(path.exists() for path in (merged, batch, fix, retro, walk, merge, image))
+    assert running.exists() and fresh.exists() and repo.exists()  # an open pull request, and none yet
+    assert len([call for call in gh.calls() if call[:2] == ["pr", "list"]]) == 1
+    out = capsys.readouterr().out
+    assert "card #12's pull request merged" in out and "demo/retro-b1's pull request closed" in out
+    assert re.search(r"worktrees: 7 removed, [\d.]+ (bytes|KB|MB) freed, 0 kept", out)
+
+
+def test_tidy_keeps_a_merge_worktree_whose_head_is_not_in_the_base(gh, repo, capsys):  # noqa: F811
+    git(repo, "update-ref", "refs/remotes/origin/dev", "HEAD")
+    merge = detached(repo, "demo-merge")
+    (merge / "b.txt").write_text("b\n")
+    git(merge, "add", "-A")
+    git(merge, "commit", "-qm", "not merged yet")
+    quiet(gh)
+    assert tidy.run_tidy(CONFIG, repo) == 0
+    assert merge.exists()
+
+
+def test_tidy_dry_run_lists_the_worktrees_it_leaves_with_their_size_and_last_commit_date(gh, repo, capsys):  # noqa: F811
+    working, dirty = worktree(repo, "builder-3/14"), worktree(repo, "builder-2/13", dirty=True)
+    (working / "big.bin").write_bytes(b"x" * 5000)
+    quiet(gh, issues=[{"number": 14, "title": "builder-3: card 14"}])
+    gh.answer("issue view", {"state": "CLOSED"})
+    assert tidy.run_tidy(CONFIG, repo, dry=True) == 0
+    assert working.exists() and (working / "big.bin").exists() and dirty.exists()
+    out = capsys.readouterr().out
+    today = git(repo, "log", "-1", "--format=%cs")
+    assert "The other worktrees, which tidy leaves:" in out
+    assert re.search(rf"{re.escape(str(working))}: 5\.\d KB, last commit {today}", out)
+    assert re.search(rf"{re.escape(str(dirty))}: \d+ bytes, last commit {today}", out)
+    assert str(repo) + ":" not in out  # the main checkout is never listed
 
 
 # colony tidy

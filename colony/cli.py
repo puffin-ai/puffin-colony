@@ -159,6 +159,8 @@ def load_config(path=None) -> dict:
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = portable.native(os.path.expanduser(project[key]))
+    if project.get("worktrees") and not os.path.isabs(project["worktrees"]):  # such as "../worktrees", from the clone
+        project["worktrees"] = portable.native(os.path.normpath(path.resolve().parent.parent / project["worktrees"]))
     return config
 
 
@@ -1628,10 +1630,20 @@ def take(config: dict, args) -> int:
                               f"{lead}, and take no card in another lead's folders")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
+    start = f"origin/{config['project']['base']}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"origin/{card_branch(args.card)}"],
                       capture_output=True).returncode == 0:
-        print(f"Its images are on origin/{card_branch(args.card)}: start your branch from there, not from the base.")
+        start = f"origin/{card_branch(args.card)}"
+        print(f"Its images are on {start}, so your branch starts there, not from the base.")
+    print("Make its worktree with:\n  " + worktree_command(config, me, args.card, start))
     return 0
+
+
+def worktree_command(config: dict, me: str, card: int, start: str) -> str:
+    """The command that makes a builder's worktree for a card, `<worktrees>/<project>-<me>-<n>` on the branch
+    `<me>/<n>`, with forward slashes, which git takes on every system and Bash keeps as they are."""
+    folder = Path(config["project"]["worktrees"]).expanduser() / f"{config['project']['name']}-{me}-{card}"
+    return f"git fetch origin && git worktree add {shlex.quote(folder.as_posix())} -b {me}/{card} {start}"
 
 
 def batch(config: dict, args) -> int:

@@ -347,6 +347,20 @@ def test_a_helper_refuses_a_card_outside_its_leads_folders(home, config, github,
     assert taken == [(12, [("Status", "In progress"), ("Helper", "builder-1")])]
 
 
+def test_take_prints_the_worktree_command_under_the_worktrees_folder(home, config, github, monkeypatch, capsys):
+    from colony import board
+
+    presence.write_registry({"ana-engine-lead": {"person": "ana", "folders": ["apps/"]}})
+    monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-engine-lead")
+    monkeypatch.setattr(board, "set_fields", lambda config, card, pairs: None)
+    assert cli.take(config, argparse.Namespace(card=12)) == 0
+    folder = (Path(config["project"]["worktrees"]) / f"{config['project']['name']}-builder-1-12").as_posix()
+    base = config["project"]["base"]
+    assert f"git fetch origin && git worktree add {folder} -b builder-1/12 origin/{base}" in capsys.readouterr().out
+    assert "\\" not in folder
+
+
 def test_a_helper_of_the_rest_refuses_a_card_in_another_leads_folders(home, config, github, monkeypatch):
     github.add(lead(name="ana-web-lead", folders=["apps/web/"]))
     monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
