@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.0, 2026-11-12
 
-Hack mode holds up through a long day with several people, each with a lead on their own computer: leads see each other reliably, merges queue across computers, the demo has a clock, and everyone knows what is live. The parts that help every mode now work in every mode.
+Hack mode holds up through a long day with several people, each with a lead on their own computer: leads see each other reliably, merges queue across computers, the demo has a clock, and everyone knows what is live. The parts that help every mode now work in every mode. A builder's fast check runs for its card's area, `colony tidy` clears finished worktrees, and the push guard reads a push the way git does.
 
 Fixed:
 
@@ -15,6 +15,9 @@ Fixed:
 - `tools/board` posts are signed `(from <name>)`, so a lead's own posts don't wake it. A `for <name>:` line reaches that session alone, and `colony post all` means `@all`.
 - A settings folder two people share is labeled by its person, and `--dry-run` posts nothing.
 - `colony merge` names the failing tests, keeps each run's whole output in `~/.colony/<project>/merge-logs/`, runs a failed check once more, and tells a base that fails on its own apart from the branch.
+- `colony --dry-run` and `colony claim --dry-run` in a repo with no live lead claimed the lead: they wrote the heartbeat, `.colony/leads.toml` and a status comment. They now say `would lead <name> ... Nothing ran.` and write nothing. The hack docs name the lead `<login>-main-lead`.
+- A helper's first `colony wait` read back only the last hour, so a start line its lead posted earlier, while the helper waited on a prompt, never reached it. The first wait in each Claude Code session now looks further back for the newest start line its lead signed for it that it hasn't answered.
+- Two named leads on one computer shared one listener file, so the second lead's wait stopped the first. Each lead's listener now carries its own name.
 
 Hack mode:
 
@@ -37,6 +40,11 @@ Every mode:
 - When a batch's checks fail, they run once more on the batch's start commit alone. A failure that shows there too goes to no fixer, and when it is the only one left, the batch stops and says to fix the base or the checks' setup.
 - `colony batch` notes a check database on another computer, as `colony merge` does.
 - The playbook's Lead section says the person comes first, what to do with the watchdog's alarms, and when to use `colony need` and `colony share`.
+- `colony fast-check` runs `[project] fast_check` for the check areas the branch changes, and ends on one line for the done line: passed, failed or not run. A check that ran nothing counts as not run, in `colony batch`'s rounds too, never as a pass.
+- `colony take <n>` prints the command that makes the card's worktree in `[project] worktrees`, which may now be relative. `colony tidy` removes the clean worktree of each finished card, batch, fix and retro, and the merge worktree when no merge runs.
+- `colony helpers --open` and any background launch stop before opening a session that would wait on Claude Code's question about the repo's `.mcp.json` servers, and name the one-time step. A stale card whose helper waits on a prompt says so, with the `claude attach` command that answers it.
+- Each role loads only its own lines: the lines only a builder or only the lead uses moved from each preset's core into the `colony-builder` and `colony-lead` skills.
+- On Windows, git writes a symbolic link as a one-line text file when it can't make links, so a linked rule or skill never loads. `colony` and `colony join` say so, and `colony fix-links` turns each untouched stub back into a link in the repo and every worktree.
 
 Security:
 
@@ -47,7 +55,7 @@ Security:
 - A private line goes out only after GitHub says, at that moment, that its repo is private.
 - `colony share` asks for `--public` on a public repo, and refuses links, files that hold secrets, and files in folders such as `.ssh`.
 
-Upgrading: `colony upgrade` refreshes the hooks and the role skills. `.colony/playbook.md`, the hack rules in `.colony/core.md` and `tools/board` are copies setup filled in, so copy them again from the package for the new rules. `[hack] deploy_environment` still counts.
+Upgrading: `colony upgrade` refreshes the hooks and the role skills. `.colony/playbook.md`, `.colony/core.md` and `tools/board` are copies setup filled in, so copy them again from the package for the new rules, and fill in their placeholders as setup did. `[hack] deploy_environment` still counts.
 
 ## 0.5.0, 2026-11-07
 
