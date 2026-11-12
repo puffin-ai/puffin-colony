@@ -13,6 +13,7 @@ The lead registry, .colony/leads.toml, keeps each lead's person and claimed fold
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -47,6 +48,10 @@ class Status:
     room: list[str] = field(default_factory=list)
     folders: list[str] = field(default_factory=list)
     at: float = 0.0  # Unix time of the last update
+    work: str = ""  # a helper's folder, from its transcript (watch.activity)
+    branch: str = ""  # the branch checked out there
+    waiting: str = ""  # the tool call its session waits on for an answer, such as Bash, or ""
+    waiting_since: float = 0.0
     comment: int | None = None  # the status comment's id, when it came from one
 
 
@@ -75,20 +80,64 @@ def body(status: Status) -> str:
     return "\n".join(lines) + f"\n\n<!-- {MARK} {json.dumps(data, separators=(',', ':'))} -->"
 
 
+TOOL = re.compile(r"[A-Za-z0-9_.:-]{1,64}")  # a tool's name, such as Bash or mcp__x__y
+HOST = re.compile(r"[A-Za-z0-9_.-]{1,60}")  # a computer's short name
+TEXT_MAX, LIST_MAX = 200, 30
+
+
+def clean_text(value, pattern: re.Pattern | None = None) -> str:
+    """A field from a comment anyone could write, as one short line, or "" when it isn't text or fails `pattern`:
+    never a newline into a line a lead reads."""
+    if not isinstance(value, str):
+        return ""
+    value = " ".join(value.split())[:TEXT_MAX]
+    return value if pattern is None or pattern.fullmatch(value) else ""
+
+
+def clean_number(value) -> float:
+    """A time from a comment anyone could write, or 0.0 when it isn't a finite number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0.0
+    return float(value)
+
+
 def parse(text: str, comment: int | None = None) -> Status | None:
-    """The status a comment holds, or None when it holds none or a broken one."""
+    """The status a comment holds, or None when it holds none or a broken one. On a public repo anyone can comment,
+    so each field is checked: a wrong type falls back to its default, text is one short line, a tool or computer
+    name keeps its pattern, and a name that isn't a session's drops the status."""
     found = HIDDEN.search(text or "")
     if not found:
         return None
     try:
         data = json.loads(found[1])
-        status = Status(**{key: data[key] for key in vars(Status("", "")) if key in data and key != "comment"})
-    except (ValueError, TypeError):
+    except ValueError:
         return None
-    if not status.name or status.kind not in ("lead", "helper"):
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         return None
+    status = Status(clean_text(data["name"]), clean_text(data.get("kind")))
+    if not cli.SESSION_NAME.fullmatch(status.name) or status.kind not in ("lead", "helper"):
+        return None
+    for key in ("person", "lead", "account", "work", "branch"):
+        setattr(status, key, clean_text(data.get(key)))
+    status.computer, status.waiting = clean_text(data.get("computer"), HOST), clean_text(data.get("waiting"), TOOL)
+    for key in ("room", "folders"):
+        given = data.get(key)
+        setattr(status, key, [text for item in (given if isinstance(given, list) else [])[:LIST_MAX]
+                              if (text := clean_text(item))])
+    status.at, status.waiting_since = clean_number(data.get("at")), clean_number(data.get("waiting_since"))
     status.comment = comment
     return status
+
+
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}  # GitHub's author_association for someone with access to the repo
+
+
+def by_team(comment: dict, logins: frozenset[str]) -> bool:
+    """Whether a comment's author is one of the team's logins; with none configured, whether GitHub says the author
+    has access to the repo. Anyone else's comment never counts as a status."""
+    if logins:
+        return str((comment.get("user") or {}).get("login") or "").lower() in logins
+    return comment.get("author_association") in TRUSTED
 
 
 def where(config: dict) -> int:
@@ -100,15 +149,20 @@ def where(config: dict) -> int:
     return wait.coordination_issue(config["project"]["repo"], config["project"]["name"])
 
 
-def read(config: dict) -> list[Status]:
-    """Every status comment on the statuses' issue, newest copy per name."""
+def read_comments(config: dict) -> list[dict]:
+    """Every comment on the statuses' issue, oldest first. gh prints one comment per line (`--jq '.[]'`), each a whole
+    JSON object, so no text inside a comment, such as a board post's "[Ana's Claude] [merged]", can cut the reading."""
     from colony import wait
 
     repo, number = config["project"]["repo"], where(config)
-    out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100")
-    comments = []
-    for chunk in re.split(r"(?<=\])\s*(?=\[)", out.strip()) if out.strip() else []:
-        comments += json.loads(chunk)
+    out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100", "--jq", ".[]")
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
+def read(config: dict) -> list[Status]:
+    """Every status comment on the statuses' issue that one of the team's logins wrote, newest copy per name."""
+    logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+    comments = [comment for comment in read_comments(config) if by_team(comment, logins)]
     found: dict[str, Status] = {}
     for comment in comments:
         status = parse(comment.get("body", ""), comment.get("id"))
@@ -190,22 +244,32 @@ def write_registry(leads: dict[str, dict]) -> None:
 
 
 def folder(path: str) -> str:
-    """A folder as the registry keeps it: relative, with one trailing slash."""
-    clean = path.strip().strip("/")
-    if not clean or clean.startswith("..") or os.path.isabs(path.strip()):
-        raise cli.ColonyError(f"{path!r} is not a folder in this repo")
+    """A claimed path as the registry keeps it, relative: a folder with one trailing slash, given with one or found
+    on disk, and a file as it is, such as src/app.ts, so a lead can hold one file of a folder another lead shares."""
+    given = path.strip()
+    clean = given.removeprefix("./").strip("/")
+    if not clean or clean.startswith("..") or os.path.isabs(given):
+        raise cli.ColonyError(f"{path!r} is not a path in this repo")
+    try:
+        here = cli.repo_root() / clean
+    except cli.ColonyError:
+        here = Path(clean)
+    if given.endswith("/") or here.is_dir():
+        return clean + "/"
+    if here.is_file() or "." in clean.rsplit("/", 1)[-1]:
+        return clean  # a file, or one not made yet whose name has a dot, such as app.ts or package.json
     return clean + "/"
 
 
 def overlaps(a: str, b: str) -> bool:
-    """Whether two folders overlap: one is the other or holds it."""
-    return a.startswith(b) or b.startswith(a)
+    """Whether two claimed paths overlap: the same path, or a folder (with its slash) that holds the other."""
+    return a == b or (a.endswith("/") and b.startswith(a)) or (b.endswith("/") and a.startswith(b))
 
 
 def inside(path: str, folders: list[str]) -> bool:
-    """Whether a path sits in one of the folders."""
-    path = path.strip().lstrip("./")
-    return any(path == f.rstrip("/") or path.startswith(f) for f in folders)
+    """Whether a path sits in one of the claimed paths: in a folder, or the very file."""
+    path = path.strip().removeprefix("./")
+    return any(path == f.rstrip("/") or (f.endswith("/") and path.startswith(f)) for f in folders)
 
 
 def held_by_others(alive: list[Status], me: str) -> dict[str, list[str]]:
@@ -224,8 +288,15 @@ def mine(config: dict, args, name: str, kind: str, lead: str = "") -> Status:
                 if a.get("person") in (person, "any") and Path(a["config_dir"]).expanduser().is_dir()]
     cli.refresh_usage([folder for _, folder in accounts])
     rooms = [cli.room_text(account, folder) for account, folder in accounts]
-    return Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
-                  room=rooms, folders=claimed(lead or name), at=time.time())
+    status = Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
+                    room=rooms, folders=claimed(lead or name), at=time.time())
+    if kind == "helper":
+        from colony import watch
+
+        doing = watch.activity()
+        status.work, status.waiting = doing.get("work", ""), doing.get("waiting", "")
+        status.waiting_since, status.branch = doing.get("waiting_since", 0.0), watch.branch(status.work)
+    return status
 
 
 def keep(config: dict, status: Status, state: dict, now: float | None = None) -> bool:
@@ -241,7 +312,10 @@ def keep(config: dict, status: Status, state: dict, now: float | None = None) ->
     if state.get("status_issue", where(config)) != where(config):
         comment = None  # the board moved: post the status on the fresh one, where `read` looks
     if comment is None:  # find the comment a past session of this name left, before ever adding one
-        comment = next((s.comment for s in read(config) if s.name == status.name and s.comment), None)
+        try:
+            comment = next((s.comment for s in read(config) if s.name == status.name and s.comment), None)
+        except (cli.ColonyError, ValueError):
+            comment = None  # the old comments can't be read now: a fresh one beats no status at all
     if comment is not None:
         try:
             wait.gh("api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment}", "-f", f"body={text}")
@@ -259,6 +333,7 @@ def keeper(config: dict, args, name: str, kind: str, lead: str = ""):
     from colony import wait
 
     path = wait.state_path(config["project"]["name"], f"{name}-status")
+    last = {"error": ""}  # the error printed last: the same one again stays quiet, since the wait polls every 15 s
 
     def run() -> None:
         state = wait.read_json(path, {})
@@ -266,8 +341,11 @@ def keeper(config: dict, args, name: str, kind: str, lead: str = ""):
         try:
             if keep(config, mine(config, args, name, kind, lead), state):
                 wait.write_json(path, state)
+            last["error"] = ""
         except (cli.ColonyError, OSError, ValueError, KeyError) as e:
-            print(f"{cli.NAME} wait: the status comment was not kept: {e}", file=sys.stderr)
+            if str(e) != last["error"]:
+                print(f"{cli.NAME} wait: the status comment was not kept: {e}", file=sys.stderr)
+            last["error"] = str(e)
     return run
 
 
@@ -285,19 +363,42 @@ def describe(status: Status, now: float) -> str:
     who = f"{status.name}" + (f" (helper of {status.lead})" if status.kind == "helper" else "")
     room = f" Room: {'; '.join(status.room)}." if status.room else ""
     folders = f" Folders: {held}." if status.kind == "lead" else ""
+    work = f" Works in {status.work}" + (f" on {status.branch}" if status.branch else "") + "." if status.work else ""
+    waiting = (f" Its {status.waiting} call has waited {int((now - status.waiting_since) // 60)} minutes for an "
+               "answer." if status.waiting and status.waiting_since and now - status.waiting_since >= 120 else "")
     return f"- {who}: {status.person or 'unknown person'} on {where_}, account {status.account or 'unknown'}, " \
-           f"{ago(status.at, now)}.{folders}{room}"
+           f"{ago(status.at, now)}.{folders}{work}{waiting}{room}"
 
 
 def who(config: dict, args) -> int:
     """`colony who`: every live lead and helper, across people and computers, with their folders and their
     accounts' room, and the gone ones."""
+    from colony import demo, live
+
     now = time.time()
+    try:
+        if line := demo.countdown(config):
+            print(line)
+    except cli.ColonyError as e:
+        print(f"{cli.NAME}: {e}", file=sys.stderr)
+    from colony import share
+
+    if line := live.summary(config, cli.repo_root()):
+        print(line)
+    if needs := share.open_needs(config):
+        print(needs)
     alive, gone, note = everyone(config, now)
     if note:
         print(note, file=sys.stderr)
     leads = [s for s in alive if s.kind == "lead"]
     helpers = [s for s in alive if s.kind == "helper"]
+    if note:  # only this computer's heartbeats were read: say what is unknown, never "none alive"
+        print(f"Leads on this computer ({len(leads)}), the rest unknown, because GitHub was not read:" if leads
+              else "Leads: unknown, because GitHub was not read.")
+        for status in sorted(leads, key=lambda s: s.name):
+            print(describe(status, now))
+        print("Helpers: unknown, because GitHub was not read.")
+        return 0
     print(f"Leads ({len(leads)}):" if leads else "Leads: none alive.")
     for status in sorted(leads, key=lambda s: s.name):
         print(describe(status, now))

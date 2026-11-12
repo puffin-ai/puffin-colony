@@ -206,6 +206,17 @@ def test_post_adds_the_prefix_once_and_takes_the_text_from_stdin(board):
                       "[Ana's Codex] two lines\nof news"]
 
 
+def test_a_colony_session_signs_each_line_it_posts_so_its_own_wait_never_takes_it(board):
+    lead = {"COLONY_SESSION": "lead", "COLONY_LEAD": "ana-main-lead"}
+    assert board.run("post", "@all merging ana/login now", **lead).returncode == 0
+    assert board.run("post", stdin="@all one\n\n@sam two (from ana-main-lead)\n", **lead).returncode == 0
+    assert board.run("post", "@all from a helper", COLONY_SESSION="staff", COLONY_LEAD="ana-main-lead").returncode == 0
+    bodies = [c["body"] for c in board.load()["comments"]]
+    assert bodies == ["[Ana's Codex] @all merging ana/login now (from ana-main-lead)",
+                      "[Ana's Codex] @all one (from ana-main-lead)\n\n@sam two (from ana-main-lead)",
+                      "[Ana's Codex] @all from a helper (from staff)"]
+
+
 def test_post_refuses_an_empty_text_and_a_token_without_calling_github(board):
     empty = board.run("post", "  ")
     assert empty.returncode == 1 and "nothing to post" in empty.stderr

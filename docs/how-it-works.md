@@ -137,7 +137,7 @@ Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 **Each builder then:**
 1. keeps `colony wait` running in the background all session;
 2. stamps the card's Last update on the board, `colony board set 41 Last_update=now`, at the start and after each commit: progress goes there, never in a line;
-3. makes the change in its own worktree and branch, `../builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
+3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
 4. runs the fast check and fixes what it reports;
 5. writes a test for a bug fix or new logic (a style change needs none), and checks touch or layout work in a browser at phone width, 390×844;
 6. updates the living spec and wiki pages the change makes stale, in the same commit;
@@ -151,8 +151,8 @@ Builders run at medium effort by default, write no reports, and ask no person an
 When a `done` line arrives, the lead runs `colony tier --head origin/<branch>`. When the branch prints a higher tier than its card, it raises the card's Tier. Then it sets the card to In review and merges that branch into the batch so far, so a conflict shows now and not at the end:
 
 ```sh
-git fetch origin && git worktree add --detach ../next-<batch> origin/<base>    # first card of a batch
-git fetch origin && git -C ../next-<batch> merge --no-ff --no-edit origin/<branch>
+git fetch origin && git worktree add --detach <worktrees>/<project>-next-<batch> origin/<base>    # first card of a batch
+git fetch origin && git -C <worktrees>/<project>-next-<batch> merge --no-ff --no-edit origin/<branch>
 ```
 
 `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day. On a conflict, the lead aborts the merge and asks the builder to merge the other branch into its own, resolve it, push, and post `done` again.
@@ -178,7 +178,7 @@ colony batch --name 2026-11-05 --card 41=builder-2/41 --card 42=builder-3/42 --c
 
 Three things run in parallel:
 
-- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. With `[checks] areas`, a round runs only the areas its change touched: Colony maps each changed path to its areas and fills `{areas}` in the command with their names, or with `[checks] all` when every area runs. A path no area names runs every area, and a change only under `[checks] skip` runs none, so the round skips the checks. After a fix round, the next round runs the areas that failed plus the areas the fixes touched. A failing test whose every failure reason names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again; a failing test with no reason never reruns. The checks then pass only when nothing else in the output failed: no other failed step, no test runner `ERROR` line, and no sign such as make's `*** [lint] Error 1` or a compiler's `error:` outside the failing tests' own lines.
+- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. With `[checks] areas`, a round runs only the areas its change touched: Colony maps each changed path to its areas and fills `{areas}` in the command with their names, or with `[checks] all` when every area runs. A path no area names runs every area, and a change only under `[checks] skip` runs none, so the round skips the checks. After a fix round, the next round runs the areas that failed plus the areas the fixes touched. A failing test whose every failure reason names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again; a failing test with no reason never reruns. The checks then pass only when nothing else in the output failed: no other failed step, no test runner `ERROR` line, and no sign such as make's `*** [lint] Error 1` or a compiler's `error:` outside the failing tests' own lines. When the checks still fail, the same command runs once on the batch's start commit alone, without the cards, in a worktree of its own that goes away after. A failure that shows there too isn't the cards' doing, so no fixer gets it, and `checks-<round>.md` says so. When it is the only failure left, the batch stops and says to fix the base, or the checks' setup, such as a database that is down.
 - **A fresh reviewer.** A new headless session reads the round's diff and checks it against the rubric and the rules, the core and the essentials among them. It reads the places on the risk list first, which `colony batch` takes from `colony tier` at the round's head. It must try to refute each finding before it reports it. Its report starts with `open: N`, the confirmed problems still open, and lists each one as `path:line — what is wrong — the rule it breaks — the smallest fix`. From round 2, it reviews only that round's diff and marks each earlier finding `fixed` or `open`.
 - **A browser walk.** A headless walker starts your stack from a second worktree and walks each card's flows at desktop 1280×800 and phone 390×844, with touch input on the phone, in light and dark. It walks only the screens the round's changed files feed, as `[walk] screens` maps them, and traces any other changed screen file to its screens itself. It drives the browser `[walk] browser` names: the Playwright MCP, or the `agent-browser` CLI, which runs with no MCP server loaded. Its report starts with `walk: pass` or `walk: fail`. A round skips the walk when it changes none of the `walk_paths`, the user-facing files, unless the last walk failed.
 
@@ -223,7 +223,7 @@ When a round passes, or the last round leaves only review and walk findings, the
 
 The PR body holds the cards, the findings the last round left open as new cards, open problems by round (such as `7 → 4 → 1 → 0`), a table of each round's open count, walk and checks, the check commands and their result lines, any account switches, any test files the batch deletes, a minutes table that sums each kind of step's runs, minutes and cost and what the skips saved, and a card stats table of each card's predicted and actual minutes and tokens.
 
-The lead removes `../next-<batch>`, tells you the link, and keeps the other cards moving.
+The lead removes `<worktrees>/<project>-next-<batch>`, tells you the link, and keeps the other cards moving.
 
 ## 10. The batch teaches
 
@@ -268,8 +268,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-batch-<batch>-walk` | The walker's worktree, detached at each round's head |
 | `<worktrees>/<project>-fix-<batch>-<card>-r<round>` | A fixer's worktree, removed after its merge |
 | `<worktrees>/<project>-retro-<batch>` | The retro agent's worktree |
-| `../<builder>-<card>` | A builder's worktree |
-| `../next-<batch>` | The lead's early-merge worktree |
+| `<worktrees>/<project>-<builder>-<card>` | A builder's worktree, in the folder `[project] worktrees` names, never beside the clone |
+| `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
 

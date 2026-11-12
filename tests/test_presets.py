@@ -168,3 +168,10 @@ def test_each_puffin_essentials_file_holds_the_shim_line_the_core_gave_up(path):
 def test_the_docs_life_cycle_rule_loads_only_for_the_vault():
     front = re.match(r"---\n(.*?)\n---\n", (KNOWLEDGE_RULES / "docs-life-cycle.md").read_text(), re.S)[1]
     assert front.split("paths:\n", 1)[1].splitlines() == ['  - "**/{knowledge}/**"']
+
+
+def test_the_playbook_puts_every_worktree_in_the_worktrees_folder():
+    from importlib import resources
+    playbook = (Path(str(resources.files("colony"))) / "playbook.md").read_text()
+    assert "worktree add ../" not in playbook and "worktree add --detach ../" not in playbook
+    assert "{worktrees}/{project}-<login>-<task>" in playbook and "`{worktrees}`" in playbook

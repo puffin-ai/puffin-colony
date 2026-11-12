@@ -189,19 +189,21 @@ def python_command(path: str, *args: str, root: str = "$CLAUDE_PROJECT_DIR") -> 
             f"{run}; elif python -V >/dev/null 2>&1; then exec python {run}; else exec py -3 {run}; fi")
 
 
+# The identity colony keeps for a Claude Code session a person opened (cli.remember_identity): its hooks run too.
+IDENTITY_FILE = "$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json"
 PLUGIN_BIN = '"${CLAUDE_PLUGIN_ROOT}/bin/colony"'  # the plugin's own `colony`: a hook's PATH lacks the plugin's bin/
 
 
 def colony_command(action: str, program: str = cli.NAME) -> str:
     """A hook's shell command that runs `colony hooks <action>` in a Colony session, and skips every other one."""
-    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {program} >/dev/null 2>&1 || exit 0; '
+    return (f'{{ [ -n "${cli.SESSION_ENV}" ] || [ -f "{IDENTITY_FILE}" ]; }} && command -v {program} >/dev/null 2>&1 || exit 0; '
             f'cd "$CLAUDE_PROJECT_DIR" && exec {program} hooks {action}')
 
 
 def quiet_command(action: str, program: str = cli.NAME) -> str:
     """A hook's shell command that runs `colony hooks <action>` in a Colony session, skips every other one, and always
     exits 0: a UserPromptSubmit hook that exits 2 would erase the person's prompt."""
-    return (f'[ -n "${cli.SESSION_ENV}" ] && command -v {program} >/dev/null 2>&1 || exit 0; '
+    return (f'{{ [ -n "${cli.SESSION_ENV}" ] || [ -f "{IDENTITY_FILE}" ]; }} && command -v {program} >/dev/null 2>&1 || exit 0; '
             f'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && {program} hooks {action}; exit 0')
 
 
