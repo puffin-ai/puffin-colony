@@ -403,6 +403,15 @@ def test_the_lead_and_builder_sections_send_a_hack_session_to_the_hack_section()
         assert "In hack mode, follow the Hack section instead." in playbook_section(name)
 
 
+def test_the_lead_section_holds_the_person_rules_and_the_alarms_every_mode_needs():
+    # These began in the Hack section alone, but the person, the watchdog's alarms, the Live line, colony need and
+    # colony share are there for a lead in every mode.
+    lead = playbook_section("Lead")
+    for rule in ("The person comes first", "\"don't write to me\"", "a helper's call waits on a prompt",
+                 "only from the `Live:` line", "`colony need @<login> \"<what>\"`", "`colony share <file> --to @<login>`"):
+        assert rule in lead, rule
+
+
 def test_the_hack_section_covers_the_board_the_lead_and_the_builder_without_cards():
     hack = playbook_section("Hack")
     for part in ("### The board", "### Hack lead", "### Hack builder"):
