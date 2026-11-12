@@ -605,7 +605,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             print(f"{cli.NAME} wait: could not look back for an older start line, reading the last hour only: {e}",
                   file=sys.stderr)
     failures, digest_at = 0, clock.now() + digest
-    listener = claim_listener(project, me.name)
+    listener = claim_listener(project, state_name(me.name))  # a named lead's own name, so leads keep apart
     limited = False
     last_wall, last_mono = time.time(), time.monotonic()
     add_stale(state, stale)
@@ -632,7 +632,7 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             if gap := watch.slept(last_wall, last_mono, wall, mono):
                 state["pending"].append([gap, True])
             last_wall, last_mono = wall, mono
-        if not still_listening(project, me.name, listener):
+        if not still_listening(project, state_name(me.name), listener):
             # Another wait for this session started since: it reads every line itself, so this one stops without
             # writing the state they share, and says so, so its session starts no third one.
             print(f"{cli.NAME} wait: a newer {cli.NAME} wait for {me.name} runs, so this one stopped: start no other")

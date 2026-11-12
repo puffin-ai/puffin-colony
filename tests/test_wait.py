@@ -662,6 +662,21 @@ def test_a_newer_wait_for_the_same_session_makes_the_older_one_stop(gh, monkeypa
     assert not wait.state_path("demo", "builder-2").exists()  # the newer wait reads the line itself
 
 
+def test_a_named_leads_wait_listens_under_its_own_name_so_another_lead_on_the_computer_never_stops_it(
+        gh, monkeypatch, capsys):
+    monkeypatch.setenv(wait.LEAD_ENV, "ana-main-lead")
+    me = wait.Session(name="lead", names=frozenset({"lead", "ana-main-lead"}))
+
+    def another_lead_starts_its_wait(repo, state, session):
+        wait.write_json(wait.state_path("demo", "lead-listener"), {"pid": -1, "token": "sam-web-lead"})
+        state["pending"].append(["for ana-main-lead: urgent: main is red (from builder-1)", True])
+        return False
+    monkeypatch.setattr(wait, "poll", another_lead_starts_its_wait)
+    assert wait.wait("acme/demo", "demo", me, clock=Clock()) == 0
+    assert capsys.readouterr().out == "for ana-main-lead: urgent: main is red (from builder-1)\n"
+    assert wait.state_path("demo", "ana-main-lead-listener").exists()
+
+
 def test_a_mention_in_a_line_for_another_session_wakes_no_lead():
     ana = wait.Session("lead", frozenset({"lead", "ana-main-lead"}), logins=frozenset({"ana"}))
     assert wait.taken("[Sam's Claude] @ana can you take the export? (from sam-main-lead)", ana, "")
