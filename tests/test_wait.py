@@ -22,7 +22,12 @@ here = pathlib.Path(__file__).resolve().parent
 args = sys.argv[1:]
 with open(here / "calls.jsonl", "a") as log:
     log.write(json.dumps(args) + "\\n")
-kind = "poll" if args[:2] == ["api", "-i"] else "-".join(args[:2])
+if args[:2] == ["api", "-i"]:
+    kind = "poll"
+elif args[:1] == ["api"] and "direction=desc" in args[-1]:
+    kind = "catchup"
+else:
+    kind = "-".join(args[:2])
 answers = sorted(here.glob(kind + "-*.txt"))
 if answers:
     sys.stdout.write(answers[0].read_text())
@@ -30,6 +35,8 @@ if answers:
 elif kind == "poll":
     sys.stdout.write('HTTP/2.0 304 Not Modified\\r\\nEtag: W/"e1"\\r\\n\\r\\n')
     sys.exit(1)
+elif kind == "catchup":
+    sys.stdout.write("[]")
 elif kind == "issue-list":
     sys.stdout.write('[{"number": 5, "title": "Colony: coordination"}]')
 else:
@@ -61,7 +68,8 @@ class Gh:
         self.count = 0
 
     def answer(self, *texts: str, kind: str = "poll") -> None:
-        """Queue the next answers to `gh api -i` (kind poll) or to another call, such as issue-list, in order."""
+        """Queue the next answers to `gh api -i` (kind poll), to a helper's first look back (kind catchup), or to
+        another call, such as issue-list, in order."""
         for text in texts:
             self.count += 1
             (self.bin / f"{kind}-{self.count:03}.txt").write_text(text, newline="")  # as written, \r\n too
@@ -74,6 +82,10 @@ class Gh:
     def polls(self) -> list[list[str]]:
         """The calls that read the comments."""
         return [call for call in self.calls() if call[:2] == ["api", "-i"]]
+
+    def catchups(self) -> list[list[str]]:
+        """The calls a helper's first wait made to look back for an older start line."""
+        return [call for call in self.calls() if call[:1] == ["api"] and "direction=desc" in call[-1]]
 
 
 @pytest.fixture
@@ -123,7 +135,7 @@ def test_a_builder_takes_only_lines_for_it_that_the_lead_signed(gh, capsys, monk
     code, out, clock = run_as("builder-1", capsys, monkeypatch)
     assert code == 0 and clock.naps == []
     assert out == "#12 for builder-1: start this card (from lead)\n"
-    assert gh.calls() == gh.polls()  # a builder never looks for the coordination issue
+    assert gh.calls() == gh.catchups() + gh.polls()  # a builder never looks for the coordination issue
 
 
 def test_the_lead_takes_every_line_for_it_but_its_own(gh, capsys, monkeypatch):
@@ -142,7 +154,7 @@ def test_a_quiet_poll_sends_the_last_etag_and_sleeps(gh, capsys, monkeypatch):
               ok(comment(1, "for builder-2: start this card (from lead)"),
                  comment(2, "for builder-1: start this card (from lead)", updated="2026-11-05T10:05:00Z"), etag='W/"e2"'))
     code, out, clock = run_as("builder-1", capsys, monkeypatch)
-    calls = gh.calls()
+    calls = gh.polls()
     assert code == 0 and out == "#7 for builder-1: start this card (from lead)\n"
     assert clock.naps == [15, 15]
     assert "If-None-Match" not in " ".join(calls[0])
@@ -153,10 +165,10 @@ def test_a_quiet_poll_sends_the_last_etag_and_sleeps(gh, capsys, monkeypatch):
 def test_the_first_wait_reads_the_last_hour(gh, capsys, monkeypatch):
     gh.answer(ok(comment(1, "for builder-1: start this card (from lead)")))
     run_as("builder-1", capsys, monkeypatch)
-    query = parse_qs(urlsplit(gh.calls()[0][-1]).query)
+    query = parse_qs(urlsplit(gh.polls()[0][-1]).query)
     since = datetime.strptime(query["since"][0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     assert abs(datetime.now(timezone.utc) - timedelta(hours=1) - since) < timedelta(minutes=1)
-    assert gh.calls()[0][-1].startswith("repos/acme/demo/issues/comments?since=")
+    assert gh.polls()[0][-1].startswith("repos/acme/demo/issues/comments?since=")
 
 
 def test_a_printed_line_never_prints_again_and_the_state_lives_in_home(gh, capsys, monkeypatch, tmp_path):
@@ -168,7 +180,68 @@ def test_a_printed_line_never_prints_again_and_the_state_lives_in_home(gh, capsy
                  comment(2, "for builder-1: take #9 next (from lead)", updated="2026-11-05T10:09:00Z", issue=9)))
     code, out, _ = run_as("builder-1", capsys, monkeypatch)
     assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
-    assert "since=2026-11-05T10:00:00Z&" in gh.calls()[1][-1]
+    assert "since=2026-11-05T10:00:00Z&" in gh.polls()[1][-1]
+
+
+def test_a_helpers_first_wait_gets_a_start_line_older_than_the_lookback(gh, capsys, monkeypatch):
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12),
+                          comment(2, "for builder-1: start: that card (from lead)", "2026-11-04T21:00:00Z", issue=8)]),
+              kind="catchup")
+    code, out, clock = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and clock.naps == []
+    assert out == "#12 for builder-1: start: this card (from lead)\n"  # the newest one, and only it
+    assert "direction=desc" in gh.catchups()[0][-1]
+
+
+def test_a_start_line_the_helper_answered_or_another_lead_signed_is_not_caught_up(gh, capsys, monkeypatch):
+    gh.answer(json.dumps([comment(4, "for builder-1: start: this card (from sam-lead)", "2026-11-04T22:00:00Z", issue=14),
+                          comment(3, "for lead: done, builder-1/12 pushed (from builder-1)", "2026-11-04T21:30:00Z",
+                                  issue=12),
+                          comment(2, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    gh.answer(ok(comment(5, "for builder-1: take #9 next (from lead)", issue=9)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
+
+
+def test_only_the_first_wait_looks_back_and_a_caught_up_line_never_prints_twice(gh, capsys, monkeypatch):
+    start = comment(3, "for builder-1: start: this card (from lead)", issue=12)
+    gh.answer(json.dumps([start]), kind="catchup")
+    gh.answer(ok(start))  # the same line again, inside the last hour
+    assert run_as("builder-1", capsys, monkeypatch)[1] == "#12 for builder-1: start: this card (from lead)\n"
+    gh.answer(ok(start, comment(4, "for builder-1: take #9 next (from lead)", "2026-11-05T10:09:00Z", issue=9)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
+    assert len(gh.catchups()) == 1
+
+
+def test_a_helpers_first_wait_catches_up_after_the_prompt_hook_wrote_its_state(gh, capsys, monkeypatch, tmp_path):
+    # The prompt hook reads the last hour at the helper's first prompt, so `since` is on file before its first wait.
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [], "hook_polled_at": 1.0}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#12 for builder-1: start: this card (from lead)\n"
+
+
+def test_a_start_line_the_prompt_hook_already_showed_is_not_caught_up_again(gh, capsys, monkeypatch, tmp_path):
+    state_file = tmp_path / ".colony" / "demo" / "builder-1.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"since": "2026-11-05T09:00:00Z", "pending": [],
+                                      "seen": ["3:for builder-1: start: this card (from lead)"]}))
+    gh.answer(json.dumps([comment(3, "for builder-1: start: this card (from lead)", "2026-11-04T21:18:00Z", issue=12)]),
+              kind="catchup")
+    gh.answer(ok(comment(5, "for builder-1: take #9 next (from lead)", issue=9)))
+    code, out, _ = run_as("builder-1", capsys, monkeypatch)
+    assert code == 0 and out == "#9 for builder-1: take #9 next (from lead)\n"
+
+
+def test_the_leads_first_wait_never_looks_back(gh, capsys, monkeypatch):
+    gh.answer(ok(comment(1, "for lead: question: which card? (from builder-1)")))
+    run_as("lead", capsys, monkeypatch)
+    assert gh.catchups() == []
 
 
 def test_a_full_page_reads_on_without_sleeping(gh, capsys, monkeypatch):
@@ -177,7 +250,7 @@ def test_a_full_page_reads_on_without_sleeping(gh, capsys, monkeypatch):
               ok(comment(3, "for builder-1: start this card (from lead)", updated="2026-11-05T10:02:00Z")))
     code, out, clock = run_as("builder-1", capsys, monkeypatch)
     assert code == 0 and clock.naps == []
-    assert "since=2026-11-05T10:01:00Z&" in gh.calls()[1][-1]
+    assert "since=2026-11-05T10:01:00Z&" in gh.polls()[1][-1]
 
 
 def test_lasting_failures_end_the_wait_with_the_reason(gh, capsys, monkeypatch):

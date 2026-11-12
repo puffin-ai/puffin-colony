@@ -9,8 +9,9 @@ so a person or another agent writing to a helper directly is never lost (see `ta
 `<person>-lead` on one issue per repo, `Colony: coordination`. Every 15
 seconds the wait asks `gh api` for the repo's issue comments changed since its last read, sending the last ETag, so
 a quiet poll costs nothing against the rate limit. Its state lives in ~/.colony/<project>/<session>.json, and a
-session's first wait reads the last hour. Lines are posted through transport.send. Every line goes out by `colony post` on a
-card, or `colony say` lead to lead. When colony.cycle imports and the card board is on, the lead's wait also
+session's first wait reads the last hour. A helper's first wait also looks further back for the newest start line its
+lead signed for it that it hasn't answered (catch_up), so a helper that joins late still gets its card. Lines are
+posted through transport.send. Every line goes out by `colony post` on a card, or `colony say` lead to lead. When colony.cycle imports and the card board is on, the lead's wait also
 gathers its cycle.stale_lines.
 
 Hack mode puts every line on one board issue, `[messages] board`, after a `[<Name>'s Claude]` prefix (transport.send).
@@ -55,6 +56,7 @@ SHARED_KEPT = 500  # the newest comments the shared copy keeps
 RATE_LIMIT_WAIT = 600  # the longest a wait sleeps for GitHub's rate limit before it reads again
 LOOKBACK = timedelta(hours=1)
 PAGE = 100
+CATCH_UP_PAGES = 10  # a helper's first wait looks this many pages back, newest first, for its lead's start line
 GIVE_UP = 40  # failed polls in a row, about 10 minutes, before the wait ends with the error
 KEEP_SEEN = 500
 DIGEST_MINUTES = 10
@@ -65,6 +67,7 @@ LINE = re.compile(r"for\s+([\w.-]+)\s*:\s*(\S.*)", re.I)
 SIGNED = re.compile(r"\(from\s+([\w.-]+)\)\W*$", re.I)
 CANT_WAIT = re.compile(r"(urgent|blocked|question|need)\s*:", re.I)  # need: asks another lead (share.need)
 DONE = re.compile(r"done\b", re.I)
+START = re.compile(r"start\b", re.I)  # a lead's line that hands a helper its card
 JOINED = re.compile(r"joined\s*:", re.I)  # a helper's first line, from `colony join`, which the lead's wait wakes on
 PREFIX = re.compile(r"^\[[^\[\]\n]{1,80}'s [^\[\]\n]{1,40}\]\s*")  # a board post's `[<Name>'s <agent>]`
 MENTION = re.compile(r"(?<![\w@./+-])@([A-Za-z0-9][A-Za-z0-9-]*)")  # @<login>, never the middle of an email
@@ -447,6 +450,44 @@ def shared_comments(repo: str, since: str) -> tuple[list, bool]:
         return [comment for comment in copy["comments"] if comment.get("updated_at", "") >= since], bool(copy["full"])
 
 
+def catch_up(repo: str, state: dict, me: Session) -> None:
+    """A helper's first wait: add to state["pending"] the newest `start` line its lead signed for it that no later
+    line it signed on the same issue answered, however old, so a helper that joins after LOOKBACK still gets its card.
+    It reads the repo's comments newest first, at most CATCH_UP_PAGES pages, and marks the line seen, so the polls
+    that follow never print it again."""
+    answered: set[str] = set()
+    for page in range(1, CATCH_UP_PAGES + 1):
+        path = f"repos/{repo}/issues/comments?sort=created&direction=desc&per_page={PAGE}&page={page}"
+        comments = json.loads(gh("api", path) or "[]")
+        for comment in comments:
+            card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
+            starts = {line for line, _ in taken(body, me, card) if START.match(sentence_of(line))}
+            for raw in reversed(body.splitlines()):  # a comment's later line is the newer one
+                line = MARKUP.sub("", raw)
+                signed = SIGNED.search(MARKUP.sub("", PREFIX.sub("", line)))
+                if signed and signed[1].lower() in me.names:
+                    answered.add(card)
+                elif line in starts and card not in answered:
+                    key = f"{comment['id']}:{line}"
+                    if key in state.setdefault("seen", []):
+                        return  # the prompt hook or an earlier wait already showed it
+                    entry = unread_entry(repo, comment, card, line)
+                    state["seen"].append(key)
+                    state["pending"].append([unread_text(entry), True])
+                    state["unread"].append(entry)
+                    state["listed"].append(unread_text(entry))
+                    return
+        if len(comments) < PAGE:
+            return
+
+
+def sentence_of(line: str) -> str:
+    """The sentence of a taken line, after its `for <name>:`, or the whole line when it has none."""
+    text = MARKUP.sub("", PREFIX.sub("", line))
+    found = LINE.match(text)
+    return found[2] if found else text
+
+
 def drop_shown(path: Path, state: dict, listed: set[str]) -> None:
     """Drop each gathered line the prompt hook already showed: one of `listed`, the lines this wait put in the
     state file's unread cache, that the file's cache no longer holds. A file with no cache to read drops nothing."""
@@ -548,10 +589,21 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     clock = clock or CLOCK
     path = state_path(project, state_name(me.name))
     state = read_json(path, {})
+    # The prompt hook writes `since` when a helper gets its first prompt, before its first wait, so the wait marks
+    # its own catch-up, per Claude Code session: a session that takes over a builder's name catches up too.
+    session_id = os.environ.get(cli.CLAUDE_SESSION_ENV) or "once"
+    first = state.get("caught_up") != session_id
     state.setdefault("since", (datetime.now(timezone.utc) - LOOKBACK).strftime("%Y-%m-%dT%H:%M:%SZ"))
     state.setdefault("pending", [])
     state.setdefault("unread", [])
     state.setdefault("listed", [])
+    if first and me.name != cli.LEAD:
+        try:
+            catch_up(repo, state, me)
+            state["caught_up"] = session_id
+        except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
+            print(f"{cli.NAME} wait: could not look back for an older start line, reading the last hour only: {e}",
+                  file=sys.stderr)
     failures, digest_at = 0, clock.now() + digest
     listener = claim_listener(project, me.name)
     limited = False
