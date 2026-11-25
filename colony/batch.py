@@ -755,15 +755,13 @@ def _person(config: dict, args, account: str) -> str:
 
 
 def check_settings(config: dict) -> None:
-    """Refuse a colony.toml whose checks or walk settings this version can't run: `[project] web_checks`, which
-    `[checks] areas` replaced, `{areas}` in a check command with no areas named, a `[checks]` or `[ci]` key
-    checks.validate refuses, and an unknown `[walk] browser`."""
+    """Refuse a colony.toml whose checks or walk settings this version can't run: `{areas}` in a check command with no
+    areas named, a `[checks]` or `[ci]` key checks.validate refuses, and an unknown `[walk] browser`. A setting an
+    upgrade removed, such as `[project] web_checks`, never gets here: loading skips it with a note
+    (configs.MIGRATIONS)."""
     from colony import checks
 
     project = config["project"]
-    if project.get("web_checks"):
-        raise SystemExit("[project] web_checks is gone: name each check area's paths in [checks] areas, and put "
-                         "{areas} in [project] checks where the area names go")
     if not check_areas(config) and any("{areas}" in (project.get(key) or "") for key in ("checks", "fast_check")):
         raise SystemExit("[project] checks has {areas}, but [checks] areas names none: add the areas and their paths")
     try:
@@ -1079,7 +1077,7 @@ def rerun_timeouts(b: Batch, r: int, output: str, failures: list[Finding], log: 
                                     stderr=subprocess.STDOUT, **portable.own_group())
             b.track(proc)
             try:
-                code = proc.wait(timeout=RERUN_SECONDS)
+                code = proc.wait(timeout=min(RERUN_SECONDS, round_cap(b) or RERUN_SECONDS))
             except subprocess.TimeoutExpired:
                 portable.stop_group(proc)
                 code = None
@@ -1174,10 +1172,15 @@ def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
                                     stderr=subprocess.STDOUT, **portable.own_group())
             b.track(proc)
             try:
-                code = proc.wait()
+                code = checks.wait_capped(proc, round_cap(b))
             finally:
                 b.track(proc, on=False)
         output = log.read_text(errors="replace")
+        if code is None:  # past the round's cap: the start commit tells nothing, and nothing is kept
+            with (b.reports / f"checks-{r}.md").open("a") as out:
+                out.write(f"- the run on {b.start} alone was stopped past its cap of {checks.span(round_cap(b))}, "
+                          "so it tells nothing\n")
+            return sha, set()
         failing = {failure_key(f) for f in parse_check_failures(output)} if code else set()
     finally:
         _git(b.root, "worktree", "remove", "--force", str(wt), check=False)
@@ -1201,6 +1204,14 @@ def split_on_start(b: Batch, r: int, cmd: str, failures: list[Finding]) -> tuple
             out.write("".join(f"- fails on {b.start} alone at {sha[:9]} too, so no fixer gets it: {f.text}\n"
                               for f in on_start))
     return [f for f in failures if f not in on_start], on_start, sha
+
+
+def round_cap(b: Batch) -> float:
+    """The seconds a round's checks may run before they are stopped: `[checks] caps` for the kind the round runs,
+    `full`, `fast` for a fast gate, or `checks` (configs.batch_kind); 0 is no cap."""
+    from colony import configs
+
+    return configs.cap(b.config, configs.batch_kind(b.config, b.full))
 
 
 def checks_yardstick(b: Batch) -> float | None:
@@ -1257,8 +1268,7 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     log = b.reports / f"checks-{r}.log"
     started, clock = time.time(), time.strftime("%H:%M")
     proc, reused, watcher, key = None, None, None, ("", "", "")
-    kind = "full" if b.full or scoped.settings(b.config)["scope"] == "full" else "checks"
-    cap = float(scoped.settings(b.config)["caps"].get(kind, 0))
+    cap = round_cap(b)
     if planned.cmd is not None:
         key = scoped.commit_key(b, "HEAD", cmd)
         reused = scoped.reusable_pass(b.config, key[0])
@@ -1601,6 +1611,9 @@ def plan(b: Batch) -> str:
                      f"beside the fast check: $ {scoped.settings(b.config)['related']}")
     lines.append("  a check that passed on this same code before is reused, and the first failing line shows in "
                  f"`{cli.NAME} status` the moment it streams")
+    if round_cap(b):
+        lines.append(f"  a round's checks past {scoped.span(round_cap(b))}, [checks] caps, are stopped, and stop the "
+                     "batch")
     if checks.get("rerun"):
         lines.append(f"  a failing test whose output names a timeout or a time limit runs once more by itself: "
                      f"$ {checks['rerun']}")

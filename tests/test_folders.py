@@ -312,3 +312,11 @@ def test_worktree_check_names_each_worktree_outside_the_folder_and_how_to_move_i
     assert "1 worktree sits outside" in out and f"git worktree move {stray.resolve()}" in out
     config = cli.load_config()
     assert any("1 worktree sits outside" in line for line in folders.notes(config))
+
+
+def test_a_worktrees_folder_outside_the_repo_is_named_once_a_day_when_the_lead_starts(home, config, github, capsys):
+    from test_hi import hi
+
+    out = hi(capsys)
+    assert "[project] worktrees is" in out and 'set it to ".worktrees", inside the repo' in out
+    assert "[project] worktrees is" not in hi(capsys)  # once a day

@@ -110,9 +110,10 @@ def merge_tables(defaults: dict, own: dict) -> dict:
 
 
 def load_config(path=None) -> dict:
-    """Read the repo's .colony/colony.toml (or `path`) over its mode's defaults (modes/<mode>.toml), expand `~` in its
+    """Read the repo's .colony/colony.toml (or `path`) over its mode's defaults (modes/<mode>.toml), with this
+    computer's own .colony/colony.local.toml over it and old settings migrated (configs.layered), expand `~` in its
     paths, and check its keys. A relative worktrees folder starts from the clone's main checkout."""
-    from colony import folders
+    from colony import configs, folders
 
     path = Path(path) if path else config_path()
     try:
@@ -122,6 +123,7 @@ def load_config(path=None) -> dict:
         raise ColonyError(f"{path} is missing: pull the branch that has it, or run `{NAME}` to set this repo up") from None
     except tomllib.TOMLDecodeError as e:
         raise ColonyError(f"{path}: {e}") from None
+    own = configs.layered(own, path)
     name = mode(own)
     if name not in MODES:
         raise ColonyError(f'{path}: [project] mode is "hack", "solo" or "startup", not {name!r}')
@@ -942,6 +944,11 @@ def here(args) -> int:
         return 0
     config = load_config()
     print(f"{DISPLAY}: set up here, project {config['project']['name']}, {mode(config)} mode.")
+    from colony import configs
+
+    # Old settings and stray worktrees, once a day; a dry run prints them and keeps no record.
+    configs.say(config, configs.briefing(config)[len(configs.LAST):], always=bool(getattr(args, "dry_run", False)),
+                out=sys.stdout)
     me = os.environ.get(SESSION_ENV, "").lower()
     if me and not (me == LEAD and not wait.named()):
         role = section(config, "Lead" if me == LEAD else "Builder")
@@ -1646,8 +1653,9 @@ def worktree_command(config: dict, me: str, card: int, start: str) -> str:
 
 def batch(config: dict, args) -> int:
     """Take a batch of cards through the loop to a pull request (batch.run_batch)."""
-    from colony import batch as runner
+    from colony import batch as runner, configs
 
+    configs.say(config)  # an old setting the load skipped or moved, once a day, never a stop
     return runner.run_batch(config, args)
 
 
@@ -1901,6 +1909,8 @@ def build_parser() -> argparse.ArgumentParser:
     capacity.register(sub)
     from colony import folders  # the lead registry's leads, lend and borrow, and worktree
     folders.register(sub)
+    from colony import configs  # config layers and migrations: `colony config`
+    configs.register(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")
