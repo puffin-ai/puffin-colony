@@ -1814,8 +1814,9 @@ def main() -> int:
     branch, a merge or push the person hasn't allowed, or a kill by name or pattern, else 0. A GitHub tool's call,
     which Claude Code sends here too, is read for a merge alone. A call the guard can't read runs; an error while it
     checks one it could read refuses it, since Claude Code runs a call whose hook fails any other way."""
+    raw = sys.stdin.read()
     try:
-        call = json.load(sys.stdin)
+        call = json.loads(raw)
         tool_input = call["tool_input"]
         if not isinstance(tool_input, dict):
             raise TypeError("the input is not an object")
@@ -1824,8 +1825,20 @@ def main() -> int:
         command = tool_input.get("command") if not tool.startswith("mcp__") else ""
         if not isinstance(command, str):
             raise TypeError("the command is not text")
-    except (ValueError, KeyError, TypeError, RecursionError):
-        return 0  # a call the guard can't read runs, and Claude Code's own checks still apply to it
+    except RecursionError:  # a tool's arguments are the agent's to write: nesting can't hide a merge
+        sys.stderr.write("guard: refused, this call is nested too deep for the guard to read, so it can't check it. "
+                         "Send it again with plain arguments.\n")
+        return 2
+    except (ValueError, KeyError, TypeError):
+        # A call the guard can't read runs, and Claude Code's own checks still apply to it, unless its text names a
+        # GitHub tool that merges or commits, or a push, a merge or a kill, which it must never let through unchecked.
+        names = (*MCP_PR_MERGES, *MCP_COMMITS)
+        if any(f"__{name}" in raw for name in names) or RAW_PUSH.search(raw) or RAW_MERGE.search(raw) \
+                or RAW_KILL.search(raw):
+            sys.stderr.write("guard: refused, the guard could not read this call, and it names a push, a merge or a "
+                             "kill. Send it again as a plain call.\n")
+            return 2
+        return 0
     try:
         return check(tool, tool_input, cwd, command)
     except Exception as e:  # a bug or a surprise in the guard: refuse, never let the call through unchecked

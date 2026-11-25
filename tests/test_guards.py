@@ -640,6 +640,19 @@ def test_a_graphql_input_body_nested_past_pythons_limit_is_refused(hosted, tmp_p
     assert merge_refused(run, "`gh api graphql`"), (run.returncode, run.stderr[-300:])
 
 
+def test_a_call_nested_past_pythons_limit_is_refused(hosted):
+    """Regression: a GitHub tool's arguments are the agent's to write, and one nested past Python's recursion limit
+    made the guard's reading of the call fail, which let the call run: here, a merge unchecked."""
+    call = ('{"tool_name": "mcp__github__merge_pull_request", "cwd": ' + json.dumps(str(hosted)) +
+            ', "tool_input": {"owner": "acme", "repo": "demo", "pullNumber": 5, "x": ' + "[" * 100000 + "]" * 100000
+            + "}}")
+    run = guard(call)
+    assert run.returncode == 2 and "nested too deep" in run.stderr, (run.returncode, run.stderr[-300:])
+    broken = '{"tool_name": "mcp__github__merge_pull_request", "tool_input": "not an object"}'
+    assert guard(broken).returncode == 2  # a merge tool's call the guard can't read is refused
+    assert guard('{"tool_name": "mcp__github__get_issue", "tool_input": "x"}').returncode == 0  # any other runs
+
+
 def test_an_error_inside_the_guard_refuses_the_call_never_lets_it_run(hosted):
     """Regression: an error the guard didn't expect while it checked a call ended it with exit 1, which Claude Code
     takes as a hook that failed, and runs the call anyway. Any such error now refuses the call, exit 2."""
