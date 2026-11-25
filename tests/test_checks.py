@@ -627,3 +627,16 @@ def test_the_command_line_routes_check_and_ci_and_the_old_settings_keep_their_me
     # A config with no [checks] related keeps the areas scope, the way Colony always checked.
     assert checks.settings(config)["scope"] == "areas"
     assert checks.settings({**config, "checks": {"related": "pytest {tests}"}})["scope"] == "related"
+
+
+@pytest.mark.parametrize("folder", ["inside", ".worktrees"])
+def test_a_commits_check_worktree_inside_the_repo_stays_out_of_git_status(repo, config, folder, monkeypatch):
+    """Regression (audit, Job B finding 3): `colony check run --ref` made its worktree with plain git, so a worktrees
+    folder inside the repo showed in the main checkout's `git status`, and a check on the same commit was no longer
+    reused there. It goes through folders.worktree_arguments, which keeps the folder out, given in full or relative
+    to the repo."""
+    monkeypatch.chdir(repo)
+    config["project"]["worktrees"] = str(repo / folder) if folder == "inside" else folder
+    path = checks.ref_worktree(config, repo, git(repo, "rev-parse", "HEAD"))
+    assert (repo / path).is_dir() and (repo / path).parent.resolve() == (repo / folder).resolve()
+    assert git(repo, "status", "--porcelain") == ""

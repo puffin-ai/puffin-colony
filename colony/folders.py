@@ -739,6 +739,16 @@ def keep_out(folder: str | Path, main: Path | None) -> None:
             pass
 
 
+def worktree_arguments(root: Path, path: Path, *options: str, start: str) -> list[str]:
+    """git's arguments that make a worktree at `path` from `start`, with `options` such as --detach, for the caller's
+    own git runner. It first keeps the folder the worktree goes in out of `git status` (keep_out) when that folder
+    sits inside the clone's main checkout, so the worktree never shows there as an uncommitted change. Every Colony
+    command that makes a worktree with plain git goes through it: a batch, a check of a commit, a merge and a retro.
+    A relative `path` is read from `root`, as git reads it there."""
+    keep_out((path if path.is_absolute() else root / path).parent, main_checkout(root))
+    return ["worktree", "add", *options, str(path), start]
+
+
 def ready(config: dict, start: Path | None = None) -> Path:
     """Make the worktrees folder, kept out of `git status` when it sits inside the repo (keep_out). Returns it."""
     folder = worktrees_folder(config)

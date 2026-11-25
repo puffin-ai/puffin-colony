@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from colony import board, cli, tidy, wait
+from colony import board, cli, folders, tidy, wait
 
 TINY, SMALL, FEATURE = "TINY", "SMALL", "FEATURE"
 TINY_CODE_LINES, TINY_DOCS_LINES, FEATURE_CODE_LINES = 100, 300, 400
@@ -919,7 +919,8 @@ def retro(config: dict, args) -> int:
         print(f"\n--- retro prompt\n{prompt}")
         return 0
     _git(root, "fetch", "origin")
-    _git(root, *worktree[1:])
+    _git(root, *folders.worktree_arguments(root, checkout, "--no-track", "-b", branch,
+                                           start=f"origin/{project['base']}"))
     run = subprocess.run(agent, cwd=checkout, env=gate.agent_env(), capture_output=True, text=True)
     if run.returncode or not report.exists():
         raise cli.ColonyError(f"the retro agent ended without {report} (exit {run.returncode}); its worktree stays "

@@ -50,7 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
-from colony import cli, portable
+from colony import cli, folders, portable
 
 REPORTS = f"{cli.DIR}/reports"  # each batch's reports folder, inside its worktree
 RISKS_PLACE = "- the batch's risk list, from `colony tier` at each round's head"  # a dry run's stand-in
@@ -992,7 +992,7 @@ def assemble(b: Batch) -> None:
         if local.returncode and remote.returncode:
             raise Stop(f"card #{card}'s branch {branch} is neither a local branch nor on origin")
         b.cards[card] = branch if local.returncode == 0 else f"origin/{branch}"
-    _git(b.root, "worktree", "add", "--no-track", "-b", b.branch, str(b.wt), b.start)
+    _git(b.root, *folders.worktree_arguments(b.root, b.wt, "--no-track", "-b", b.branch, start=b.start))
     b.reports.mkdir(parents=True, exist_ok=True)
     b.state.update(batch=b.name, branch=b.branch, cards=b.cards)
     for ref in b.cards.values():
@@ -1007,7 +1007,7 @@ def walk_round(b: Batch, r: int, head: str, changed: list[str]) -> dict:
     if b.walk_wt.exists():
         _git(b.walk_wt, "checkout", "--detach", head)
     else:
-        _git(b.root, "worktree", "add", "--detach", str(b.walk_wt), head)
+        _git(b.root, *folders.worktree_arguments(b.root, b.walk_wt, "--detach", start=head))
         b.install(b.walk_wt)
     return run_agent(b, "walker", walker_prompt(b, r, head, changed), b.walk_wt, f"walk-r{r}", b.reports / f"walk-{r}.md",
                      parse_walk, add_dirs=[b.reports])
@@ -1182,7 +1182,7 @@ def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
     try:
         if wt.exists():
             _git(b.root, "worktree", "remove", "--force", str(wt))
-        _git(b.root, "worktree", "add", "--detach", str(wt), sha)
+        _git(b.root, *folders.worktree_arguments(b.root, wt, "--detach", start=sha))
         try:
             b.install(wt)
         except Stop:
@@ -1439,7 +1439,7 @@ def _resolve(b: Batch, path: str) -> str:
 def fix_card(b: Batch, r: int, card: str, items: list[Finding], head: str) -> tuple[str, Path]:
     """Cut one card's fix branch from the batch head, run its fixer there, and return the branch once it holds a commit."""
     branch, path = b.fix_names(card, r)
-    _git(b.root, "worktree", "add", "-b", branch, str(path), head)
+    _git(b.root, *folders.worktree_arguments(b.root, path, "-b", branch, start=head))
     b.install(path)
     run_agent(b, "fixer", fixer_prompt(b, r, items, path, branch), path, f"fix-r{r}-{card}", add_dirs=[b.reports])
     if _git(path, "rev-list", "--count", f"{head}..HEAD") == "0":

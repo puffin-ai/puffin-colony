@@ -55,7 +55,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-from colony import batch, cli, portable
+from colony import batch, cli, folders, portable
 
 SCOPES = ("related", "areas", "full")
 KINDS = ("fast", "checks", "full")  # the kinds of check a budget or a cap names
@@ -969,7 +969,7 @@ def ref_worktree(config: dict, root: Path, sha: str) -> Path:
     while path.exists():
         n += 1
         path = base.with_name(f"{base.name}-{n}")
-    batch._git(root, "worktree", "add", "--detach", str(path), sha)
+    batch._git(root, *folders.worktree_arguments(root, path, "--detach", start=sha))
     return path
 
 

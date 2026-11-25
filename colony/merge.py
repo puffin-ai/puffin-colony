@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from colony import batch, cli, portable, transport, wait
+from colony import batch, cli, folders, portable, transport, wait
 
 TRIES = 2  # merges in a row before a base that keeps moving under the check sends the branch to a pull request
 REJECTED = re.compile(r"\[rejected\]|non-fast-forward|fetch first", re.I)
@@ -112,7 +112,7 @@ def ready(root: Path, wt: Path, base: str) -> None:
         _git(wt, "clean", "-fdq")
     else:
         _git(root, "worktree", "prune")
-        _git(root, "worktree", "add", "--detach", str(wt), f"origin/{base}")
+        _git(root, *folders.worktree_arguments(root, wt, "--detach", start=f"origin/{base}"))
 
 
 def readable(output: str) -> list[str]:

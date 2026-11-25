@@ -260,6 +260,16 @@ def test_a_batch_loops_a_fix_to_its_card_and_opens_the_pr(repo, config, stubs, c
     assert "round 2, open 0 (round 2), walk none yet" in status and "running: nothing" in status
 
 
+def test_a_batch_with_its_worktrees_inside_the_repo_leaves_git_status_clean(repo, config, stubs, capsys):
+    """Regression (audit, Job B finding 3): a batch made its worktrees with plain git, so in a clone where nothing
+    else had kept the worktrees folder out of `git status`, the batch, walk and fix worktrees showed there as an
+    untracked folder that a `git add -A` would add."""
+    config["project"]["worktrees"] = str(repo / ".worktrees")
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 0
+    assert (repo / ".worktrees" / "demo-batch-b1").is_dir()
+    assert git(repo, "status", "--porcelain") == ""
+
+
 def test_a_fixer_that_commits_nothing_stops_the_batch(repo, config, stubs, capsys, monkeypatch):
     monkeypatch.setenv("COLONY_STUB_MODE", "lazy")
     assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 1
