@@ -900,7 +900,8 @@ def test_every_new_session_is_told_to_take_its_role_name_in_the_sidebar(home, co
     github.add(lead(name="ana-main-lead"))
     assert cli.main(["join", "--in-session", "--person", "ana"]) == 0
     assert rename.format("builder-1") in capsys.readouterr().out
-    assert cli.main(["claim", "web", "--person", "ana"]) == 0
+    # ana-main-lead holds the rest of the repo, and one lead holds it at a time, so the new lead names its folders.
+    assert cli.main(["claim", "web", "apps/web/", "--person", "ana"]) == 0
     assert rename.format("ana-web-lead") in capsys.readouterr().out
 
 

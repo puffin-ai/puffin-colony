@@ -55,7 +55,7 @@ When an answer is unclear, take the default and say so. When the person leaves a
 
 ## 3. Write the config
 
-Copy `{package}/{name}.toml.example` to `{dir}/{name}.toml`, and fill in every value from steps 1 and 2: the project name, repo and base branch, `preset`, the worktrees folder (a sibling folder of the clone), the fast and full checks, the generated paths and the regen command, the install command, one `[accounts.<name>]` table per settings folder with its person, the rule files in `[gate] rules` (`{dir}/core.md`, `{dir}/rules/*.md`, and the repo's own `CLAUDE.md` and `AGENTS.md` files), and `provider_dollars` from question 4. Then:
+Copy `{package}/{name}.toml.example` to `{dir}/{name}.toml`, and fill in every value from steps 1 and 2: the project name, repo and base branch, `preset`, the worktrees folder (keep the example's `.worktrees`, inside the repo, which git ignores; never a folder outside the clone), the fast and full checks, the generated paths and the regen command, the install command, one `[accounts.<name>]` table per settings folder with its person, the rule files in `[gate] rules` (`{dir}/core.md`, `{dir}/rules/*.md`, and the repo's own `CLAUDE.md` and `AGENTS.md` files), and `provider_dollars` from question 4. Then:
 - `[knowledge] vault`: the vault's folder from the `knowledge` item, with no trailing slash. The later steps call it `<vault>`. Keep each check's mode as the example sets it.
 - `[cycle]`: write it only when step 1 found something the defaults miss, and write only those keys:
   - `risk`, the missed folders by kind, such as `risk = { payments = ["src/ledger/"], auth = ["src/iam/"] }`. The kinds are `auth`, `payments`, `migrations`, `secrets`, `deletion`, `public API`, `dependencies` and `config`.
