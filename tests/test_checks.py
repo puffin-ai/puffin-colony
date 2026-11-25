@@ -51,6 +51,14 @@ def lines(path: Path) -> list[str]:
     return path.read_text().splitlines() if path.exists() else []
 
 
+def wait_for_lines(path: Path, count: int, seconds: float = 10) -> None:
+    """Wait until a background check's command has written `count` lines to `path`, so a test acts on a run that has
+    really started. On a slow computer a background process can take a moment to begin."""
+    deadline = time.monotonic() + seconds
+    while len(lines(path)) < count and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
 # Task 40: test in proportion to the change
 
 
@@ -350,6 +358,7 @@ def test_the_same_check_on_the_same_code_is_joined_and_newer_code_cancels_the_ol
     first = checks.running(config)[0]["id"]
     assert checks.run_fast_check(config, fast_args(wait=0)) == checks.RUNNING_EXIT
     assert f"joining {first}, which already runs this check on this same code" in capsys.readouterr().out
+    wait_for_lines(tmp_path / "count.txt", 1)  # the older run has started its command before newer code comes
     (card / "new.txt").write_text("newer code\n")
     assert checks.run_fast_check(config, fast_args()) == 0
     out = capsys.readouterr().out
