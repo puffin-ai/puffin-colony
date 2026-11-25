@@ -876,13 +876,9 @@ def ruleset(config: dict, reviews: int) -> dict:
     the freeze's holds, `refs/colony/holds`, which no branch ruleset reaches, and the branches of its own a partial
     release and a branch sync push, `<project>/release-*` and `<project>/sync-*` (release.py, branches.py), which a
     broad pattern in [safety] protect would otherwise lock."""
-    extra = [str(branch) for branch in config.get("safety", {}).get("protect", []) if isinstance(branch, str)]
     from colony import branches
 
-    named = [config["project"].get("integration"), config["project"].get("release"), *branches.long_lived(config)]
-    extra += [branch.strip() for branch in named if isinstance(branch, str) and branch.strip()]
-    include = list(dict.fromkeys(["~DEFAULT_BRANCH", f"refs/heads/{config['project']['base']}",
-                                  *(f"refs/heads/{branch}" for branch in extra)]))
+    include = ["~DEFAULT_BRANCH", *(f"refs/heads/{branch}" for branch in branches.protected(config))]
     project = config["project"]["name"]
     exclude = [f"refs/heads/{project}/release-*", f"refs/heads/{project}/sync-*"]
     review = {"required_approving_review_count": reviews, "dismiss_stale_reviews_on_push": False,

@@ -147,7 +147,7 @@ Optional. How `colony ci` starts the project's CI on a commit, and what it does 
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
 | `start` | no | `"gh workflow run ci.yml --ref {branch}"` | The command that starts your CI on a commit, with `{sha}`, `{short}`, `{branch}` and `{repo}` filled in. Empty, the default: Colony pushes the commit to a branch of its own, which starts any CI that runs on a push, unless a branch on origin already holds it. |
-| `branch` | no | `"ci/{short}"` | The branch that push makes, deleted once CI ends. Default `"colony-ci/{short}"`. |
+| `branch` | no | `"ci/{short}"` | The branch that push makes, deleted once CI ends, and only while it still holds the commit Colony pushed. Default `"colony-ci/{short}"`. It must name the commit with `{short}` or `{sha}` and nothing else, so each commit gets a branch of its own, and it may never be a protected branch: the base, the default branch, a `[safety] protect` pattern or a long-lived branch. Colony refuses any other. |
 | `cancel_superseded` | no | `true` | Cancel the runs on older commits of the same branch, which the newer commit made pointless. Default `true`. |
 | `post` | no | `true` | Post the result on the commit's pull request, else on the commit. Default `true`. |
 | `poll_seconds` | no | `20` | How often it reads the commit's checks. Default 20. |

@@ -4,6 +4,7 @@ commit. They use temporary git repositories, a stub `gh` and short shell command
 
 import json
 import os
+import re
 import time
 from argparse import Namespace
 from pathlib import Path
@@ -533,6 +534,52 @@ def test_ci_says_how_to_start_it_when_no_check_ever_shows(repo, config, gh, caps
     assert checks.run_ci(config, ci_args(no_post=True)) == 1
     assert "set [ci] start to the command that starts your CI" in capsys.readouterr().out
     assert git(repo.parent / "origin.git", "branch", "--list", "colony-ci/*") == ""
+
+
+@pytest.mark.parametrize("pattern, message", [
+    ("ci", "needs {short} or {sha}"), ("staging", "needs {short} or {sha}"),
+    ("ci/{branch}-{short}", "takes {short} and {sha} alone, not {branch}"),
+    ("ci/{short!r}", "takes {short} and {sha} alone"), ("ci/{short:>12}", "takes {short} and {sha} alone"),
+    ("ci/{short", "braces"), ("-ci/{short}", "no plain branch name"), ("ci..{short}", "no plain branch name"),
+])
+def test_a_ci_branch_that_names_no_commit_or_is_no_plain_branch_is_refused(config, pattern, message):
+    """Regression: `colony ci` pushed to, then deleted, whatever [ci] branch named, unchecked, so `branch = "staging"`
+    moved staging to a helper's commit and then deleted it; and a pattern with {branch} crashed with a KeyError."""
+    config["ci"] = {"branch": pattern}
+    with pytest.raises(cli.ColonyError, match=re.escape(message)):
+        checks.validate(config)
+
+
+def test_a_ci_branch_that_a_protected_pattern_or_long_lived_branch_covers_is_refused(config):
+    config["ci"] = {"branch": "ci/{short}"}
+    checks.validate(config)
+    config["safety"] = {"protect": ["ci/*"]}
+    with pytest.raises(cli.ColonyError, match="a protected branch"):
+        checks.validate(config)
+    config["safety"] = {}
+    config["ci"] = {"branch": "{short}"}
+    config["release"] = {"long_lived": ["0000000*"]}
+    with pytest.raises(cli.ColonyError, match="a protected branch"):
+        checks.ci_branch(config, "0" * 40)
+
+
+def test_ci_deletes_its_branch_only_while_origin_still_holds_the_commit_it_pushed(repo, config, gh, monkeypatch):
+    """Regression: `colony ci` deleted its branch on origin with a plain --delete, whatever it held by then. It now
+    deletes with a lease on the commit it pushed, so a branch someone moved since is left alone."""
+    plan, _ = gh
+    plan({"check-runs": [{"check_runs": []}], "/status": [{"statuses": []}], "run list": [[]]})
+    commit(repo, {"a.txt": "local\n"}, "not pushed yet")
+    sha = git(repo, "rev-parse", "HEAD")
+    made, origin = f"colony-ci/{sha[:9]}", repo.parent / "origin.git"
+
+    def moved(config, sha, until_failure=False):
+        commit(repo, {"a.txt": "moved\n"}, "someone else's commit")
+        git(repo, "push", "-q", "--force", "origin", f"HEAD:refs/heads/{made}")
+        return "none", [], None
+    monkeypatch.setattr(checks, "watch_ci", moved)
+    assert checks.run_ci(config, ci_args(no_post=True, ref=sha)) == 1
+    assert git(origin, "rev-parse", f"refs/heads/{made}") == git(repo, "rev-parse", "HEAD")  # left alone
+    # A branch still at the commit it pushed is deleted: test_ci_says_how_to_start_it_when_no_check_ever_shows.
 
 
 # Settings and the command line

@@ -122,6 +122,53 @@ def ci_settings(config: dict) -> dict:
     return {**CI_DEFAULTS, **(config.get("ci") or {})}
 
 
+CI_FIELDS = {"short", "sha"}  # what [ci] branch may name: the commit, so each one gets a branch of its own
+CI_BRANCH = re.compile(r"^(?!-)(?!.*(?:\.\.|//|@\{|\.lock(?:/|$)|/\.))[A-Za-z0-9_.][A-Za-z0-9_./-]*(?<![./])$")
+
+
+def ci_branch(config: dict, sha: str, root: Path | None = None) -> str:
+    """`[ci] branch` filled in for a commit: the branch `colony ci` pushes the commit to, and later deletes. It must
+    name the commit with {short} or {sha}, and nothing else, make a plain branch name, and never be a protected branch
+    (branches.protected: the base, the default branch, [safety] protect and the long-lived branches), which Colony
+    would otherwise move and then delete."""
+    import string
+
+    from colony import branches
+
+    pattern = ci_settings(config)["branch"]
+    if not isinstance(pattern, str):
+        raise cli.ColonyError('[ci] branch is a branch name with {short} or {sha} in it, such as "colony-ci/{short}"')
+    try:
+        fields = [(name, spec, conversion) for _, name, spec, conversion in string.Formatter().parse(pattern)
+                  if name is not None]
+    except ValueError:
+        raise cli.ColonyError(f"[ci] branch {pattern!r} has braces that don't pair") from None
+    named = {name for name, _, _ in fields}
+    if not named & CI_FIELDS:
+        raise cli.ColonyError(f"[ci] branch {pattern!r} needs {{short}} or {{sha}}, so each commit gets a branch of its "
+                              'own, such as "colony-ci/{short}"')
+    if named - CI_FIELDS or any(spec or conversion for _, spec, conversion in fields):
+        odd = sorted(named - CI_FIELDS) or [next(name for name, spec, conversion in fields if spec or conversion)]
+        raise cli.ColonyError(f"[ci] branch takes {{short}} and {{sha}} alone, not {{{odd[0]}}} or a format of them")
+    name = pattern.format(short=sha[:9], sha=sha)
+    if not CI_BRANCH.fullmatch(name):
+        raise cli.ColonyError(f"[ci] branch makes {name}, which is no plain branch name")
+    import fnmatch
+
+    held = next((p for p in branches.protected(config, root) if fnmatch.fnmatchcase(name, p)), "")
+    if held:
+        raise cli.ColonyError(f"[ci] branch makes {name}, a protected branch ({held}), which `colony ci` would move and "
+                              "then delete: name a branch of its own, such as colony-ci/{short}")
+    return name
+
+
+def delete_ci_branch(root: Path, made: str, sha: str) -> None:
+    """Delete the branch `colony ci` made, only while origin's copy still holds the commit it pushed (a lease), so a
+    branch someone moved since is left alone."""
+    batch._run(["git", "push", f"--force-with-lease=refs/heads/{made}:{sha}", "origin", f":refs/heads/{made}"], root,
+               check=False)
+
+
 def validate(config: dict) -> None:
     """Refuse `[checks]` and `[ci]` settings this version can't run, naming the key in one line."""
     s, areas = settings(config), batch.check_areas(config)
@@ -169,6 +216,7 @@ def validate(config: dict) -> None:
     for key in ("poll_seconds", "start_minutes", "wait_minutes"):
         if not isinstance(ci[key], (int, float)) or isinstance(ci[key], bool) or ci[key] <= 0:
             raise cli.ColonyError(f"[ci] {key} is a number above 0")
+    ci_branch(config, "0" * 40)  # its shape and protection, on a sample commit; start_ci checks the real one
 
 
 # Picking the tests for a change
@@ -1160,7 +1208,7 @@ def start_ci(config: dict, root: Path, sha: str, branch: str) -> tuple[str, str]
     values = {"sha": sha, "short": sha[:9], "repo": repo, "branch": branch}
     if ci["start"]:
         if "{branch}" in ci["start"] and not branch:
-            made = values["branch"] = ci["branch"].format(short=sha[:9], sha=sha)
+            made = values["branch"] = ci_branch(config, sha, root)
             batch._git(root, "push", "origin", f"{sha}:refs/heads/{made}")
         command = re.sub(r"\{(sha|short|repo|branch)\}", lambda m: shlex.quote(values[m[1]]), ci["start"])
         shell_cmd, use_shell, env = portable.shell(command, None)
@@ -1171,7 +1219,7 @@ def start_ci(config: dict, root: Path, sha: str, branch: str) -> tuple[str, str]
         return f"started CI with `{command}`", made
     if branch:
         return f"{branch} holds {sha[:9]} on origin, so its push started CI", made
-    made = ci["branch"].format(short=sha[:9], sha=sha)
+    made = ci_branch(config, sha, root)
     batch._git(root, "push", "origin", f"{sha}:refs/heads/{made}")
     return f"pushed {sha[:9]} to {made} on origin, which starts CI that runs on a push", made
 
@@ -1321,7 +1369,7 @@ def run_ci(config: dict, args) -> int:
     how, checks, first = watch_ci(config, sha, until_failure=args.until_failure)
     if how == "none":
         if made:
-            batch._run(["git", "push", "origin", "--delete", made], root, check=False)
+            delete_ci_branch(root, made, sha)
         print(f"ci: no check started on {sha[:9]} within {ci_settings(config)['start_minutes']} minutes: set [ci] "
               "start to the command that starts your CI; {sha} and {branch} in it take the commit's")
         return 1
@@ -1332,7 +1380,7 @@ def run_ci(config: dict, args) -> int:
                                      "command": f"{cli.NAME} ci", "line": line, "seconds": 0,
                                      "checks": [{"name": c["name"], "state": c["state"]} for c in checks]})
         if made:
-            batch._run(["git", "push", "origin", "--delete", made], root, check=False)
+            delete_ci_branch(root, made, sha)
     if ci_settings(config)["post"] and not args.no_post and (how in ("pass", "fail") or first):
         try:
             print(f"ci: posted on {post_ci(config, sha, text, args.issue)}")

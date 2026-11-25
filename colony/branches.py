@@ -55,6 +55,17 @@ def long_lived(config: dict) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name.strip() for name in found))
 
 
+def protected(config: dict, root: Path | None = None) -> list[str]:
+    """The branch names and patterns no agent may push to, as the push guard reads them (wait_guard's
+    protected_branches): the base, [safety] protect, and the project's other long-lived branches, [project]
+    integration and release and [release] long_lived; with `root`, origin's default branch too."""
+    project = config["project"]
+    protect = [b for b in (config.get("safety") or {}).get("protect", []) if isinstance(b, str)]
+    named = [project["base"], *protect, project.get("integration"), project.get("release"), *long_lived(config),
+             default_branch(root) if root is not None else ""]
+    return list(dict.fromkeys(b.strip() for b in named if isinstance(b, str) and b.strip()))
+
+
 def names(config: dict, root: Path | None = None) -> Names:
     """The project's long-lived branches. The release branch is `[project] release`, else origin's default branch
     when `root` is given and that differs from the integration branch, else ""."""
