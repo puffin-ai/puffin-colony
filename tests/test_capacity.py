@@ -622,6 +622,16 @@ def test_the_leads_wait_names_a_sleep_and_what_it_started_again(home, monkeypatc
     assert check(waited) == ["urgent: this computer slept for 60 minutes; builder-1: no longer ran; x"]
 
 
+
+def test_a_sleep_a_hair_under_an_hour_reads_as_60_minutes(home, monkeypatch):
+    """Regression: time.time and time.monotonic tick apart by microseconds between two polls, so an hour's sleep
+    measured 3599.99 seconds and read as 59 minutes."""
+    config = {"project": {"name": "demo"}, "accounts": {}}
+    monkeypatch.setattr(capacity, "restart", lambda config, prompt, reopen=False: [])
+    monkeypatch.setattr(capacity, "slept", lambda clock: 3599.99)
+    check = capacity.lead_check(config, "ana-main-lead")
+    assert check({}) == ["urgent: this computer slept for 60 minutes; every helper here still runs its wait"]
+
 def test_wake_follow_runs_one_at_a_time_and_ends_when_no_limit_waits(host, monkeypatch, capsys):
     config = load()
     capacity.write_limited(config, {"builder-2": {"account": "main", "at": time.time() - 7200,

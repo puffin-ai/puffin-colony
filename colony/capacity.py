@@ -1291,7 +1291,8 @@ def lead_check(config: dict, name: str):
             now, held = time.time(), waited.setdefault("capacity", {})
             gap = slept(held.setdefault("clock", {}))
             if gap:
-                what = "restarted" if gap < 0 else f"slept for {int(gap // 60)} minutes"
+                # the wall clock and the awake clock tick apart by a hair, so the minutes are rounded, not cut
+                what = "restarted" if gap < 0 else f"slept for {round(gap / 60)} minutes"
                 done = restart(config, SLEPT_PROMPT, reopen=True)
                 lines.append(f"urgent: this computer {what}; " + ("; ".join(done) if done else
                                                                   "every helper here still runs its wait"))
