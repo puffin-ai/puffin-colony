@@ -1637,14 +1637,17 @@ def batch(config: dict, args) -> int:
 
 
 def status(config: dict, args) -> int:
-    """Print this computer's lead (lead_line), then where a batch stands (batch.batch_status)."""
-    from colony import batch as runner, demo, live
+    """Print this computer's lead (lead_line), its running checks (checks.status_lines), then where a batch stands
+    (batch.batch_status)."""
+    from colony import batch as runner, checks, demo, live
 
     if line := demo.countdown(config):
         print(line)
     if line := live.summary(config, repo_root()):
         print(line)
     print(lead_line(config))
+    for line in checks.status_lines(config, running_only=True):
+        print(f"check {line}")
     return runner.batch_status(config, args)
 
 
@@ -1695,13 +1698,6 @@ def wait(config: dict, args) -> int:
     from colony import wait as watcher
 
     return watcher.run(config, args)
-
-
-def fast_check(config: dict, args) -> int:
-    """Run a builder's fast check for the areas its branch changes (batch.run_fast_check)."""
-    from colony import batch as runner
-
-    return runner.run_fast_check(config, args)
 
 
 def merge(config: dict, args) -> int:
@@ -1828,6 +1824,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
     p.add_argument("--fast", action="store_true",
                    help="run the full checks once, with no reviewer, walk or fixers, and open the PR when they pass")
+    p.add_argument("--full", action="store_true",
+                   help="run the full suite every round, [project] checks for every area, whatever [checks] scope says")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=batch)
 
@@ -1836,10 +1834,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="the batch name")
     p.set_defaults(run=status)
 
-    p = sub.add_parser("fast-check", help="a builder: run [project] fast_check for the check areas this branch "
-                                          "changes, and end on a passed, failed or not run line for the done line")
-    p.add_argument("--dry-run", action="store_true", help="print the command and run nothing")
-    p.set_defaults(run=fast_check)
+    from colony import checks  # fast-check, check and ci live in checks.py
+    checks.register(sub)
 
     p = sub.add_parser("merge", help="hack mode: merge a branch into the base after a passing fast check, "
                                      "else open its pull request")

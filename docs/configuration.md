@@ -115,6 +115,33 @@ Optional. It lets a batch check only the areas a change touches. Without `areas`
 | `rerun` | no | `"cd apps/backend && uv run pytest {test}"` | A failing test whose every failure reason names a timeout or a time limit runs once more by itself with this command, `{test}` its id as the output named it. It counts only when it fails again, and the round passes on its reruns only when nothing else in the output failed. Empty reruns nothing. |
 | `minutes` | no | `41` | A run of every area's minutes, the yardstick for the minutes `minutes.md` says a narrowed round saved. Without it, the batch's own run of every area. |
 
+These keys make checks proportional, fast and never repeated. [checks.md](checks.md) says how each works. Every one is optional, and a config with none of them checks the way it always did.
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `scope` | no | `"related"` | What a check runs: `"related"`, the tests for the change and the guards beside the fast check; `"areas"`, the check command for the areas the change touches; or `"full"`, `[project] checks` for every area. Default: `"related"` once `related` is set, else `"areas"`. `--full` asks for the full suite. |
+| `related` | no | `"uv run pytest {tests}"` | The command that runs the tests for a change. `{tests}` takes the tests found for the change and the guards, and `{files}` the changed files, for a runner that finds tests itself, such as `"npx vitest related {files} --run"`. As a table of check areas, each area gets its own command and its own paths: `{ web = { run = "npx vitest run {tests}", in = "apps/web" }, api = "uv run pytest {tests}" }`, where `in` is the folder it runs in and its paths start from. |
+| `guards` | no | `["tests/test_architecture.py"]` | The guard tests, such as architecture tests, which run with every related check: paths, folders, test ids or globs. As a table of check areas, an area's guards run when the change touches that area. |
+| `tests` | no | `{ "setup.cfg" = ["tests/"] }` | Tests for files whose tests aren't named after them, as a path or glob and its tests. |
+| `budgets` | no | `{ fast = 120, checks = 300, full = 0 }` | How many seconds a command follows each kind of check before it leaves it running in the background and returns: `fast` for `colony fast-check`, `checks` for `colony check run`, `full` for the full suite. 0 sends it to the background at once. Default: 300, 300 and 0. |
+| `caps` | no | `{ full = 3600 }` | A run past its kind's cap, in seconds, is stopped and counts as failed; a batch round past its cap stops the batch. Default: no cap. |
+| `reuse` | no | `true` | Whether a pass on the same code with the same command is reused instead of run again. Default `true`. |
+| `failure` | no | `'^BROKEN: '` | A regular expression for the repo's own failure line, beside the ones Colony knows, so its first failure shows at once. |
+
+## `[ci]`
+
+Optional. How `colony ci` starts the project's CI on a commit, and what it does with the result. See [checks.md](checks.md#ci-on-any-commit).
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `start` | no | `"gh workflow run ci.yml --ref {branch}"` | The command that starts your CI on a commit, with `{sha}`, `{short}`, `{branch}` and `{repo}` filled in. Empty, the default: Colony pushes the commit to a branch of its own, which starts any CI that runs on a push, unless a branch on origin already holds it. |
+| `branch` | no | `"ci/{short}"` | The branch that push makes, deleted once CI ends. Default `"colony-ci/{short}"`. |
+| `cancel_superseded` | no | `true` | Cancel the runs on older commits of the same branch, which the newer commit made pointless. Default `true`. |
+| `post` | no | `true` | Post the result on the commit's pull request, else on the commit. Default `true`. |
+| `poll_seconds` | no | `20` | How often it reads the commit's checks. Default 20. |
+| `start_minutes` | no | `10` | How long it waits for a first check to show before it says how to start CI. Default 10. |
+| `wait_minutes` | no | `120` | The longest it watches. Default 120. |
+
 ## `[walk]`
 
 Optional.

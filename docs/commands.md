@@ -67,6 +67,20 @@ See [messages.md](messages.md#getting-every-line-through).
 | `colony stats --card N[=BRANCH] … [--base B]` | Prints each card's predicted and actual minutes and tokens, as a table with a total row. |
 | `colony retro --name <batch>` | Runs the retro agent on a batch's reports, and opens a PR when it finds a lesson. |
 
+## Checks
+
+How each one works, and why, is in [checks.md](checks.md). Each command exits 0 on a pass, 1 on a failure, 2 when nothing was checked, and 3 when the check goes on in the background past its budget.
+
+| Command | What it does |
+| --- | --- |
+| `colony fast-check [--full] [--again] [--wait S] [--until-failure]` | A builder's check after a change, in `[checks] scope`: in the related scope, the tests for the branch's change and the guard tests, beside `[project] fast_check` for the areas it touches; otherwise `[project] fast_check` for those areas. It ends on one line for the done line: `fast check: passed …`, `failed …`, `not run …`, or `running in the background …` past its `[checks] budgets` time. A pass on the same code is reused, unless `--again`. `--full` runs the full suite, in the background. `--until-failure` returns at the first failure, with the rest still running. |
+| `colony check run [--scope S] [--full] [--ref R] [--again] [--wait S] [--until-failure]` | Runs `[project] checks` for this checkout's change in `[checks] scope`, or `--scope`, or the full suite with `--full`, with the same budget, reuse and live first failure. `--ref origin/main` checks a commit in a worktree of its own, which goes away after. |
+| `colony check status [<run>]` | Lists the check runs on this computer, the running ones first: what each checks, for how long against its budget, and its first failure. Then what the ledger knows of this checkout's code, and CI on its commit. With a run's id, that run in full and its log's path. |
+| `colony check watch <run> [--until-failure]` | Follows a run's output live to its end, or to its first failure, and ends on its result line. |
+| `colony check cancel <run>\|--all` | Stops a run on this computer, or every running one. |
+| `colony ci [<ref>] [--again] [--no-start] [--no-watch] [--until-failure] [--no-post] [--issue N]` | Starts the project's CI on a commit, HEAD by default, unless it already ran or passed there: with `[ci] start`, or a push of the commit to a branch of its own. It cancels the runs on older commits of the same branch, watches the code host's checks live and prints the first failure at once, and posts the result on the commit's pull request, else on the commit, or on card `N`. |
+| `colony batch --full --name <n> --card N=BRANCH …` | Every round runs the full suite, whatever `[checks] scope` says, as the person asked. |
+
 ## Hack
 
 | Command | What it does |
@@ -149,7 +163,7 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `helpers`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `wake` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `helpers`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `wake`, `fast-check`, `check run`, `ci` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |

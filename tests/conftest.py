@@ -80,6 +80,14 @@ def with_the_retry_watchdog(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def own_check_ledger(monkeypatch, tmp_path):
+    """Each test keeps its check runs and its ledger of results in its own folder, so a pass one test records is
+    never reused by another, and no test writes to the real ~/.colony."""
+    from colony import checks
+    monkeypatch.setattr(checks, "HOME", tmp_path / "colony-home")
+
+
+@pytest.fixture(autouse=True)
 def no_usage_refresh(monkeypatch, outside_a_colony_session):  # after the clearing, which would drop it
     """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")

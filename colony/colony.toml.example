@@ -53,6 +53,23 @@ skip = []                          # such as ["docs/", "*.md"]
 rerun = ""                         # a failing test whose output names a timeout or time limit runs once more alone
                                    # with this, {test} its id, such as "cd apps/backend && uv run pytest {test}"
 minutes = 0                        # a full check run's minutes, the yardstick for the minutes minutes.md says it saved
+# Proportional checks (docs/checks.md): the tests for a change and the guard tests, a time budget for each kind of
+# check, and a pass on the same code reused instead of run again.
+related = ""                       # the command that runs a change's tests, such as "uv run pytest {tests}"; once set,
+                                   # "related" is the default scope
+guards = []                        # tests that run with every related check, such as ["tests/test_architecture.py"]
+# scope = "related"                # "related", "areas" (the default without related) or "full", the full suite
+# tests = { "setup.cfg" = ["tests/"] }   # the tests of files whose tests aren't named after them
+budgets = { fast = 300, checks = 300, full = 0 }   # seconds a command follows a check before it leaves it running
+                                   # in the background; 0 sends it there at once
+# caps = { full = 3600 }           # a run past its cap, in seconds, is stopped and counts as failed
+# reuse = true                     # reuse a pass on the same code with the same command
+
+# [ci]                             # `colony ci`: start CI on any commit, watch it live, post the result
+# start = ""                       # the command that starts CI, with {sha}, {short}, {branch} and {repo}; empty pushes
+                                   # the commit to a branch of its own, colony-ci/{short}
+# post = true                      # post the result on the commit's pull request, else on the commit
+# cancel_superseded = true         # cancel the runs on older commits of the same branch
 
 [walk]
 browser = "playwright"             # "playwright" (the Playwright MCP) or "agent-browser" (the agent-browser CLI)
