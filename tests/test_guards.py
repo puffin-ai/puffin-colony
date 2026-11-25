@@ -959,6 +959,25 @@ def test_the_ways_around_the_script_check_are_closed(command, which, on_feature)
     assert run.returncode == 2 and run.stderr.startswith(f"{which}: refused"), (command, run.stderr)
 
 
+@pytest.mark.parametrize("text", [
+    'read X < where.txt\nexec "$X/node" run\n',  # bound by read: the guard's own $X says nothing of it
+    'X=/nowhere\nif true; then X=.; fi\nexec "$X/node" run\n',  # bound twice: no one value
+    'basedir=$(dirname "$0")\ncat push.sh > /dev/..{here}/python\nexec "$basedir/python" run\n',  # a write by /dev/..
+    'basedir=$(dirname "$0")\neval "cp push.sh $basedir/python"\nexec "$basedir/python" run\n',  # eval may write
+])
+def test_a_launchers_variables_and_writes_are_read_flow_safely(text, on_feature, monkeypatch):
+    """Regression (security review of 82a2ec8): a variable the script binds another way, or twice, was filled in
+    from the guard's own environment or its last value; and a write through /dev/.. or eval went unseen, so a missing
+    interpreter-named file passed as a launcher's."""
+    monkeypatch.setenv("X", "/nowhere-for-colony")
+    executable(on_feature / "node", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "push.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    (on_feature / "where.txt").write_text(f"{on_feature}\n")
+    executable(on_feature / "launch.sh", text.format(here=on_feature))
+    run = push_guard("./launch.sh", on_feature)
+    assert run.returncode == 2, run.stderr
+
+
 @pytest.mark.parametrize("command", [
     "env -iS 'bash push.sh'", "env -i -S 'bash push.sh'", "env --spl='bash push.sh'",  # getopt's own reading
     "env -u FOO -S 'bash push.sh'", "env -S 'bash\\_push.sh'", "env --no-such-option bash push.sh",
