@@ -328,7 +328,7 @@ Optional. What one helper, test run and build needs on this computer, and what s
 
 ## `[services]`
 
-Optional. A check for each service the team relies on, such as an AI provider, a cloud CLI, the code host or a package registry. Colony always checks each account whose folder is on this computer, and `gh auth status`, unless `builtin = false`. `colony services` runs every check, and the lead's wait runs each one on its own schedule and says when one fails. See [capacity.md](capacity.md#service-checks).
+Optional. A check for each service the team relies on, such as an AI provider, a cloud CLI, the code host or a package registry, or a local service your work needs, such as a test database. Colony always checks each account whose folder is on this computer, and `gh auth status`, unless `builtin = false`. `colony services` runs every check, and the lead's wait runs each one on its own schedule and says when one fails. It is one table for every command: `colony crash-report` and `colony resume` judge each `[services.<name>]` by the same check and pass condition, and `colony resume` runs the `restart` of one that fails ([`[recover]`](#recover)). See [capacity.md](capacity.md#service-checks).
 
 | Key | Default | What it does |
 | --- | --- | --- |
@@ -338,14 +338,14 @@ Each `[services.<name>]` table, named in lowercase letters, digits and dashes:
 
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
-| `check` | yes | `"aws sts get-caller-identity"` | The command that checks the service. It runs through your shell, from the temp folder. Its output is read, never printed. |
+| `check` | yes | `"aws sts get-caller-identity"` | The command that checks the service. It runs through your shell, in the repo's top folder, where its `restart` runs too. Its output is read, never printed. |
 | `exit` | no | `0` | The exit code that passes. Default `0`. |
 | `expect` | no | `"Logged in"` | A regular expression the output must match. |
 | `at_least`, `at_most` | no | `500` | The first number in the output must be at least, or at most, this, such as requests left on an API. |
 | `every_minutes` | no | `30` | How often the lead's wait runs it. Default 30. |
 | `timeout` | no | `20` | Seconds it may run. Default 20. |
 | `fix` | no | `"aws sso login"` | What the person does when it fails. The alert names it. |
-| `restart` | no | `"docker start test-db"` | For a local service, a command that brings it back when its check fails. Colony's recovery runs it; the checks here never do. |
+| `restart` | no | `"docker compose up -d db"` | For a local service, a command that brings it back when its check fails. `colony resume` runs it, in the repo's top folder for up to 5 minutes, then the check again; the checks here never do. |
 
 ```toml
 [services.aws]
@@ -356,6 +356,10 @@ fix = "aws sso login"
 check = "gh api rate_limit --jq .resources.core.remaining"
 at_least = 500
 fix = "wait for GitHub's hourly reset"
+
+[services.db]
+check = "pg_isready -h localhost -p 5432"
+restart = "docker compose up -d db"
 ```
 
 ## `[locks]`
@@ -384,13 +388,7 @@ What `colony crash-report` and `colony resume` look at. See [safety.md](safety.m
 | --- | --- | --- |
 | `within_hours` | `24` | How far back both look for sessions that showed life. `--within` overrides it. |
 
-Both also read the local services your work needs, one `[services.<name>]` table each: `check`, a shell command that exits 0 while the service is up, and an optional `restart`, which starts it again. The crash report names each one whose check fails, and `colony resume` runs its `restart`, then its check again. Each runs in the repo's top folder, the check for up to 30 seconds and the restart for up to 5 minutes. Other keys of `[services]` are other commands' and are left alone.
-
-```toml
-[services.db]
-check = "pg_isready -h localhost -p 5432"
-restart = "docker compose up -d db"
-```
+Both also read the [`[services]`](#services) tables, the same ones `colony services` checks. The crash report names each one whose check fails, judged by its exit code, `expect`, `at_least` and `at_most` within its `timeout`, and `colony resume` runs its `restart`, then its check again. A table with no `restart` is named, for you to start by hand.
 
 ## `[watch]`
 

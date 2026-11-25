@@ -539,25 +539,38 @@ def account_env(config: dict, folder: str) -> dict[str, str]:
     return env
 
 
-def resume_background(config: dict, name: str, agent: dict, prompt: str, dry_run: bool = False) -> str:
-    """Continue a stopped background session under its own id, `claude --bg --resume <session id> "<prompt>"`, on its
-    account and in its folder, with the settings Colony opened it with."""
+def ledger_entry(config: dict, name: str, agent: dict) -> dict:
+    """What recover.reopen opens a stopped session from: the session ledger's entry that holds the Claude Code session
+    id `claude agents` listed, else, for a session no hook of this Colony stamped, one made from that listing and what
+    Colony noted when it opened the session (remember_opened)."""
+    from colony import recover
+
+    claude = str(agent.get("sessionId") or "")
+    found = next((entry for entry in recover.read_ledger(config) if claude and entry.get("id") == claude), None)
+    if found is not None:
+        return found
     opened = read(config["project"]["name"], "opened").get(name, {})
     opened = opened if isinstance(opened, dict) else {}
-    folder = agent.get("config_dir") or ""
-    role = opened.get("role") if opened.get("role") in config["roles"] else "builder"
-    person = opened.get("person") or os.environ.get(cli.PERSON_ENV, "")
-    env = cli.session_env(person, cli.LEAD if is_lead(name) else name, folder, opened.get("lead", ""),
-                          opened.get("account", ""))
-    settings = config["roles"][role]
-    argv = [portable.program("claude"), "--bg", "--resume", str(agent["sessionId"]), "--model", settings["model"],
-            "--effort", settings["effort"], "--settings", cli.session_settings(config, env, masked=dry_run),
-            "--permission-mode", settings.get("permission_mode", "auto"), prompt]
-    if dry_run:
-        return f"would run {shlex.join(argv)}"
-    subprocess.run(argv, cwd=agent.get("cwd") or str(cli.repo_root()), capture_output=True, text=True, timeout=60,
-                   env=portable.process_env(account_env(config, folder), env, cli.is_default_dir(folder)))
-    return "started again in the background, under its own id"
+    return {"name": name, "session": name, "id": claude, "config_dir": agent.get("config_dir") or "",
+            "folder": agent.get("cwd") or "", "account": opened.get("account") or "",
+            "person": opened.get("person") or "", "lead": opened.get("lead") or ""}
+
+
+def reopen_session(config: dict, name: str, agent: dict, prompt: str, dry_run: bool = False) -> str:
+    """Start a stopped session again under its own id, with `prompt` as its first line, through recover.reopen, the
+    one way Colony reopens a session: `claude --resume` on the account that holds its conversation, with its role's
+    settings, in the folder it started in, in cmux or the background. Says how, or why not."""
+    from colony import recover
+
+    if not cli.SESSION_NAME.fullmatch(name):
+        return f"it was not started again: {name!r} is no session's name"
+    try:
+        failed = recover.reopen(config, ledger_entry(config, name, agent), prompt, dry_run)
+    except cli.ColonyError as e:
+        return f"it was not started again: {e}"
+    if failed:
+        return "it was not started again, for the reason above"
+    return "would start it again under its own id" if dry_run else "started again under its own id"
 
 
 def cmux_paste(title: str, prompt: str) -> bool:
@@ -579,7 +592,8 @@ def cmux_paste(title: str, prompt: str) -> bool:
 
 def wake(config: dict, name: str, agent: dict | None, prompt: str, dry_run: bool = False) -> str:
     """Wake one session with a prompt, the least forceful way that works, and say how: a line its running wait
-    delivers; else, for an idle background helper, `claude stop` and the same session again with the prompt; else,
+    delivers; else, for an idle background helper, `claude stop` and the same conversation opened again with the
+    prompt (reopen_session); else,
     for an idle session in cmux, the prompt typed into its window. A busy session and one waiting on a person are left
     alone, a lead is never stopped, and the line says so."""
     project = config["project"]["name"]
@@ -597,12 +611,12 @@ def wake(config: dict, name: str, agent: dict | None, prompt: str, dry_run: bool
         return f"it is {state_ or 'running'}, so it is left alone"
     if agent.get("kind") == "background" and agent.get("sessionId") and not is_lead(name):
         if dry_run:
-            return resume_background(config, name, agent, prompt, dry_run=True)
+            return reopen_session(config, name, agent, prompt, dry_run=True)
         if agent.get("id") and state_ == "idle":
             from colony import stop
 
             stop.stop_background(agent)
-        return resume_background(config, name, agent, prompt)
+        return reopen_session(config, name, agent, prompt)
     title = str(agent.get("name") or f"{project}-{name}")
     if dry_run:
         return f"would type the prompt into its cmux window {title}, or ask you to"
@@ -713,7 +727,7 @@ def restart(config: dict, prompt: str = STOPPED_PROMPT, reopen: bool = False, dr
         if name in here or is_lead(name) or not isinstance(agent, dict):
             continue
         if agent.get("kind") == "background" and agent.get("sessionId"):
-            lines.append(f"{name}: no longer ran; {resume_background(config, name, agent, prompt, dry_run)}")
+            lines.append(f"{name}: no longer ran; {reopen_session(config, name, agent, prompt, dry_run)}")
         else:
             lines.append(f"{name}: its window closed; open it again with `{cli.NAME} open {name}`")
     for name, agent in here.items():
@@ -765,17 +779,23 @@ class Service:
     restart: str = ""  # a command that brings a local service back, which Colony's recovery runs; never run here
     account: str = ""  # a built-in check of one account
     part: str = ""  # which: "sign-in", or "room", its usage limits
+    in_repo: bool = False  # a team's own check: it runs in the repo's top folder, where its restart runs too
 
 
 SERVICE_KEYS = ("check", "expect", "at_least", "at_most", "exit", "every_minutes", "timeout", "fix", "restart")
 
 
-def services(config: dict) -> list[Service]:
-    """Every service check: the built-in ones unless [services] builtin = false, a check per account whose folder is
-    on this computer and one for GitHub's gh, then each [services.<name>] table, checked."""
+def services_table(config: dict) -> dict:
     table = config.get("services") or {}
     if not isinstance(table, dict):
         raise cli.ColonyError(f"{cli.CONFIG_NAME}: [services] is a table")
+    return table
+
+
+def services(config: dict) -> list[Service]:
+    """Every service check: the built-in ones unless [services] builtin = false, a check per account whose folder is
+    on this computer and one for GitHub's gh, then the team's own (team_services)."""
+    table = services_table(config)
     found = []
     builtin = table.get("builtin", True)
     if not isinstance(builtin, bool):
@@ -787,7 +807,15 @@ def services(config: dict) -> list[Service]:
                           Service(f"account {name} room", account=name, part="room",
                                   fix="nothing: it resets by itself, and new sessions open on another account meanwhile")]
         found.append(Service("github", "gh auth status", fix="gh auth login"))
-    for name, item in table.items():
+    return found + team_services(config)
+
+
+def team_services(config: dict) -> list[Service]:
+    """The team's own checks, one per [services.<name>] table, checked. It is the one services table: `colony
+    services` and the lead's wait run these checks, and `colony crash-report` and `colony resume` judge a local
+    service by the same check and pass condition and run its `restart` (recover.py)."""
+    found = []
+    for name, item in services_table(config).items():
         if name == "builtin":
             continue
         where = f"[services.{name}]"
@@ -812,8 +840,19 @@ def services(config: dict) -> list[Service]:
                              number(item, "exit", 0, 0, 255, whole=True, where=where),
                              number(item, "every_minutes", SERVICE_EVERY, 1, where=where),
                              number(item, "timeout", SERVICE_TIMEOUT, 1, 600, where=where), str(item.get("fix", "")),
-                             restart=item.get("restart", "")))
+                             restart=item.get("restart", ""), in_repo=True))
     return found
+
+
+def check_folder(service: Service) -> str:
+    """Where a check runs: a team's own in the repo's top folder, where its restart runs too, so both read the same
+    files, such as a compose file; a built-in one, and any check outside a repo, in the temp folder."""
+    if service.in_repo:
+        try:
+            return str(cli.repo_root())
+        except cli.ColonyError:
+            pass
+    return tempfile.gettempdir()
 
 
 def account_fix(name: str, account: dict) -> str:
@@ -865,7 +904,7 @@ def run_command(service: Service, env: dict[str, str] | None = None) -> tuple[bo
     args, use_shell, env = portable.shell(service.command, env)
     try:
         run = subprocess.run(args, shell=use_shell, env=env, capture_output=True, text=True, timeout=service.timeout,
-                             stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+                             stdin=subprocess.DEVNULL, cwd=check_folder(service))
     except subprocess.TimeoutExpired:
         return False, f"it ran past {service.timeout:g} s"
     except OSError as e:

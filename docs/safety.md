@@ -118,7 +118,7 @@ A crash, a kill or a sleeping laptop can stop many sessions at once. Colony keep
 
 **Background commands.** A long command a session runs in the background, `colony wait`, `batch`, `fast-check`, `merge` or `retro`, keeps a file, `~/.colony/<project>/tasks/<pid>.json`, while it runs, and removes it when it ends, on an error too. A file whose process is gone means something stopped the command from outside: the agent tool, a kill or a crash. At the end of the owning session's next turn, the Stop hook keeps the session going once, with a note to start the command again, so a session never sits without its `colony wait`. The crash report lists such commands too.
 
-**Services.** List the local services your work needs as `[services.<name>]` tables, each with a check and a command that starts it again. The crash report names each one whose check fails, and `colony resume` runs its restart command, then its check again. See [configuration.md](configuration.md#recover).
+**Services.** List the local services your work needs as `[services.<name>]` tables, each with a check and a `restart` command that starts it again. They are the same tables `colony services` and the lead's wait check, judged the same way. The crash report names each one whose check fails, and `colony resume` runs its restart command, then its check again. See [configuration.md](configuration.md#services).
 
 ## The suppressions ledger
 

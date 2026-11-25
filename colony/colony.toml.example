@@ -172,6 +172,9 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 # [services.aws]                   # a check for a service the team relies on; accounts and gh are checked already
 # check = "aws sts get-caller-identity"
 # fix = "aws sso login"            # what you do when it fails; expect, at_least, at_most and exit set the pass
+# [services.db]                    # a local service your work needs: its check, and the command that starts it again
+# check = "pg_isready -h localhost -p 5432"   # checks run in the repo's top folder
+# restart = "docker compose up -d db"        # `colony resume` runs it when the check fails; nothing else does
 #
 # [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`
 # slots = 1
@@ -182,10 +185,8 @@ merge_into = []                    # branches agents may merge pull requests int
 protect = []                       # more branches to protect beside the base and the default branch, such as ["staging"]
 
 [recover]                          # what `colony crash-report` and `colony resume` look at (docs/safety.md#recovery)
-within_hours = 24                  # how far back both look for sessions that showed life
-# [services.db]                    # a local service your work needs: its check, and the command that starts it again
-# check = "pg_isready -h localhost -p 5432"
-# restart = "docker compose up -d db"
+within_hours = 24                  # how far back both look for sessions that showed life; both also check the
+                                   # [services.<name>] tables above, and resume runs a failing one's restart
 
 # Watch (docs/watch.md): optional, and each key shown holds its default.
 # [watch]

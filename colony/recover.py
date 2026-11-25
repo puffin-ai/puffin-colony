@@ -16,7 +16,8 @@ At the end of the owning session's next turn, the Stop hook tells it once to sta
 purpose, or stopped unexpectedly, when it last showed life and from what, and the likely cause: the computer started
 again, a kill by pattern on some session's line just before, many sessions stopping at once, a usage limit or another
 API error, a signal, or a tool call in flight. It also lists the stopped background tasks and each service in
-`[services.<name>]` whose check fails.
+`[services.<name>]` whose check fails: the one services table, whose checks `colony services` runs too
+(capacity.team_services).
 
 `colony resume` reopens every session that stopped unexpectedly, each with `claude --resume <id>` on its own account
 and its role's settings, in the folder it started in, in cmux or the background, with a first line that says it was
@@ -49,7 +50,7 @@ TOGETHER = 90  # seconds: sessions whose last signs of life lie this close stopp
 KILL_BEFORE, KILL_AFTER = 120, 30  # seconds around a session's last sign of life in which a kill counts as its cause
 LIVE = 180  # seconds: when `claude agents` can't say, a sign of life this recent counts as running
 TAIL_BYTES = 256 * 1024  # the end of a transcript read for its last entries
-CHECK_TIMEOUT, RESTART_TIMEOUT = 30, 300  # seconds a service's check and restart command may take
+RESTART_TIMEOUT = 300  # seconds a service's restart command may take; its check takes its own `timeout`
 WORD = re.compile(r"[a-z_]{1,40}")  # an error's code word, such as rate_limit
 ENDED = ("ended", "reason", "stopped", "stopped_by", "error", "error_at", "resumed")  # facts of one stop
 ON_PURPOSE = {"clear": "its conversation was cleared", "logout": "its person logged out",
@@ -528,31 +529,25 @@ def survey(config: dict, hours: float, now: float | None = None) -> list[Seen]:
     return seens
 
 
-@dataclass
-class Service:
-    """One of the [services.<name>] tables: a local service, its check and the command that starts it again."""
+def services(config: dict) -> list:
+    """The team's [services.<name>] tables (capacity.team_services): the one services table, which `colony services`
+    and the lead's wait read too. Each has a `check` and, for a local service, a `restart`."""
+    from colony import capacity
 
-    name: str
-    check: str
-    restart: str = ""
+    return capacity.team_services(config)
 
 
-def services(config: dict) -> list[Service]:
-    """The [services.<name>] tables, each with a `check` and an optional `restart`. A key of [services] that is no
-    table, such as a switch another command reads, is left out, and so are a table's other keys."""
-    found = []
-    for name, item in (config.get("services") or {}).items():
-        if not isinstance(item, dict):
-            continue
-        if not isinstance(item.get("check"), str):
-            raise cli.ColonyError(f'[services.{name}] needs a check, a command that exits 0 while the service is up, '
-                                  'such as check = "pg_isready -h localhost"')
-        found.append(Service(str(name), item["check"], str(item.get("restart") or "")))
-    return found
+def passes(service) -> bool:
+    """Whether a service's check passes, judged as `colony services` judges it: its exit code, `expect`, `at_least` and
+    `at_most`, within its `timeout`, in the repo's top folder (capacity.run_command)."""
+    from colony import capacity
+
+    return capacity.run_command(service)[0]
 
 
 def run_command(command: str, timeout: float) -> bool:
-    """Whether a service's command, run through the repo's shell in the repo's folder, passed within its time."""
+    """Whether a service's restart command, run through the repo's shell in the repo's folder, passed within its
+    time."""
     argv, shell, env = portable.shell(command, None)
     try:
         return subprocess.run(argv, shell=shell, env=env, cwd=cli.repo_root(), capture_output=True,
@@ -561,7 +556,7 @@ def run_command(command: str, timeout: float) -> bool:
         return False
 
 
-def report_lines(config: dict, hours: float, seens: list[Seen], stopped: list[dict], down: list[Service]) -> list[str]:
+def report_lines(config: dict, hours: float, seens: list[Seen], stopped: list[dict], down: list) -> list[str]:
     """The crash report as lines."""
     lines = [f"{cli.NAME} crash-report: this computer, the last {hours:g} hours (now {when(time.time())})"]
     groups = {state: [s for s in seens if s.state == state] for state in (UNEXPECTED, PURPOSE, RUNNING)}
@@ -586,7 +581,7 @@ def report_lines(config: dict, hours: float, seens: list[Seen], stopped: list[di
                   f"{when(number(task.get('started')))}" for task in stopped]
     if down:
         lines.append(f"Services whose check fails ({len(down)}):")
-        lines += [f"- {service.name}: `{service.check}` failed; " + (f"`{cli.NAME} resume` runs `{service.restart}`"
+        lines += [f"- {service.name}: `{service.command}` failed; " + (f"`{cli.NAME} resume` runs `{service.restart}`"
                   if service.restart else "it has no restart command, so start it by hand") for service in down]
     return lines
 
@@ -596,7 +591,7 @@ def crash_report(config: dict, args) -> int:
     hours = within(config, args)
     seens = survey(config, hours)
     stopped = stopped_tasks(config)
-    down = [service for service in services(config) if not run_command(service.check, CHECK_TIMEOUT)]
+    down = [service for service in services(config) if not passes(service)]
     if args.json:
         print(json.dumps({"sessions": [{"name": s.name, "state": s.state, "last": s.last, "source": s.source,
                                         "cause": s.cause, "clues": s.clues, "account": s.entry.get("account", ""),
@@ -740,17 +735,17 @@ def resume(config: dict, args) -> int:
         elif not args.dry_run:
             forget(mine)
     for service in services(config):
-        if run_command(service.check, CHECK_TIMEOUT):
+        if passes(service):
             continue
         if not service.restart:
-            print(f"{service.name}: its check `{service.check}` fails, and it has no restart command: start it by hand")
+            print(f"{service.name}: its check `{service.command}` fails, and it has no restart command: start it by hand")
             failed += 1
         elif args.dry_run:
             print(f"dry run: {service.name} fails its check, so `{service.restart}` would start it again")
-        elif run_command(service.restart, RESTART_TIMEOUT) and run_command(service.check, CHECK_TIMEOUT):
+        elif run_command(service.restart, RESTART_TIMEOUT) and passes(service):
             print(f"{service.name}: started again with `{service.restart}`, and its check passes")
         else:
-            print(f"{service.name}: `{service.restart}` ran, and its check `{service.check}` still fails",
+            print(f"{service.name}: `{service.restart}` ran, and its check `{service.command}` still fails",
                   file=sys.stderr)
             failed += 1
     return 1 if failed else 0

@@ -308,14 +308,51 @@ def test_an_idle_background_session_is_stopped_and_continued_under_its_own_id(ho
     config = load()
     log = stub(host.parent, "claude", 'echo "${CLAUDE_CONFIG_DIR:-default}|$*" >> "$LOG"')
     capacity.remember_opened(config, "builder-2", "builder", "team", "ana", "ana-main-lead")
-    agent = running("builder-2", host.parent / "team", session="abc-123")
+    agent = running("builder-2", host.parent / "team", session="abc-123", cwd=str(host))
     how = capacity.wake(config, "builder-2", agent, "carry on")
-    assert how == "started again in the background, under its own id"
+    assert how == "started again under its own id"
     stop, resume = log.read_text().splitlines()
     assert stop == f"{host.parent / 'team'}|stop 2"
-    assert resume.startswith(f"{host.parent / 'team'}|--bg --resume abc-123 --model m --effort medium --settings ")
+    # It opens again the way `colony resume` opens a session (recover.reopen), on the account that holds it.
+    assert resume.startswith(f"{host.parent / 'team'}|--bg --name demo-builder-2 --resume abc-123 ")
+    assert " --model m --effort medium --settings " in resume
     assert '"COLONY_ACCOUNT": "team"' in resume and '"COLONY_LEAD": "ana-main-lead"' in resume
-    assert resume.endswith("--permission-mode auto carry on")
+    assert "--permission-mode auto carry on " in resume
+    from colony import recover
+
+    assert wait.read_json(recover.ledger_path("demo", "builder-2"), {})["resumed"] > 0  # resume won't open it twice
+
+
+def test_a_wake_reopens_a_helper_through_recover_from_its_ledger_entry(host, monkeypatch):
+    """The capacity and safety join: a wake or a restart after a sleep opens a stopped helper the one way Colony
+    reopens a session, recover.reopen, from the session ledger's entry for its Claude Code id; for a session no hook
+    stamped, from what `claude agents` listed and what Colony noted when it opened it."""
+    from colony import recover
+
+    config = load()
+    reopened, failing = [], []
+    monkeypatch.setattr(recover, "reopen", lambda config, entry, note, dry_run=False:
+                        reopened.append((entry, note, dry_run)) or int(bool(failing)))
+    wait.write_json(recover.ledger_path("demo", "builder-2"), {"name": "builder-2", "session": "builder-2",
+                                                               "id": "abc-123", "account": "spare",
+                                                               "folder": str(host), "lead": "ana-main-lead"})
+    agent = running("builder-2", host.parent / "team", session="abc-123", cwd=str(host))
+    assert capacity.reopen_session(config, "builder-2", agent, "carry on") == "started again under its own id"
+    entry, note, dry_run = reopened.pop()
+    assert (entry["account"], entry["folder"], note, dry_run) == ("spare", str(host), "carry on", False)
+    assert capacity.reopen_session(config, "builder-2", agent, "x", dry_run=True) == "would start it again under its own id"
+    assert reopened.pop()[2] is True
+    capacity.remember_opened(config, "builder-3", "builder", "team", "ana", "ana-main-lead")
+    wait.write_json(recover.ledger_path("demo", "builder-3"), {"name": "builder-3", "id": "an-older-one"})
+    agent = running("builder-3", host.parent / "team", session="sid-3", cwd=str(host / "sub"))
+    capacity.reopen_session(config, "builder-3", agent, "carry on")
+    assert reopened.pop()[0] == {"name": "builder-3", "session": "builder-3", "id": "sid-3",
+                                 "config_dir": str(host.parent / "team"), "folder": str(host / "sub"),
+                                 "account": "team", "person": "ana", "lead": "ana-main-lead"}
+    failing.append(True)
+    assert capacity.reopen_session(config, "builder-3", agent, "x") == "it was not started again, for the reason above"
+    assert capacity.reopen_session(config, "../x", agent, "x") == "it was not started again: '../x' is no session's name"
+    assert len(reopened) == 1  # a name that is no session's never reaches the ledger
 
 
 def test_a_busy_session_and_one_at_a_prompt_are_left_alone(home):
@@ -395,6 +432,32 @@ def test_colony_services_prints_each_result_and_fails_when_one_fails(host, monke
          'fix = "sign in again"\nrestart = "start-it"\n')
     assert cli.main(["services"]) == 1
     assert capsys.readouterr().out.splitlines() == ["pass: ok", "fail: bad: it ended with 1. To fix it: sign in again."]
+
+
+def test_one_services_table_is_judged_alike_by_colony_services_the_crash_report_and_resume(host, monkeypatch,
+                                                                                          capsys):
+    """The capacity and safety join: [services.<name>] is one table. A check passes by the same condition for
+    `colony services`, the crash report and `colony resume`, and runs in the repo's top folder from anywhere in the
+    repo, where its restart runs too. Recovery once took any exit 0 as a pass, and ran from another folder."""
+    from colony import recover
+
+    monkeypatch.setattr(recover, "boot_time", lambda: None)
+    load('[services]\nbuiltin = false\n[services.api]\ncheck = "cat room"\nat_least = 500\n'
+         'restart = "echo 900 > room"\n')
+    (host / "room").write_text("120\n")  # requests left: under at_least, though `cat` ends with 0
+    (host / "sub").mkdir()
+    monkeypatch.chdir(host / "sub")
+    config = cli.load_config(host / ".colony" / "colony.toml")
+    [api] = recover.services(config)
+    assert api is not None and capacity.run_command(api) == (False, "120 is under 500")
+    assert cli.main(["services"]) == 1
+    assert capsys.readouterr().out.splitlines() == ["fail: api: 120 is under 500."]
+    recover.crash_report(config, argparse.Namespace(within=None, json=False))
+    assert "- api: `cat room` failed; `colony resume` runs `echo 900 > room`" in capsys.readouterr().out
+    assert recover.resume(config, argparse.Namespace(names=[], dry_run=False, within=None, command="resume")) == 0
+    assert "api: started again with `echo 900 > room`, and its check passes" in capsys.readouterr().out
+    assert (host / "room").read_text().strip() == "900" and not (host / "sub" / "room").exists()
+    assert cli.main(["services"]) == 0
 
 
 # 10. The account a session really runs on
@@ -589,17 +652,19 @@ def test_after_a_sleep_the_helpers_that_stopped_start_again(host, monkeypatch):
     config = load()
     log = stub(host.parent, "claude", 'echo "$*" >> "$LOG"')
     team = host.parent / "team"
-    capacity.remember_seen(config, [running("builder-1", team, session="sid-1"),
+    capacity.remember_seen(config, [running("builder-1", team, session="sid-1", cwd=str(host)),
                                     running("builder-2", team, kind="interactive", session="sid-2"),
-                                    running("builder-3", team, session="sid-3"), running("lead", team)])
+                                    running("builder-3", team, session="sid-3", cwd=str(host)), running("lead", team)])
     wait.write_json(wait.state_path("demo", "builder-3"), {"polled_at": time.time() - 3600})
-    monkeypatch.setattr(cli, "running_sessions", lambda config: [running("builder-3", team, session="sid-3")])
+    monkeypatch.setattr(cli, "running_sessions", lambda config: [running("builder-3", team, session="sid-3",
+                                                                         cwd=str(host))])
     lines = capacity.restart(config, capacity.SLEPT_PROMPT, reopen=True)
-    assert lines[0] == "builder-1: no longer ran; started again in the background, under its own id"
+    assert lines[0] == "builder-1: no longer ran; started again under its own id"
     assert lines[1] == "builder-2: its window closed; open it again with `colony open builder-2`"
-    assert lines[2] == "builder-3: its wait had stopped; started again in the background, under its own id"
+    assert lines[2] == "builder-3: its wait had stopped; started again under its own id"
     calls = log.read_text().splitlines()
-    assert calls[0].startswith("--bg --resume sid-1 ") and calls[1] == "stop 3" and "--resume sid-3" in calls[2]
+    assert calls[0].startswith("--bg --name demo-builder-1 --resume sid-1 ") and calls[1] == "stop 3"
+    assert "--resume sid-3" in calls[2]
     assert set(capacity.read("demo", "seen")) == {"builder-3"}
 
 
