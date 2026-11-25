@@ -60,6 +60,14 @@ ALLOWED = [
 ]
 
 
+def guard_module():
+    """The guard script loaded as a module, to read its constants."""
+    spec = importlib.util.spec_from_file_location("colony_wait_guard_test", GUARD)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def guard(call) -> subprocess.CompletedProcess:
     """Run the wait guard the way Claude Code does, with the call as JSON on stdin."""
     return subprocess.run([sys.executable, str(GUARD)], input=call, capture_output=True, text=True)
@@ -722,18 +730,24 @@ def test_scripts_nested_past_the_guards_depth_are_refused(on_feature):
     assert run.returncode == 2, run.stderr
 
 
-@pytest.mark.parametrize("command", ["cd sub && bash run.sh", "(cd sub; bash run.sh)", "pushd sub && ./run.sh",
-                                     "env -C sub bash run.sh", "bash outer.sh"])
-def test_a_script_run_after_a_folder_change_is_refused(command, on_feature):
+@pytest.mark.parametrize("command, reason", [
+    ("cd sub && bash run.sh", "push guard: refused, the script run.sh holds a `git push`"),
+    ("(cd sub; bash run.sh)", "push guard: refused, the script run.sh holds a `git push`"),
+    ("pushd sub && ./run.sh", "push guard: refused, the script ./run.sh holds a `git push`"),
+    ("env -C sub bash run.sh", "script guard: refused, the script run.sh runs from a folder the guard can't name"),
+    ("bash outer.sh", "push guard: refused, the script outer.sh runs run.sh, which holds a `git push`"),
+])
+def test_a_script_run_after_a_folder_change_is_read_from_that_folder(command, reason, on_feature):
     """Regression: the guard read a relative script from the call's folder, but `cd sub && bash run.sh` runs
-    sub/run.sh, so a harmless run.sh in the call's folder hid the one that pushed."""
+    sub/run.sh, so a harmless run.sh in the call's folder hid the one that pushed. The guard reads it from the folder a
+    plain cd names (audit, Job B finding 1), and refuses one in a folder it can't name, such as env -C's."""
     (on_feature / "run.sh").write_text("echo harmless\n")
     (on_feature / "sub").mkdir()
     (on_feature / "sub" / "run.sh").write_text("git push origin HEAD:refs/heads/main\n")
     (on_feature / "sub" / "run.sh").chmod(0o755)
     (on_feature / "outer.sh").write_text("cd sub\nbash run.sh\n")
     run = push_guard(command, on_feature)
-    assert run.returncode == 2 and "changes folder before it runs" in run.stderr, (command, run.stderr)
+    assert run.returncode == 2 and run.stderr.startswith(reason), (command, run.stderr)
     assert push_guard(f"cd sub && bash {on_feature / 'sub' / 'run.sh'}", on_feature).returncode == 2  # read there
     assert push_guard(f"cd sub && bash {on_feature / 'run.sh'}", on_feature).returncode == 0  # a full path is clear
 
@@ -809,13 +823,95 @@ def test_a_shell_that_reads_no_script_runs(on_feature):
         assert (run.returncode, run.stderr) == (0, ""), command
 
 
+PNPM_LAUNCHER = """#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+
+case `uname` in
+    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
+esac
+
+if [ -z "$NODE_PATH" ]; then
+  export NODE_PATH="/repo/node_modules/.pnpm/node_modules"
+else
+  export NODE_PATH="/repo/node_modules/.pnpm/node_modules:$NODE_PATH"
+fi
+if [ -x "$basedir/node" ]; then
+  exec "$basedir/node"  "$basedir/../vitest/vitest.mjs" "$@"
+else
+  exec node  "$basedir/../vitest/vitest.mjs" "$@"
+fi
+"""
+
+
+def executable(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.parametrize("command", [
+    "./node_modules/.bin/tsc --noEmit",  # npm links tsc to a node file whose text is require('../lib/tsc.js')
+    "./node_modules/.bin/playwright test",  # a node file that opens with a /** comment
+    "./node_modules/.bin/vitest run",  # pnpm's shell launcher, which runs "$basedir/node"
+    "go build -o bin/app . && ./bin/app --help",  # a program built earlier on the same line
+    "make && ./build/tool",
+    "cd scripts && ./check.sh",  # a script read from the folder the cd names
+    ".colony/bin/colony status",  # Colony's own launcher, run by its path
+])
+def test_ordinary_build_and_test_lines_run(command, on_feature):
+    """Regression (audit, Job B finding 1): the script check read node files, tool launchers and programs not yet
+    built as shell scripts, and refused everyday lines with a merge-guard message. A file run by its path is a shell
+    script only when its #! names a shell or it has none; a program built earlier on the line, a script after a plain
+    cd, and Colony's own launcher run."""
+    modules = on_feature / "node_modules"
+    executable(modules / "typescript" / "bin" / "tsc", "#!/usr/bin/env node\nrequire('../lib/tsc.js')\n")
+    executable(modules / "playwright" / "cli.js", "#!/usr/bin/env node\n/**\n * Copyright\n */\nrequire('./x')\n")
+    (modules / ".bin").mkdir(parents=True)
+    (modules / ".bin" / "tsc").symlink_to("../typescript/bin/tsc")
+    (modules / ".bin" / "playwright").symlink_to("../playwright/cli.js")
+    executable(modules / ".bin" / "vitest", PNPM_LAUNCHER)
+    executable(on_feature / "scripts" / "check.sh", "#!/bin/sh\nnpm test\n")
+    executable(on_feature / ".colony" / "bin" / "colony", guards.launcher())
+    run = push_guard(command, on_feature)
+    assert (run.returncode, run.stderr) == (0, ""), (command, run.stderr)
+
+
+def test_the_guards_copy_of_colonys_installer_line_is_colonys_own():
+    assert guard_module().UV_INSTALL == guards.UV_INSTALL
+
+
+@pytest.mark.parametrize("command, reason", [
+    ("echo hi && ./bin/app", "the program ./bin/app doesn't exist yet, and nothing earlier on this line builds it"),
+    ("bash missing.sh", "the script missing.sh can't be found from this folder"),
+    ("cd scripts && ./push.sh", "the script ./push.sh holds a `git push`"),
+])
+def test_a_script_refusal_names_its_guard_and_why_in_plain_words(command, reason, on_feature):
+    """A script the guard can't find or that doesn't exist yet is refused by the script guard, with advice that fits,
+    never a merge message; a push in a script the cd names is the push guard's."""
+    executable(on_feature / "scripts" / "push.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    which = "push guard" if "git push" in reason else "script guard"
+    assert run.returncode == 2 and run.stderr.startswith(f"{which}: refused, {reason}"), (command, run.stderr)
+    assert "merge guard" not in run.stderr
+
+
+def test_a_file_whose_shebang_names_a_shell_is_read_and_another_interpreter_is_a_program(on_feature):
+    for shebang in ("#!/bin/sh", "#!/usr/bin/env bash", "#!/usr/bin/env -S bash -e", "#!/bin/zsh", ""):
+        executable(on_feature / "x", f"{shebang}\ngit push origin HEAD:refs/heads/main\n".lstrip("\n"))
+        assert push_refused(push_guard("./x", on_feature)), shebang
+    for shebang in ("#!/usr/bin/env node", "#!/usr/bin/python3", "#!/usr/bin/env ruby"):
+        executable(on_feature / "x", f"{shebang}\nconsole.log('git push origin main')\n")
+        assert push_guard("./x", on_feature).returncode == 0, shebang  # a program, which the guard doesn't read
+
+
 def test_a_script_without_a_push_merge_or_kill_runs_and_a_program_is_never_read_as_one(on_feature):
     (on_feature / "test.sh").write_text("#!/bin/sh\nnpm test\ngit status\n")
     for command in ("bash test.sh", "sh -c 'git status'", f"{sys.executable} -c pass", "git status"):
         run = push_guard(command, on_feature)
         assert (run.returncode, run.stderr) == (0, ""), command
     run = push_guard("bash no-such-script.sh", on_feature)
-    assert run.returncode == 2 and "the script no-such-script.sh can't be read" in run.stderr
+    assert run.returncode == 2 and "the script no-such-script.sh can't be found from this folder" in run.stderr
 
 
 @pytest.mark.parametrize("command", ["gh api repos/acme/demo/pulls/5/merge", "gh pr view 5", "gh pr create --base main",

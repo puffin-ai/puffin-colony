@@ -226,6 +226,9 @@ GH_COMMANDS = frozenset((
 GH_VARIABLE = re.compile(r"^(GH_\w*|GITHUB_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where gh finds its repo, host and config
 DEPTH = 4  # nested shells, evals and aliases the guard follows before it refuses
 FOLDER_OPTIONS = ("-C", "-D", "--chdir", "--git-dir", "--work-tree")  # a wrapper's options that move a command
+SCRIPT_REFUSAL = ("script guard: refused, {reason}. The script guard reads each shell script a line runs, and the "
+                  "scripts it runs in turn, so a push, a merge or a kill can't hide in one; it refuses a script it "
+                  "can't read or find.")
 MERGE_REFUSAL = ("merge guard: refused, {reason}. No agent merges or pushes into a branch without the person's yes: "
                  "push your own branch and open a pull request for the person to merge (in Hack, `colony merge "
                  "<branch>`). The person allows merges into a branch with `merge_into` under [safety] in "
@@ -1354,6 +1357,24 @@ SPECIAL_FILES = ("/dev/", "/proc/")  # files that read a stream, never a script 
 # script when the system can't run it as a program.
 PROGRAM_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
                  b"\xca\xfe\xba\xbe", b"MZ")
+# A #! line's interpreter that is a shell, which reads the file as shell commands; any other, such as node or python,
+# runs a program the guard doesn't read (docs/safety.md says so).
+SHELL_NAME = re.compile(r"^(?:sh|bash|zsh|dash|ksh|mksh|ash|csh|tcsh|fish|busybox)(?:[0-9][0-9.]*)?$")
+# Interpreters a launcher runs by a path the guard can't name, such as pnpm's "$basedir/node": each is a program.
+INTERPRETERS = {"node", "nodejs", "python", "python3", "python2", "deno", "bun", "ruby", "perl", "php", "java",
+                "lua", "Rscript", "julia", "elixir", "erl"}
+# Programs that build other programs: a program run by its path that doesn't exist yet is one of theirs when one of
+# them runs earlier on the same line, as in `go build -o bin/app . && ./bin/app`.
+BUILDERS = {"make", "gmake", "bmake", "ninja", "cmake", "meson", "go", "cargo", "rustc", "gcc", "g++", "cc", "c++",
+            "clang", "clang++", "tsc", "esbuild", "npm", "pnpm", "yarn", "bun", "npx", "bunx", "deno", "mvn", "gradle",
+            "gradlew", "bazel", "bazelisk", "swift", "swiftc", "xcodebuild", "dotnet", "msbuild", "zig", "javac",
+            "kotlinc", "scalac", "sbt", "ghc", "stack", "cabal", "dune", "mix", "uv", "pip", "pip3", "poetry",
+            "nix-build", "just", "task", "pyinstaller"}
+# Colony's own launcher, .colony/bin/colony, installs uv with this line, which pipes Astral's installer into sh. The
+# guard knows the line as Colony writes it (guards.UV_INSTALL; a test keeps the two equal), and only that line.
+UV_INSTALLER = "https://astral.sh/uv/install.sh"
+UV_INSTALL = (f"if command -v curl >/dev/null 2>&1; then curl -LsSf {UV_INSTALLER}; else wget -qO- {UV_INSTALLER}; fi "
+              "2>/dev/null | sh >/dev/null 2>&1")
 SHELL_NO_SCRIPT = {"--version", "--help"}  # a shell asked only to describe itself runs no script
 HELD = (("push", RAW_PUSH, "a `git push`"), ("merge", RAW_MERGE, "a gh merge"), ("kill", RAW_KILL, "a kill"))
 # In a script's text the guard can't read as commands, what may run another script.
@@ -1361,17 +1382,41 @@ RAW_SCRIPT = re.compile(r"(?<![\w.-])(?:bash|sh|zsh|dash|source|eval)(?![\w-])|(
 NESTED = "nests shells, evals or scripts deeper than the guard follows, so run them plainly"
 STDIN_REFUSAL = ("a shell on this line reads its script on standard input from something the guard can't read: save "
                  "the script to a file, read it, and run it as `sh <file>`")
+PLAIN_FOLDER = re.compile(r"^[^\s$`*?\[\]{}~'\"\\]+$|^~(?:/[^\s$`*?\[\]{}'\"\\]*)?$")  # a folder a cd names in full
 
 
-def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
+def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str, str, str]]:
     """A line's simple commands as sequence() splits them, each with what a redirection gives its standard input,
     descriptor 0: the file after a `<`, or "<<" for what the guard can't read as a file, a here-document, a
-    here-string, a copy of another descriptor (`<&3`, `0>&3`) or any other operator on descriptor 0, else ""; and the
-    operator before it, such as | for a command fed by a pipe. A redirection of any other descriptor, such as
+    here-string, a copy of another descriptor (`<&3`, `0>&3`) or any other operator on descriptor 0, else ""; the
+    operator before it, such as | for a command fed by a pipe; and the folder it runs in, or "" when the guard can't
+    name it. It follows a cd or pushd to a folder named in full, and a ( ) group's own; a cd it can't follow, a
+    popd, or a wrapper's -C or --chdir leaves the folder unknown. A redirection of any other descriptor, such as
     `3< file` or `2> file`, leaves standard input be."""
-    found: list[tuple[list[str], str, str]] = []
+    found: list[tuple[list[str], str, str, str]] = []
     words: list[str] = []
     given, before, skip, stdin = "", "", "", False
+    here, stack = cwd or ".", []
+
+    def moved(done: list[str], after: str) -> str:
+        """The folder after a finished command, followed by `after`."""
+        program = run_program(done)
+        head = done[:len(done) - len(program)]
+        if any(word.partition("=")[0] in FOLDER_OPTIONS for word in head):
+            return here  # a wrapper moves only its own command
+        name = PurePath(program[0]).name if program else ""
+        if name not in LINE_CHANGES:
+            return here
+        if name == "popd" or not here or after in ("|", "|&", "&"):
+            return ""
+        operands = [word for word in program[1:] if word != "--"]
+        target = operands[0] if operands else "~"
+        if len(operands) > 1 or target.startswith("-") or not PLAIN_FOLDER.fullmatch(target):
+            return ""
+        folder = Path(os.path.expanduser(target))
+        folder = folder if folder.is_absolute() else Path(here) / folder
+        return str(folder) if folder.is_dir() else ""
+
     for token in line:
         if skip:
             if stdin:
@@ -1385,24 +1430,22 @@ def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
             stdin = descriptor == 0 or (descriptor is None and token.startswith("<"))
         elif token and set(token) <= PUNCTUATION:
             if words:
-                found.append((words, given, before))
+                own = "" if any(w.partition("=")[0] in FOLDER_OPTIONS for w in words[:len(words) -
+                                                                                     len(run_program(words))]) else here
+                found.append((words, given, before, own))
+                here = moved(words, token)
+            if token == "(":
+                stack.append(here)
+            elif token == ")" and stack:  # a group's end; a case pattern's ) closes no group
+                here = stack.pop()
             words, given, before = [], "", token
         elif token not in ("{", "}"):
             words.append(token)
-    return [*found, (words, given, before)] if words else found
-
-
-def folder_move(line: list[str]) -> str:
-    """What on a line moves the folder a later command runs in, a cd, pushd or popd, or a wrapper's -C or --chdir;
-    "" for none. A relative script after it runs from a folder the guard can't name."""
-    for words in simple_commands(line):
-        program = run_program(words)
-        if program and PurePath(program[0]).name in LINE_CHANGES:
-            return f"`{PurePath(program[0]).name}`"
-        moving = [word for word in words[:len(words) - len(program)] if word.partition("=")[0] in FOLDER_OPTIONS]
-        if moving:
-            return f"`{moving[0].partition('=')[0]}`"
-    return ""
+    if words:
+        own = "" if any(w.partition("=")[0] in FOLDER_OPTIONS for w in words[:len(words) - len(run_program(words))]) \
+            else here
+        found.append((words, given, before, own))
+    return found
 
 
 def script_named(program: list[str]) -> tuple[str, bool]:
@@ -1433,54 +1476,84 @@ def script_named(program: list[str]) -> tuple[str, bool]:
     return (program[0], False) if "/" in program[0] else ("", False)
 
 
-def script_text(name: str, cwd: str, read_by_shell: bool) -> str | None:
-    """A script's text, read from the call's folder as the shell finds it, its zero bytes dropped; "" for a program
-    run by its path that starts as a real program does (PROGRAM_MAGIC, with a zero byte on its first line); None when
-    it is no regular file, can't be read, or is longer than FILE_LIMIT. A file a shell or source reads is always text
-    to the guard, as it is to the shell, and so is a #! file."""
+def runs_as_shell(data: bytes) -> bool:
+    """Whether a file run by its path runs as shell commands: its #! line names a shell, through env or not, or it has
+    no #! line and isn't a real program (PROGRAM_MAGIC with a zero byte on its first line), so a shell runs it as sh.
+    A #! that names any other interpreter, such as node or python, runs a program."""
+    first = data.split(b"\n", 1)[0]
+    if not data.startswith(b"#!"):
+        return not (data.startswith(PROGRAM_MAGIC) and b"\0" in first)
+    words = first[2:].split(b"\0", 1)[0].decode("utf-8", errors="replace").split()  # the system stops at a zero byte
+    if not words:
+        return True  # "#!" alone names nothing to run, so the system hands the file to sh
+    interpreter = PurePath(words[0]).name
+    if interpreter == "env":
+        rest = [word for word in words[1:] if not word.startswith("-") and "=" not in word]
+        interpreter = PurePath(rest[0]).name if rest else ""
+    return bool(SHELL_NAME.fullmatch(interpreter))
+
+
+def script_text(name: str, cwd: str, read_by_shell: bool) -> tuple[str, str]:
+    """A script's text, read from `cwd` as the shell finds it, its zero bytes dropped, as ("text", its text); else
+    ("program", "") for a file run by its path that runs no shell commands (runs_as_shell), ("missing", "") for a file
+    that isn't there, or ("unread", "") for one the guard can't read in full: no regular file, or longer than
+    FILE_LIMIT. A file a shell or source reads is always text to the guard, as it is to the shell."""
     path = Path(os.path.expandvars(os.path.expanduser(name)))
     path = path if path.is_absolute() else Path(cwd or ".") / path
+    if name in STDIN_NAMES or str(path).startswith(SPECIAL_FILES):
+        return "unread", ""
     try:
-        if name in STDIN_NAMES or str(path).startswith(SPECIAL_FILES) or not stat.S_ISREG(os.stat(path).st_mode):
-            return None
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return "unread", ""
         with open(path, "rb") as handle:
             data = handle.read(FILE_LIMIT + 1)
+    except FileNotFoundError:
+        return "missing", ""
     except OSError:
-        return None
-    first = data.split(b"\n", 1)[0]
-    if not read_by_shell and not data.startswith(b"#!") and data.startswith(PROGRAM_MAGIC) and b"\0" in first:
-        return ""
+        return "unread", ""
+    if not read_by_shell and not runs_as_shell(data):
+        return "program", ""
     if len(data) > FILE_LIMIT:
-        return None
-    return data.replace(b"\0", b"").decode("utf-8", errors="replace")
+        return "unread", ""
+    return "text", data.replace(b"\0", b"").decode("utf-8", errors="replace")
 
 
-def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool) -> list[tuple[str, str]]:
+def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built: bool = False) -> list[tuple[str, str]]:
     """(kind, what) for each push, merge or kill a script holds, or a script it runs in turn holds: what follows the
-    script's name in a reason, such as "holds a `git push`". A script the guard can't read, and one that runs scripts
-    deeper than DEPTH, gives kind merge."""
-    text = script_text(name, cwd, read_by_shell)
-    if text == "":
+    script's name in a reason, such as "holds a `git push`". Kind script is the script guard's: a script it can't
+    read or find, a program run by its path that doesn't exist yet and that nothing earlier on the line (`built`)
+    builds, and scripts nested deeper than DEPTH."""
+    status, text = script_text(name, cwd, read_by_shell)
+    if status == "program":
         return []
-    if text is None:
-        return [("merge", "can't be read from this folder as a regular file, so the guard can't check that it pushes, "
-                          "merges or kills nothing: run it by a path the guard can read")]
+    if status == "missing":
+        if read_by_shell:
+            return [("script", "can't be found from this folder: run it by a path the guard can read")]
+        if built or PurePath(name).name in INTERPRETERS:
+            return []  # a program the line builds first, or a launcher's interpreter
+        return [("script", "doesn't exist yet, and nothing earlier on this line builds it: run it on a line of its "
+                           "own once it exists, so the guard can read it")]
+    if status == "unread":
+        return [("script", "can't be read in full from this folder, so the guard can't check that it pushes, merges "
+                           "or kills nothing: run it by a path the guard can read")]
     held = [(kind, f"holds {what}, which the guard can't check inside a script") for kind, pattern, what in HELD
             if pattern.search(text)]
     if held:
         return held
+    text = "\n".join(line for line in text.splitlines() if line.strip() != UV_INSTALL)  # Colony's own installer
     try:
         tokens(text)
     except ValueError:  # its text can't be read as commands: refuse when it may run another script
-        return [("merge", f"runs commands the guard can't read, and may run another script, so {NESTED}")] \
+        return [("script", f"runs commands the guard can't read, and may run another script, so {NESTED}")] \
             if RAW_SCRIPT.search(text) else []
     if depth >= DEPTH:
-        return [("merge", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
+        return [("script", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
     return [(kind, f"runs {inner}, which {what}" if inner else f"runs a line where {what}")
             for kind, inner, what in scripts(text, cwd, depth + 1)]
 
 
-def fed_files(segments: list[tuple[list[str], str, str]], index: int, given: str, before: str) -> list[str] | None:
+def fed_files(segments: list[tuple[list[str], str, str, str]], index: int, given: str,
+              before: str) -> list[str] | None:
     """The files a shell reads its script from on standard input: the regular file a `<` gives it, or the files a
     plain `cat` before a pipe gives it. None when anything else feeds it: a here-document or here-string, which can
     expand to a file's text, process substitution, another program, or a cat of its own standard input."""
@@ -1488,7 +1561,7 @@ def fed_files(segments: list[tuple[list[str], str, str]], index: int, given: str
         return None if given == "<<" else [given]
     if before not in PIPES or not index:
         return None
-    words, cat_given, _ = segments[index - 1]
+    words, cat_given, _, _ = segments[index - 1]
     feeder = run_program(words)
     files = [word for word in feeder[1:] if not word.startswith("-") or word == "-"]
     if not feeder or PurePath(feeder[0]).name != "cat" or cat_given or not files:
@@ -1498,47 +1571,51 @@ def fed_files(segments: list[tuple[list[str], str, str]], index: int, given: str
 
 def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False) -> list[tuple[str, str, str]]:
     """(kind, script, what) for each script the line runs, through a shell's -c and eval too, that holds a push, a
-    merge or a kill, or runs a script that does; script is "" when the reason names no file. Kind is push, merge or
-    kill: the guard whose refusal it joins. A shell that reads its script on standard input is read from the regular
-    files a `<` or a plain `cat` gives it, and refused when fed by anything else; a relative script after a folder
-    change is refused. With `probe`, it only says whether the line runs any script or shell line at all."""
+    merge or a kill, or runs a script that does, and each the script guard refuses (kind script); script is "" when
+    the reason names no file. A shell that reads its script on standard input is read from the regular files a `<`
+    or a plain `cat` gives it, and refused when fed by anything else. Each file is read from the folder its command
+    runs in, which a plain cd names (shell_segments); a relative script in a folder the guard can't name is refused.
+    With `probe`, it only says whether the line runs any script or shell line at all."""
     try:
         line = tokens(command)
     except ValueError:
         return []
     found: list[tuple[str, str, str]] = []
-    moved = folder_move(line)
-    segments = shell_segments(line)
-    for index, (words, given, before) in enumerate(segments):
+    segments = shell_segments(line, cwd)
+    for index, (words, given, before, here) in enumerate(segments):
         program = run_program(words)
         name = PurePath(program[0]).name if program else ""
         if name in SHELLS or name == "eval":
             inner = shell_lines(name, program[1:])
             if inner:
                 if probe:
-                    return [("merge", "", NESTED)]
+                    return [("script", "", NESTED)]
                 if depth >= DEPTH:
-                    found.append(("merge", "", f"this line {NESTED}"))
+                    found.append(("script", "", f"this line {NESTED}"))
                 else:
-                    found += [item for text in inner for item in scripts(text, cwd, depth + 1)]
+                    found += [item for text in inner for item in scripts(text, here or cwd, depth + 1)]
                 continue
         script, read_by_shell = script_named(program)
         if script and probe:
-            return [("merge", "", NESTED)]
+            return [("script", "", NESTED)]
         files = [script] if script and script != "-" else []
         if script == "-":
             fed = fed_files(segments, index, given, before)
             if fed is None:
-                found.append(("merge", "", STDIN_REFUSAL))
+                found.append(("script", "", STDIN_REFUSAL))
                 continue
             files = fed
+        built = any(PurePath(run_program(earlier)[0]).name in BUILDERS
+                    for earlier, *_ in segments[:index] if run_program(earlier))
         for file in files:
-            if moved and not Path(os.path.expandvars(os.path.expanduser(file))).is_absolute():
-                found.append(("merge", file, f"runs from another folder: this line changes folder before it runs "
-                                             f"({moved}), so the guard can't tell which file that is. Run the script "
-                                             "by its full path, or run the cd as a command of its own first"))
+            if not read_by_shell and "$" in file and PurePath(file).name in INTERPRETERS:
+                continue  # a launcher's interpreter by a path the guard can't name, such as pnpm's "$basedir/node"
+            if not here and not Path(os.path.expandvars(os.path.expanduser(file))).is_absolute():
+                found.append(("script", file, "runs from a folder the guard can't name: this line changes folder in a "
+                                              "way it can't follow. Run the script by its full path, or cd to a folder "
+                                              "named in full first"))
                 continue
-            found += [(kind, file, what) for kind, what in script_findings(file, cwd, depth, read_by_shell)]
+            found += [(kind, file, what) for kind, what in script_findings(file, here, depth, read_by_shell, built)]
     return found
 
 
@@ -1866,10 +1943,12 @@ def check(tool: str, tool_input: dict, cwd: str, command: str) -> int:
     lowered = command.lower()
     if any(word in lowered for word in ("kill", "fuser", "stop-process", "spps")):
         killed = kills(command)
-    # A push, a merge or a kill moved into a script the line runs, which the guards' reading of the line can't see.
+    # A push, a merge or a kill moved into a script the line runs, which the guards' reading of the line can't see,
+    # and a script the script guard can't check.
+    scripted: list[str] = []
     for kind, script, what in scripts(command, cwd):
-        {"push": rewrites, "merge": merged, "kill": killed}[kind].append(f"the script {script} {what}" if script
-                                                                          else what)
+        reason = f"the {'program' if 'exist yet' in what else 'script'} {script} {what}" if script else what
+        {"push": rewrites, "merge": merged, "kill": killed, "script": scripted}[kind].append(reason)
     # The plain-line rule: a line that names a push, a gh merge or a kill anywhere is one plain command of that kind.
     for kind, pattern, reasons in (("push", RAW_PUSH, rewrites), ("merge", RAW_MERGE, merged),
                                    ("kill", RAW_KILL, killed)):
@@ -1884,6 +1963,8 @@ def check(tool: str, tool_input: dict, cwd: str, command: str) -> int:
         refusals.append(MERGE_REFUSAL.format(reason="; ".join(dict.fromkeys(merged))))
     if killed:
         refusals.append(KILL_REFUSAL.format(reason="; ".join(dict.fromkeys(killed))))
+    if scripted:
+        refusals.append(SCRIPT_REFUSAL.format(reason="; ".join(dict.fromkeys(scripted))))
     if refusals:
         sys.stderr.write("\n".join(refusals) + "\n")
         return 2
