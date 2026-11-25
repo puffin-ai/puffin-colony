@@ -649,3 +649,11 @@ def test_a_turn_whose_holder_cant_be_read_is_waited_on_never_spun_on(world, caps
     world.branch("ana/login", {"a.txt": "good\n"})
     assert land(world.config(), "ana/login") == 0
     assert naps == [merge.LOCK_POLL] * 3
+
+
+def test_a_commit_this_clone_lacks_does_not_exist_even_as_a_full_id(world):
+    head = git(world.clone, "rev-parse", "HEAD")
+    assert merge._exists(world.clone, head) and merge._exists(world.clone, "origin/main")
+    assert merge._exists(world.clone, f"{head}^1") is False  # the first commit has no parent
+    assert merge._exists(world.clone, "1234567890" * 4) is False
+    assert merge._exists(world.clone, "origin/no-such-branch") is False

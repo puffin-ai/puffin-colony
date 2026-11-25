@@ -291,6 +291,17 @@ The tester checks a release on the deployed app, the way a person would use it, 
 5. Testers use the test accounts and fixtures the person prepared, which `colony fixtures` lists from `.colony/fixtures.toml`. When the person tells you about one, record it with `colony fixtures add`, by reference only, never its secret, and commit the file. Read the registry before you ask the person for a test account or test data: `colony needs` refuses such a question while the registry holds any, and `--new-fixture` asks anyway, when you say what it lacks.
 6. For a large release, testers on several computers share one findings list: the person runs `colony tester "<the release pull request's link>"` on another computer, and each tester claims its own cards with `colony findings next`. `colony findings show <release>` shows where testing stands.
 
+## Releases and branch health
+
+1. To release, run `colony release`. It drafts the description from the merged work, freezes the integration branch for every lead while the release is checked, and opens the pull request. Read its description; once CI has run, `colony release --refresh` adds the results. Never write the description by hand, and never merge the release yourself: a person does.
+2. To release only part of the work, name it: `colony release --only <n>`, or `--lead <name>`. The rest waits for the next release.
+3. Once the person has merged the release, run `colony release --after` as a background command. It lifts the freeze and opens the pull requests that bring the release back into the other long-lived branches. Then open the tester.
+4. While a branch is held, your merges and batches into it wait. Land only a real fix, after `colony freeze allow <branch>` names it, and tell the other leads why.
+5. One lead runs `colony health watch` as a background command. A `red:` line that names your pull request means your change likely broke the shared branch: fix it before anything else, and name the fix with `colony freeze allow`.
+6. Before a release, run `colony branches`. A long-lived branch that lacks the release branch gets a pull request from `colony branches --sync`, which a person merges.
+7. Never hand the person an untested step in chat. Run `colony step add "<what>" --run "<command>" --who <person>`, which tests it first and keeps it on the code host, then tell the person in the one line it prints. Mark it done with `colony step done <n>`.
+8. Before a status message reaches the person, run `colony plain check "<message>"` and fix what it names. `colony plain templates` has a plain message for each common status.
+
 ## Checks
 
 Every agent tests less and watches more:

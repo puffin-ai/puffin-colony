@@ -73,8 +73,10 @@ def _git(cwd, *args: str, check: bool = True) -> str:
 
 
 def _exists(root: Path, ref: str) -> bool:
-    """Whether the ref names a commit."""
-    return batch._run(["git", "rev-parse", "--verify", "--quiet", ref], root, check=False).returncode == 0
+    """Whether the ref names a commit this clone has. `^{commit}` makes git read the object: alone, `rev-parse
+    --verify` passes any full 40-character id, even one this clone lacks."""
+    return batch._run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root,
+                      check=False).returncode == 0
 
 
 def _behind(root: Path, ref: str, other: str) -> bool:
@@ -580,28 +582,6 @@ def one_at_a_time(config: dict):
         yield
 
 
-def merge_back(config: dict, root: Path, ref: str) -> str:
-    """`colony release --after`'s merge: merge `ref`, the released branch, into origin/<base> in the merge worktree
-    and push the base, never forced. A conflict, or a base that moved on, stops it with the base untouched."""
-    base = config["project"]["base"]
-    with one_at_a_time(config):
-        wt = worktree(config)
-        ready(root, wt, base)
-        if _behind(root, ref, f"origin/{base}"):
-            return f"{base} already holds {ref}: nothing to merge back"
-        if batch._run(["git", "merge", "--no-ff", "--no-edit", ref], wt, check=False).returncode:
-            paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
-            _git(wt, "merge", "--abort", check=False)
-            raise cli.ColonyError(f"merging {ref} back into {base} conflicts in {', '.join(paths) or 'the merge'}: "
-                                  "merge it by hand")
-        head = _git(wt, "rev-parse", "HEAD")
-        push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
-        if push.returncode:
-            raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}: run "
-                                  f"`{cli.NAME} release --after` again")
-    return f"merged {ref} back into {base} at {head[:9]}"
-
-
 def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     """What the merge would run, for --dry-run."""
     project = config["project"]
@@ -711,6 +691,9 @@ def run(config: dict, args) -> int:
         for branch in branches:
             print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
+    from colony import freeze
+
+    freeze.guard_merge(config, root, base, branches)  # a merge freeze or a red base pauses every lead's landing
     results: list[tuple[str, Landed]] = []
     with one_at_a_time(config), team_turn(config, root, branches):
         if len(branches) > 1:
