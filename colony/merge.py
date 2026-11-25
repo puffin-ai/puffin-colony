@@ -159,19 +159,26 @@ def log_path(config: dict, name: str, run: str) -> Path:
     return folder / f"{safe_name}-{time.strftime('%Y%m%d-%H%M%S')}-{run}.log"
 
 
-def run_check(command: str, cwd: Path, env: dict, log: Path) -> Check:
-    """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests."""
+def run_check(command: str, cwd: Path, env: dict, log: Path, cap: float = 0) -> Check:
+    """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests. A run
+    past `cap` seconds, `[checks] caps` (configs.merge_plan), is stopped with everything it started, and fails."""
+    from colony import checks
+
     shell_command, shell, env = portable.shell(command, env)
     started = time.monotonic()
-    run = subprocess.run(shell_command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
+    with log.open("w") as out:
+        proc = subprocess.Popen(shell_command, shell=shell, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, **portable.own_group())
+        code = checks.wait_capped(proc, cap)
     seconds = time.monotonic() - started
-    output = f"{run.stdout}\n{run.stderr}"
-    log.write_text(output)
+    output = log.read_text(errors="replace")
     lines = readable(output)
     summaries = [line for line in lines if SUMMARY.search(line)]
     summary = (summaries[-1] if summaries else lines[-1] if lines else "no output")[:200]
+    if code is None:
+        summary = f"stopped past its cap of {checks.span(cap)}, [checks] caps"
     failing = list(dict.fromkeys(line[:120] for line in lines if FAILING.match(line) and not transport.holds_secret(line)))
-    return Check(run.returncode == 0, safe(summary, "summary line"), failing[:NAMED], log, seconds)
+    return Check(code == 0, safe(summary, "summary line"), failing[:NAMED], log, seconds)
 
 
 def checked_bases(config: dict) -> tuple[Path, dict]:
@@ -189,7 +196,8 @@ def remember_green(config: dict, head: str) -> None:
     wait.write_json(path, found)
 
 
-def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dict, command: str) -> Check | None:
+def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dict, command: str,
+               cap: float = 0) -> Check | None:
     """The fast check's run on origin/<base> alone, at `sha`, when it fails there too, else None. A base Colony
     landed green itself, or one whose install fails here, isn't run."""
     path, found = checked_bases(config)
@@ -198,7 +206,7 @@ def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dic
     ready(root, wt, base)
     if config["project"].get("install") and not _shell(config["project"]["install"], wt, env)[0]:
         return None
-    result = run_check(command, wt, env, log_path(config, base, "base"))
+    result = run_check(command, wt, env, log_path(config, base, "base"), cap)
     if result.passed:
         remember_green(config, sha)
         return None
@@ -341,9 +349,10 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
     own gets no pull request, since the branch is not to blame; for several branches, run() lands each alone."""
     branches = [branches] if isinstance(branches, str) else list(branches)
     branch, names = branches[0], " and ".join(branches)
+    from colony import configs
+
     project = config["project"]
     base, env = project["base"], batch.checks_env(config, root)
-    command = batch.every_area(config, batch.fast_check(project))
     for attempt in range(TRIES):
         if attempt:
             _git(root, "fetch", "origin")
@@ -368,6 +377,10 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
             if not REJECTED.search(push.stderr):
                 raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
             continue
+        # The fast check for the merged change, in [checks] scope, stopped past the fast cap (configs.merge_plan).
+        # A change that touches no check area still runs the whole fast check: the merge pushes the base itself.
+        plan, cap = configs.merge_plan(config, wt, _git(wt, "diff", "--name-only", before, head).splitlines())
+        command = plan.cmd or batch.every_area(config, batch.fast_check(project))
         if project.get("install"):
             installed, last = _shell(project["install"], wt, env)
             if not installed:
@@ -376,18 +389,19 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
             note_once(config, "database", f"the fast check's env names a database on {', '.join(hosts)}, which isn't "
                       "on this computer: every check writes to it, and a shared one slows as checks pile up; give the "
                       "checks a database of their own")
-        first = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together", "check"))
+        first = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together", "check"),
+                          cap)
         if first.seconds > SLOW_CHECK_SECONDS:
             note_once(config, "slow", f"the fast check took {int(first.seconds)} s; in a hackathon keep it under a "
                       "minute, and move slow tests, such as ones that use a database, to [project] checks")
         passed, note = f"({first.summary})", ""
         if not first.passed:
             second = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together",
-                                                          "again"))
+                                                          "again"), cap)
             if not second.passed and len(branches) > 1:
                 return Landed(False, second.failed("twice on the merged result"), log=second.log, pr=False)
             if not second.passed:
-                red = base_fails(config, root, wt, base, before, env, command)
+                red = base_fails(config, root, wt, base, before, env, command, cap)
                 if red is not None:
                     warn_red_base(config, base, before, red)
                     return Landed(False, f"{base} itself fails the fast check at {before[:9]}, so {branch} is not "

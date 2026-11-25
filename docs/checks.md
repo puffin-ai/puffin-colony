@@ -63,7 +63,7 @@ A check that returns early ends on this line, and exits 3:
 fast check: running in the background past its 300 s budget, so work goes on: `colony check watch fast-…` follows it, and `colony check status` shows it
 ```
 
-`[checks] caps` stops a run past its cap, in seconds, and counts it as failed. Without a cap, a run goes on until it ends. A batch round past its cap stops the batch.
+`[checks] caps` stops a run past its cap, in seconds, and counts it as failed. Without a cap, a run goes on until it ends. A batch round past its cap stops the batch. Every command that runs a check follows the same settings: `colony merge` runs the fast check for the merged change in `[checks] scope` and stops it past the `fast` cap, a batch whose gate runs the fast check stops its round past the `fast` cap, and a batch's run on its start commit and its reruns stop at the round's cap.
 
 While its check runs, each background run, and each batch round's checks, holds one slot of the `tests` lock, the same lock `colony lock tests` takes (see [capacity.md](capacity.md#locks)). The lock has as many slots as test runs this computer runs at once, so a busy computer runs fewer checks at a time, and `[locks.tests] slots` sets the number yourself. A run also holds one slot of each lock `[checks] locks` names, such as `["test-db"]` for one shared test database. Its command gets each slot's number in `$COLONY_LOCK_SLOT_<NAME>`, such as `$COLONY_LOCK_SLOT_TEST_DB`, so each run can use its own database or port. A run with no free slot waits in the background, and `colony check status` says what it waits for. Its cap counts from when it gets its slots, and it gives up after 30 minutes.
 

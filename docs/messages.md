@@ -146,7 +146,7 @@ Leads and orchestrators on different computers, and different people's, stay in 
 
 ## Presence: heartbeats and status comments
 
-Every session a person opens is a lead, named `<person>-<stream>-lead`, such as `ana-engine-lead`, with its folders in `.colony/leads.toml`. Helpers belong to one lead, and carry its name in `$COLONY_LEAD`. See the playbook's Leads and helpers section.
+Every session a person opens is a lead, named `<person>-<stream>-lead`, such as `ana-engine-lead`, with its folders in the clone's registry, which every worktree reads, and in its status comment, which every computer reads ([folders.md](folders.md)). Helpers belong to one lead, and carry its name in `$COLONY_LEAD`. See the playbook's Leads and helpers section.
 
 - **On this computer,** a lead's wait writes `~/.colony/<project>/<lead>.heartbeat` at each poll, every 15 seconds, with its name, account, a token and the time. Under 2 minutes old, the lead is alive. The heartbeat is also the lock on that name: it is written under a file lock, and only when it is missing, stale, or holds the writer's own token, `$COLONY_LEAD_TOKEN`. A lead from before lead names keeps `lead.heartbeat`.
 - **Across computers,** each lead and helper keeps one status comment on the coordination issue, or the board in hack mode, edited in place every 5 minutes: name, person, computer, account, folders, and its accounts' 5-hour and weekly room. It never adds a second comment. A status older than 15 minutes counts as gone.

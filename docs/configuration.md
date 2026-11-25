@@ -2,7 +2,7 @@
 
 Colony keeps its settings in `.colony/colony.toml` at the root of your repo. Setup writes it from [`colony/colony.toml.example`](../colony/colony.toml.example) and fills in every value, so you rarely edit it by hand. When you do, commit the change like any other file: every machine reads the same settings.
 
-Each mode has its defaults in the package, in `colony/modes/<mode>.toml`. Colony reads the mode's file first, then `.colony/colony.toml`, and any key in your file overrides the default. See [modes.md](modes.md#the-defaults-files).
+Each mode has its defaults in the package, in `colony/modes/<mode>.toml`. Colony reads the mode's file first, then `.colony/colony.toml`, and any key in your file overrides the default. See [modes.md](modes.md#the-defaults-files). A setting only you want on this computer goes in `.colony/colony.local.toml`, which git never tracks: see [Layers](#layers).
 
 Paths may start with `~`. Every command checks the required keys when it starts, and names the missing one in a single line, such as `colony.toml: [project] needs 'checks'`. Every table below `[budget]` is optional, and each of its keys has a default.
 
@@ -16,7 +16,7 @@ Paths may start with `~`. Every command checks the required keys when it starts,
 | `base` | yes | `"main"` | The branch PRs go to. Colony never pushes to it, except `colony merge` in Hack with `[gate] merge_after_fast_check = true`. |
 | `preset` | no | `"lean"` | The rules setup copied: `lean`, `puffin` or `own`. A record for you; the commands don't read it. |
 | `max_builders` | no | `4` | How many builders the lead opens on this machine. More join from other computers with `colony join`. |
-| `worktrees` | yes | `"~/worktrees"` | Where builders, batches, fixers, the merge and the retro make their worktrees. Pick a folder outside the clone. A relative path, such as `"../worktrees"`, starts from the clone. |
+| `worktrees` | no | `".worktrees"` | Where builders, batches, fixers, the merge and the retro make every worktree. Default: `.worktrees`, inside the repo. A relative path starts from the repo's main checkout, so a command run in a worktree never nests one inside it, and a folder inside the repo is kept out of `git status` by a line in the clone's own `.git/info/exclude`, which nothing commits. A folder outside the repo still works, and the lead hears once a day that worktrees belong inside it. See [folders.md](folders.md#worktrees). |
 | `fast_check` | no | `"npm test"` | A builder's quick check after each change. Setup writes it into the playbook. |
 | `checks` | yes | `"python3 tools/checks.py {areas}"` | The full check a batch runs. It runs through your shell, so `&&` works. Setup adds `&& colony suppressions` to it. With `[checks] areas`, `{areas}` takes the names of the areas a round runs. |
 | `backend_paths` | no | `["api/", "server/"]` | Path prefixes whose change is never TINY. |
@@ -124,10 +124,19 @@ These keys make checks proportional, fast and never repeated. [checks.md](checks
 | `guards` | no | `["tests/test_architecture.py"]` | The guard tests, such as architecture tests, which run with every related check: paths, folders, test ids or globs. As a table of check areas, an area's guards run when the change touches that area. |
 | `tests` | no | `{ "setup.cfg" = ["tests/"] }` | Tests for files whose tests aren't named after them, as a path or glob and its tests. |
 | `budgets` | no | `{ fast = 120, checks = 300, full = 0 }` | How many seconds a command follows each kind of check before it leaves it running in the background and returns: `fast` for `colony fast-check`, `checks` for `colony check run`, `full` for the full suite. 0 sends it to the background at once. Default: 300, 300 and 0. |
-| `caps` | no | `{ full = 3600 }` | A run past its kind's cap, in seconds, is stopped and counts as failed; a batch round past its cap stops the batch. Default: no cap. |
+| `caps` | no | `{ full = 3600 }` | A run past its kind's cap, in seconds, is stopped and counts as failed; a batch round past its cap stops the batch. Every command that runs a check follows it: `fast` holds `colony fast-check`, `colony merge`'s check and a fast gate's batch round, `checks` holds `colony check run` and a batch round, and `full` the full suite. A batch's run on its start commit and its reruns stop at the round's cap too. Default: no cap. |
 | `reuse` | no | `true` | Whether a pass on the same code with the same command is reused instead of run again. Default `true`. |
 | `failure` | no | `'^BROKEN: '` | A regular expression for the repo's own failure line, beside the ones Colony knows, so its first failure shows at once. |
 | `locks` | no | `["test-db"]` | Locks every check run holds a slot of while it runs, besides `tests`, for things only one run can use at a time, such as a shared test database. `[locks.<name>] slots` sets how many runs share each. See [checks.md](checks.md#every-check-fast-or-in-the-background). |
+
+## `[leads]`
+
+Optional. When a lead counts as silent, and when a gone lead drops from the registry. See [folders.md](folders.md).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `silent_minutes` | `120` | A lead whose own session has done nothing this long is silent, though its wait keeps its status fresh. Its folders can be borrowed or claimed, and the rest of the repo taken over, each with a line that tells it. An ask for its folders is granted then. |
+| `drop_after_hours` | `72` | A lead gone this long, with no status and no heartbeat, drops from the registry with its loans, and `colony who` stops listing it. |
 
 ## `[ci]`
 
@@ -407,6 +416,27 @@ idle_minutes = 30
 report_minutes = 45
 page = false
 ```
+
+## Layers
+
+Colony reads three layers, each over the one before, and a table merges key by key:
+
+1. the mode's defaults, in the package's `colony/modes/<mode>.toml`;
+2. `.colony/colony.toml`, the team's, which git tracks;
+3. `.colony/colony.local.toml`, this computer's own, which git never tracks. The main checkout's counts in every worktree of the clone, and a worktree's own, when it has one, counts over it.
+
+Put a setting only you want here, such as `[checks] caps = { fast = 600 }`, in the local file, so no tracked file changes, and an upgrade or a pull never meets it. `colony config local` makes the file and keeps it out of git; `colony config local --from-edits` moves your uncommitted edits of `.colony/colony.toml` into it. `colony config` shows the layers and every note.
+
+### Old settings
+
+When a release renames or removes a setting, Colony reads the old one at its new place, or skips it, and says so with its replacement, once a day where a lead starts and where a batch starts, and every time in `colony config`. A command never stops on it. `colony config migrate`, which `colony upgrade` runs, rewrites `.colony/colony.toml`: it moves a renamed key and comments out a removed one with the reason.
+
+| Old setting | Now |
+| --- | --- |
+| `[project] web_checks` | Gone: name each check area's paths in `[checks] areas`, and put `{areas}` in `[project] checks`. |
+| `[hack] deploy_environment` | `[project] deploy_environment`. |
+| `[people.<person>] prefer_account` | Gone: `[pool] order` and `[people.<person>] accounts` set which account goes first. |
+| `[people.<person>] drain` | Gone: `[pool] reserve` keeps an account free, and `[pool] out_at` says when a session switches. |
 
 ## What the sessions' environment holds
 

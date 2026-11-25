@@ -748,11 +748,17 @@ def test_minutes_table_lists_what_each_kind_of_skipped_step_saved_below_the_tota
                           "| **saved** | 3 | 84.5 | $10.50 |")
 
 
-def test_the_settings_refuse_web_checks_areas_without_areas_and_an_unknown_browser(repo, config):
-    config["project"]["web_checks"] = "npm test"
-    with pytest.raises(SystemExit, match=r"web_checks is gone: name each check area's paths in \[checks\] areas"):
-        batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
-    del config["project"]["web_checks"]
+def test_the_settings_refuse_areas_without_areas_and_an_unknown_browser_and_skip_web_checks(repo, config, tmp_path):
+    # [project] web_checks is gone: loading skips it with a note that names its replacement, so a batch still runs.
+    # It stopped every batch before, which broke `colony batch` for a repo that upgraded.
+    from colony import configs
+
+    text = (tmp_path / "colony.toml").read_text().replace('checks = "true"', 'checks = "true"\nweb_checks = "x"')
+    (tmp_path / "colony.toml").write_text(text)
+    loaded = cli.load_config(tmp_path / "colony.toml")
+    assert "web_checks" not in loaded["project"]
+    assert any("[project] web_checks" in note and "[checks] areas" in note for note in configs.LAST)
+    batch.Batch.from_args(loaded, batch_args(repo, "11=card/a"))
     config["project"]["checks"] = "run {areas}"
     with pytest.raises(SystemExit, match=r"\[checks\] areas names none"):
         batch.Batch.from_args(config, batch_args(repo, "11=card/a"))

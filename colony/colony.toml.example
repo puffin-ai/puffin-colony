@@ -6,7 +6,8 @@ repo = "owner/myapp"               # the GitHub repo, as owner/name
 base = "main"                      # PRs go here; colony never pushes to it
 preset = "lean"                    # the rules setup copied: lean, puffin or own
 max_builders = 4                   # builders the lead opens on this machine; more join from other computers
-worktrees = "~/worktrees"          # where builders and batches make their worktrees; "../worktrees" is beside the clone
+worktrees = ".worktrees"           # where every worktree goes: inside the repo, from its main checkout, kept out of
+                                   # git status; a folder outside the repo scatters worktrees and gets a daily note
 fast_check = "npm test"            # a builder's quick check, which `colony fast-check` runs; with [checks] areas,
                                    # {areas} in it takes the areas the builder's branch changes
 checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs; with [checks] areas,
@@ -140,6 +141,14 @@ open_cards_per_lead = 10           # `colony card new` refuses a lead past this 
 stale_days = 7                     # `colony tidy` closes, or moves to future-work, a card with no update this long
 issue_comments = 200               # the coordination and Needs issues rotate at this many comments
 archive_days = 7                   # `colony tidy` archives a board item Done this long
+
+# Folders (docs/folders.md): when a lead counts as silent, and when a gone lead drops from the registry.
+# [leads]
+# silent_minutes = 120             # a lead whose own session did nothing this long: its folders can be borrowed
+# drop_after_hours = 72            # a lead gone this long drops from the registry, and `colony who` stops listing it
+#
+# This computer's own settings go in .colony/colony.local.toml, over this file, which git never tracks:
+# `colony config local` makes it (docs/configuration.md#layers).
 
 # Capacity (docs/capacity.md): every table below is optional, and each key shown holds its default.
 # [pool]                           # the team's rules for its pool of accounts

@@ -48,7 +48,7 @@ ROLES = ("lead", "builder", "reviewer", "walker", "fixer")
 BUILDER_LIKE = (RESEARCHER, SPEC, TESTER)
 FULL = 90.0  # an account at or past this percent of a window has no room, for has_room
 REQUIRED = {
-    "project": ("name", "repo", "base", "worktrees", "checks"),
+    "project": ("name", "repo", "base", "checks"),
     "gate": ("rubric", "max_rounds", "walk"),
     "budget": ("provider_dollars",),
 }
@@ -110,8 +110,11 @@ def merge_tables(defaults: dict, own: dict) -> dict:
 
 
 def load_config(path=None) -> dict:
-    """Read the repo's .colony/colony.toml (or `path`) over its mode's defaults (modes/<mode>.toml), expand `~` in
-    its paths, and check its keys."""
+    """Read the repo's .colony/colony.toml (or `path`) over its mode's defaults (modes/<mode>.toml), with this
+    computer's own .colony/colony.local.toml over it and old settings migrated (configs.layered), expand `~` in its
+    paths, and check its keys. A relative worktrees folder starts from the clone's main checkout."""
+    from colony import configs, folders
+
     path = Path(path) if path else config_path()
     try:
         with open(path, "rb") as f:
@@ -120,6 +123,7 @@ def load_config(path=None) -> dict:
         raise ColonyError(f"{path} is missing: pull the branch that has it, or run `{NAME}` to set this repo up") from None
     except tomllib.TOMLDecodeError as e:
         raise ColonyError(f"{path}: {e}") from None
+    own = configs.layered(own, path)
     name = mode(own)
     if name not in MODES:
         raise ColonyError(f'{path}: [project] mode is "hack", "solo" or "startup", not {name!r}')
@@ -152,11 +156,16 @@ def load_config(path=None) -> dict:
                                       "[accounts.<name>] table holds")
             if not isinstance(table.get("quiet_lead", False), bool):
                 raise ColonyError(f"{path}: [people.{person}] quiet_lead is true or false")
+    project.setdefault("worktrees", folders.WORKTREES)  # inside the repo
     for key in ("worktrees", "check_env_file"):
         if project.get(key):
             project[key] = portable.native(os.path.expanduser(project[key]))
-    if project.get("worktrees") and not os.path.isabs(project["worktrees"]):  # such as "../worktrees", from the clone
-        project["worktrees"] = portable.native(os.path.normpath(path.resolve().parent.parent / project["worktrees"]))
+    main = folders.main_checkout(path.resolve().parent) if path.parent.name == DIR else None
+    if project.get("worktrees") and not os.path.isabs(project["worktrees"]):  # such as ".worktrees", from the clone
+        project["worktrees"] = portable.native(os.path.normpath((main or path.resolve().parent.parent)
+                                                                / project["worktrees"]))
+    folders.keep_out(project["worktrees"], main)  # a worktree inside the repo is never an uncommitted change
+    folders.validate(config)
     return config
 
 
@@ -797,7 +806,7 @@ def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str
     """Claim the lead `<person>-<stream>-lead` for this session: refuse a folder another live lead holds, and a name a
     live session already leads; write its heartbeat, its folders in .colony/leads.toml and its status comment.
     Returns (the lead's name, its token). A dry run checks the same refusals, writes nothing, and returns no token."""
-    from colony import presence, wait
+    from colony import folders as registry, presence, wait
 
     person = person_of(config, args)
     name = presence.lead_of("", person, stream)
@@ -805,12 +814,10 @@ def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str
     alive, _, note = presence.everyone(config)
     if note:
         print(note, file=sys.stderr)
-    clash = [f"{mine} overlaps {held} of {lead}" for lead, theirs in presence.held_by_others(alive, name).items()
-             for mine in folders for held in theirs if presence.overlaps(mine, held)]
-    if clash:
-        raise ColonyError(f"another live lead holds those folders: {'; '.join(clash)}. Pick other folders")
+    alive = [status for status in alive if status.name != name or status.computer != presence.computer()]
     if any(status.name == name for status in alive if status.kind == "lead" and status.computer != presence.computer()):
         raise ColonyError(f"{name} is alive on another computer: pick another stream name")
+    taken = registry.claim_check(config, alive, name, folders)  # one owner of the rest; a silent lead's folders
     if getattr(args, "dry_run", False):
         return name, ""
     token, account = wait.new_token(), current_account(config)
@@ -818,9 +825,11 @@ def claim_lead(config: dict, args, stream: str, folders: list[str]) -> tuple[str
         wait.beat(config["project"]["name"], name, account, token, named=True)
     except wait.LeadTaken as e:
         raise ColonyError(f"{e}: pick another stream name") from None
-    leads = presence.registry()
-    leads[name] = {"person": person, "folders": folders}
-    presence.write_registry(leads)
+    dropped = registry.record_claim(config, alive, name, person, folders)
+    if dropped:
+        print(f"Dropped from the registry, gone for {int(registry.settings(config)['drop_after_hours'])} hours or "
+              f"more: {', '.join(dropped)}.")
+    registry.tell_taken(config, name, taken)
     state_path = wait.state_path(config["project"]["name"], f"{name}-status")
     state: dict = {}
     try:
@@ -863,8 +872,8 @@ def claim(config: dict, args) -> int:
     print(f"This session leads {name}, over {', '.join(presence.claimed(name)) or 'the rest of the repo'}.")
     print(rename_line(name))
     print(f"{identity_note(*lead_pairs(config, args, name, token)).capitalize()}, and start `{NAME} wait` in the "
-          "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
-          f"{DIR}/{presence.LEADS_FILE} with your next change.")
+          "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. The claim "
+          "needs no commit: every worktree of this clone reads it, and every computer reads the status comment.")
     from colony import boot  # the startup routine, without being asked
 
     boot.after_claim(config, args)
@@ -876,7 +885,7 @@ def change_claim(config: dict, args, paths: list[str]) -> int:
     lead holds, or gives some back, and its status comment and the other leads hear it at once: on the board in hack
     mode, on the coordination issue in startup mode; solo mode has one person. A lead keeps at least one path, since
     none would mean the rest of the repo."""
-    from colony import presence, transport, wait
+    from colony import folders as registry, presence, transport, wait
 
     name = os.environ.get(wait.LEAD_ENV, "").lower()
     if not name:
@@ -885,14 +894,15 @@ def change_claim(config: dict, args, paths: list[str]) -> int:
     paths = list(dict.fromkeys(presence.folder(path) for path in paths))
     leads = presence.registry()
     held = [str(path) for path in leads.get(name, {}).get("folders", [])]
+    taken: list[tuple[str, str]] = []
     if args.add:
         alive, _, note = presence.everyone(config)
         if note:
             print(note, file=sys.stderr)
-        clash = [f"{mine} overlaps {theirs} of {lead}" for lead, owned in presence.held_by_others(alive, name).items()
-                 for mine in paths for theirs in owned if presence.overlaps(mine, theirs)]
-        if clash:
-            raise ColonyError(f"another live lead holds those paths: {'; '.join(clash)}. Ask its owner on the board")
+        try:
+            taken = registry.claim_check(config, alive, name, paths)  # a silent lead's paths are free to take
+        except ColonyError as e:
+            raise ColonyError(str(e).replace("Pick other folders", "Ask its owner on the board")) from None
         held, line = list(dict.fromkeys([*held, *paths])), f"taking {', '.join(paths)}: ask {name} before you edit them"
     else:
         kept = [path for path in held if path not in paths]
@@ -901,7 +911,10 @@ def change_claim(config: dict, args, paths: list[str]) -> int:
         held, line = kept, f"{', '.join(path for path in paths if path not in kept)} released"
     leads[name] = {"person": leads.get(name, {}).get("person") or person_of(config, args), "folders": held}
     presence.write_registry(leads)
+    with registry.changing() as data:  # a lead with paths no longer holds the rest of the repo
+        data["rest"] = [lead for lead in data["rest"] if lead != name]
     print(f"{name} holds {', '.join(held)}.")
+    registry.tell_taken(config, name, taken)
     path = wait.state_path(config["project"]["name"], f"{name}-status")
     state = wait.read_json(path, {})
     state = state if isinstance(state, dict) else {}
@@ -942,6 +955,11 @@ def here(args) -> int:
         return 0
     config = load_config()
     print(f"{DISPLAY}: set up here, project {config['project']['name']}, {mode(config)} mode.")
+    from colony import configs
+
+    # Old settings and stray worktrees, once a day; a dry run prints them and keeps no record.
+    configs.say(config, configs.briefing(config)[len(configs.LAST):], always=bool(getattr(args, "dry_run", False)),
+                out=sys.stdout)
     me = os.environ.get(SESSION_ENV, "").lower()
     if me and not (me == LEAD and not wait.named()):
         role = section(config, "Lead" if me == LEAD else "Builder")
@@ -1587,7 +1605,10 @@ def image(config: dict, args) -> int:
     git("fetch", "origin")
     start = f"origin/{branch}" if git("rev-parse", "--verify", "--quiet", f"origin/{branch}").returncode == 0 \
         else f"origin/{config['project']['base']}"
-    folder = Path(config["project"].get("worktrees") or root.parent) / f"{config['project']['name']}-image-{args.card}"
+    from colony import folders
+
+    folders.ready(config, root)
+    folder = folders.worktree_path(config, f"image-{args.card}")
     made = git("worktree", "add", "--detach", str(folder), start)
     if made.returncode:
         raise ColonyError(f"git worktree add failed: {made.stderr.strip()[:300]}")
@@ -1622,19 +1643,14 @@ def take(config: dict, args) -> int:
     folders = card_folders(card.get("body") or "")
     if not folders:
         raise ColonyError(f"card #{args.card} names no folders: ask {lead} to add a `Folders:` line")
-    own = presence.claimed(lead)
-    if own:
-        outside = [f for f in folders if not any(f.startswith(mine) for mine in own)]
-        if outside:
-            raise ColonyError(f"card #{args.card} touches {', '.join(outside)}, outside {lead}'s folders "
-                              f"({', '.join(own)}): post `question:` to {lead}, and take no card outside them")
-    else:
-        alive, _, _ = presence.everyone(config)
-        held = [(f, g, other) for other, theirs in presence.held_by_others(alive, lead).items()
-                for f in folders for g in theirs if presence.overlaps(f, g)]
-        if held:
-            raise ColonyError(f"card #{args.card} touches {held[0][0]}, which {held[0][2]} holds: post `question:` to "
-                              f"{lead}, and take no card in another lead's folders")
+    from colony import folders as registry
+
+    alive, _, note = presence.everyone(config)  # the lead's folders, and its loans and borrows, on any computer
+    if note:
+        print(note, file=sys.stderr)
+    why = registry.why_not_take(config, alive, lead, args.card, folders)
+    if why:
+        raise ColonyError(why)
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
     from colony import watch
@@ -1652,14 +1668,21 @@ def take(config: dict, args) -> int:
 def worktree_command(config: dict, me: str, card: int, start: str) -> str:
     """The command that makes a builder's worktree for a card, `<worktrees>/<project>-<me>-<n>` on the branch
     `<me>/<n>`, with forward slashes, which git takes on every system and Bash keeps as they are."""
+    from colony import folders
+
+    try:
+        folders.ready(config)  # made, and kept out of `git status` when it sits inside the repo
+    except (ColonyError, OSError):
+        pass
     folder = Path(config["project"]["worktrees"]).expanduser() / f"{config['project']['name']}-{me}-{card}"
     return f"git fetch origin && git worktree add {shlex.quote(folder.as_posix())} -b {me}/{card} {start}"
 
 
 def batch(config: dict, args) -> int:
     """Take a batch of cards through the loop to a pull request (batch.run_batch)."""
-    from colony import batch as runner
+    from colony import batch as runner, configs
 
+    configs.say(config)  # an old setting the load skipped or moved, once a day, never a stop
     return runner.run_batch(config, args)
 
 
@@ -1918,6 +1941,10 @@ def build_parser() -> argparse.ArgumentParser:
     decisions.register(sub)
     from colony import watch  # the watch workstream: intent, report, watch, progress and watchdog
     watch.register(sub)
+    from colony import folders  # the lead registry's leads, lend and borrow, and worktree
+    folders.register(sub)
+    from colony import configs  # config layers and migrations: `colony config`
+    configs.register(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")

@@ -459,12 +459,16 @@ def upgrade(config: dict, args) -> int:
     the files Colony copied into the repo (`colony upgrade --refresh`), and commit, ready for a PR."""
     from colony import merge
 
+    from colony import configs
+
     root = cli.repo_root()
     if args.refresh:
         install(config, argparse.Namespace(dry_run=False, local=False))
         present = [name for name in cli.ROLE_SKILLS if (root / ".claude" / "skills" / name).is_dir()]
         if present:
             print("wrote", ", ".join(cli.copy_skills(root, present)[0]))
+        for line in configs.refresh(root):  # old settings migrated, and the local file kept out of git
+            print(line)
         return 0
     tag = args.to or latest_release()
     if not tag or not version_of(tag):
@@ -477,8 +481,9 @@ def upgrade(config: dict, args) -> int:
         print(f"upgrade plan: on a new branch {branch}, pin {LAUNCHER} to {tag}, run `{cli.NAME} upgrade --refresh` "
               f"under it to refresh the copied files, and commit. Nothing ran.")
         return 0
-    if merge._git(root, "status", "--porcelain"):
-        raise cli.ColonyError("the working tree has changes: commit or set them aside, then upgrade")
+    if changes := merge._git(root, "status", "--porcelain"):
+        raise cli.ColonyError("the working tree has changes: commit or set them aside, then upgrade"
+                              + configs.upgrade_hint(changes))
     merge._git(root, "switch", "-c", branch)
     (root / LAUNCHER).parent.mkdir(parents=True, exist_ok=True)  # a repo from before the launcher has no bin/ yet
     (root / LAUNCHER).write_text(launcher(tag.removeprefix("v")))

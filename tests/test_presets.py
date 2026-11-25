@@ -174,4 +174,6 @@ def test_the_playbook_puts_every_worktree_in_the_worktrees_folder():
     from importlib import resources
     playbook = (Path(str(resources.files("colony"))) / "playbook.md").read_text()
     assert "worktree add ../" not in playbook and "worktree add --detach ../" not in playbook
-    assert "{worktrees}/{project}-<login>-<task>" in playbook and "`{worktrees}`" in playbook
+    # A hack helper's worktree comes from `colony worktree add`, which puts it in the folder from any checkout.
+    assert "colony worktree add <login>-<task> origin/{base}" in playbook and "`{worktrees}`" in playbook
+    assert "colony worktree add next-<batch> origin/{base} --detach" in playbook

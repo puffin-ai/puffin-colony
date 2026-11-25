@@ -382,7 +382,8 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
     assert config["gate"]["merge_after_fast_check"] is True and config["people"]["names"] == {"ana": "Ana", "ben": "Ben"}
     assert (PACKAGE / "presets" / config["project"]["preset"] / "core.md") == CORE
     assert wait.display_name(config, "ana") == "Ana"
-    assert config["project"]["worktrees"] == str(Path("~/worktrees").expanduser())
+    # Hack's default worktrees folder is .worktrees inside the repo, so no worktree lands beside the clone.
+    assert Path(config["project"]["worktrees"]).name == ".worktrees"
 
 
 # The playbook's Hack section, which a hack lead and its builders follow instead of Lead and Builder

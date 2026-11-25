@@ -4,7 +4,7 @@
 [project]
 base = "main"
 preset = "lean"
-worktrees = "~/worktrees"
+worktrees = ".worktrees"         # inside the repo, from its main checkout; git ignores it
 
 [roles]
 lead     = { model = "claude-opus-5-5", effort = "high" }
