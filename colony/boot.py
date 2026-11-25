@@ -662,15 +662,26 @@ def last_handover(config: dict, name: str) -> dict | None:
     return held
 
 
+def team_comments(config: dict, number: int) -> list[dict]:
+    """The comments on issue `number` that the team wrote, oldest first: by one of [people] logins, or, with none set,
+    by someone GitHub says has access to the repo, as status comments are read (presence.by_team). An outsider's
+    comment on a public repo never reaches a session's prompt this way."""
+    from colony import presence
+
+    out = wait.gh("api", "--paginate", f"repos/{config['project']['repo']}/issues/{number}/comments?per_page=100",
+                  "--jq", ".[]")
+    logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+    comments = [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [comment for comment in comments if isinstance(comment, dict) and presence.by_team(comment, logins)]
+
+
 def posted_handover(config: dict, lead: str) -> str:
-    """This lead's last posted handover on the coordination issue, as `colony handover --read` finds it."""
+    """This lead's last handover the team posted on the coordination issue, as `colony handover --read` finds it."""
     if wait.hack(config):
         return ""
-    repo = config["project"]["repo"]
-    number = wait.coordination_issue(repo, config["project"]["name"])
-    comments = json.loads(wait.gh("issue", "view", str(number), "--repo", repo, "--json", "comments") or "{}")
-    mine = [c.get("body", "") for c in comments.get("comments", []) if c.get("body", "").startswith(
-        f"handover from {lead},")]
+    number = wait.coordination_issue(config["project"]["repo"], config["project"]["name"])
+    mine = [c.get("body", "") for c in team_comments(config, number)
+            if str(c.get("body", "")).startswith(f"handover from {lead},")]
     return mine[-1] if mine else ""
 
 
@@ -974,11 +985,20 @@ def own_orders(config: dict, lead: str) -> dict:
     from colony import decisions
 
     merged = profile.load(config=config)
-    text = profile.render(merged, "helper") if profile.order_lines(merged, "helper") else ""
+    orders = profile.render(merged, "helper") if profile.order_lines(merged, "helper") else ""
     approvals = decisions.live_approvals(config, lead)
-    lines = [text] if text else []
-    lines += [f"The person approved for you: {line}" for line in decisions.approval_lines(approvals)]
-    return {"lead": lead, "text": "\n".join(lines), "approvals": approvals, "at": time.time()}
+    shared = [{key: item[key] for key in ("id", "words", "rules", "for", "until", "comment") if key in item}
+              for item in approvals if item.get("comment") and not item.get("published")]
+    return {"lead": lead, "text": with_approvals(orders, approvals), "orders": orders, "approvals": shared,
+            "at": time.time()}
+
+
+def with_approvals(orders: str, approvals: list[dict]) -> str:
+    """A helper's orders, then a line for each approval it may use."""
+    from colony import decisions
+
+    lines = [orders] if orders else []
+    return "\n".join(lines + [f"The person approved for you: {line}" for line in decisions.approval_lines(approvals)])
 
 
 def publish_orders(config: dict, lead: str, post: bool = True) -> dict:
@@ -987,13 +1007,15 @@ def publish_orders(config: dict, lead: str, post: bool = True) -> dict:
     from colony import board, transport
 
     held = own_orders(config, lead)
-    key = hashlib.sha256(json.dumps([held["text"], held["approvals"]], sort_keys=True).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([held["orders"], held["approvals"]], sort_keys=True).encode()).hexdigest()
     path = orders_path(config, lead)
     before = wait.read_json(path, {})
     held["key"], held["posted"] = key, (before or {}).get("posted", "") if isinstance(before, dict) else ""
-    if post and held["posted"] != key and (held["text"] or held["posted"]) and not wait.hack(config):
+    if post and held["posted"] != key and (held["orders"] or held["approvals"] or held["posted"]) \
+            and not wait.hack(config):
+        # Only approvals that point to the person's own comment travel, and a helper elsewhere checks each one.
         body = (f"{ORDERS_HEAD.format(lead=lead)}, {board.stamp(board.utcnow())}\n"
-                + transport.attachment("the orders", json.dumps({"text": held["text"],
+                + transport.attachment("the orders", json.dumps({"orders": held["orders"],
                                                                  "approvals": held["approvals"]})))
         transport.send(config, cli.LEAD, body)
         held["posted"] = key
@@ -1025,14 +1047,13 @@ def known_coordination(config: dict) -> int | None:
 
 
 def published_orders(config: dict, lead: str) -> dict | None:
-    """A lead's orders for helpers as it last published them on the coordination issue, or None."""
-    repo = config["project"]["repo"]
+    """A lead's orders for helpers as the team last published them on the coordination issue, or None. A comment an
+    outsider wrote is never read (team_comments)."""
     number = known_coordination(config)
     if number is None:
         return None
-    comments = json.loads(wait.gh("issue", "view", str(number), "--repo", repo, "--json", "comments") or "{}")
     head = ORDERS_HEAD.format(lead=lead) + ","
-    for comment in reversed(comments.get("comments", [])):
+    for comment in reversed(team_comments(config, number)):
         body = comment.get("body", "")
         found = ORDERS_FENCE.search(body) if body.startswith(head) else None
         if found:
@@ -1046,8 +1067,10 @@ def published_orders(config: dict, lead: str) -> dict | None:
 
 def helper_brief(config: dict, lead: str = "", fetch: bool = False) -> str:
     """The orders a helper's first prompt carries: the lead's own, when the lead opens it on this computer; else the
-    copy its lead keeps on this computer, else, with `fetch`, the one it published on the coordination issue, whose
-    approvals are kept here for the helper's permission hook. "" when there are none."""
+    copy its lead keeps on this computer, else, with `fetch`, the one the team published on the coordination issue.
+    Of a published copy's approvals, only those that point to the person's own comment, and pass every check, are
+    kept here for the helper's permission hook and named in its orders (decisions.accept_published). "" when there
+    are none."""
     from colony import decisions
 
     lead = (lead or os.environ.get(wait.LEAD_ENV, "")).lower()
@@ -1058,11 +1081,16 @@ def helper_brief(config: dict, lead: str = "", fetch: bool = False) -> str:
             own = lead or lead_of(config)
             return publish_orders(config, own, post=False)["text"] if own else own_orders(config, "")["text"]
         held = wait.read_json(orders_path(config, lead), None) if lead else None
-        if not isinstance(held, dict) and fetch and lead and config["project"].get("repo") and not wait.hack(config):
-            held = published_orders(config, lead)
-            if held:
-                decisions.keep_published(config, lead, held.get("approvals") or [])
-        return str(held.get("text", "")) if isinstance(held, dict) else ""
+        if isinstance(held, dict):
+            return str(held.get("text", ""))
+        if not (fetch and lead and config["project"].get("repo") and not wait.hack(config)):
+            return ""
+        data = published_orders(config, lead)
+        if not data:
+            return ""
+        person = lead.split("-", 1)[0]  # a lead's name starts with its person's, such as ana-main-lead
+        accepted = decisions.accept_published(config, lead, data.get("approvals") or [], person)
+        return with_approvals(str(data.get("orders") or ""), accepted)
     except (wait.GhError, *EXPIRED) as e:
         print(f"{cli.NAME}: the helper's orders were not read: {e}", file=sys.stderr)
         return ""

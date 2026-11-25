@@ -58,7 +58,7 @@ Every session hands over by itself, so a compaction, a crash or a closed window 
 | When the session starts again after a compaction (SessionStart) | Prints the handover, so the session carries on from its `Next:` line |
 | When a lead starts again | The briefing shows it |
 
-A handover holds the next step, the plan's task groups, the decisions that wait on you and the ones taken alone, the branch and its uncommitted files, your last three messages and the session's last words. It is saved in `~/.colony/<project>/<session>-handover.json`, which only you can read. What you said stays on this computer: the posted handover, in the shape `colony handover` writes, carries only the decisions, the open questions and the next step, and is posted only when one of them changed. A handover that can't post waits in the outbox. `colony handover` still posts one by hand.
+A handover holds the next step, the plan's task groups, the decisions that wait on you and the ones taken alone, the branch and its uncommitted files, your last three messages and the session's last words. It is saved in `~/.colony/<project>/<session>-handover.json`, which only you can read. The briefing reads a posted handover only from a comment the team wrote, so an outsider's comment on a public repo never reaches it. What you said stays on this computer: the posted handover, in the shape `colony handover` writes, carries only the decisions, the open questions and the next step, and is posted only when one of them changed. A handover that can't post waits in the outbox. `colony handover` still posts one by hand.
 
 ## Modes
 
@@ -81,7 +81,7 @@ A group made with `--draft` is drafted first, and built only after your yes on t
 
 ## Orders reach helpers
 
-A helper starts with its lead's standing orders for helpers, such as when the full suite runs, whether it may merge, how to write and what you approved for it, in its first prompt. The lead keeps them on its computer for a helper that joins there, and posts them on `Colony: coordination`, only when they change, for a helper that joins on another computer. `colony orders` prints them, and `--publish` posts them now.
+A helper starts with its lead's standing orders for helpers, such as when the full suite runs, whether it may merge, how to write and what you approved for it, in its first prompt. The lead keeps them on its computer for a helper that joins there, and posts them on `Colony: coordination`, only when they change, for a helper that joins on another computer. A helper reads only a copy the team posted, by one of `[people] logins`, or with none set, by someone GitHub says has access to the repo, and uses an approval in it only after the checks in [decisions.md](decisions.md#approvals-reach-helpers). `colony orders` prints them, and `--publish` posts them now.
 
 ## The hooks
 

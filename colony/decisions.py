@@ -33,7 +33,7 @@ import re
 import sys
 import time
 from datetime import date, datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 from urllib.parse import urlparse
 
 from colony import cli, profile, wait
@@ -55,6 +55,9 @@ make may me my not of on or our should so than that the their them then there th
 when where which while who why will with would you your yes no""".split())
 APPROVAL_HOURS, APPROVAL_MOST = 8.0, 24.0  # how long an approval lasts by default, and at most
 RULE = re.compile(r"^([A-Za-z0-9_.-]+)(?:\((.*)\))?$", re.S)
+FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "Read")  # tools an approval names with a path pattern
+BARE_TOOLS = ("Read", "Glob", "Grep", "WebSearch")  # the only tools an approval may name alone: they change nothing
+DOMAIN = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")
 JOINS = re.compile(r"[;&|<>`\n\r]|\$\(")  # a command with any of these is never matched by an approval
 NOTE = f"{cli.NAME}-decision"
 
@@ -230,14 +233,17 @@ def teammates(config: dict, question: str, lead: str) -> list[str]:
     if len(words) >= 2 and repo:
         try:
             listed = json.loads(wait.gh("search", "issues", " ".join(words), "--repo", repo, "--include-prs",
-                                        "--state", "open", "--json", "number,title,isPullRequest", "--limit", "5")
-                                or "[]")
+                                        "--state", "open", "--json", "number,title,isPullRequest,author,"
+                                        "authorAssociation", "--limit", "10") or "[]")
         except (wait.GhError, OSError, ValueError):
             listed = []
+        logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
         for issue in listed if isinstance(listed, list) else []:
             title = str(issue.get("title", ""))
-            if title.startswith(("Needs ", wait.COORDINATION)):
-                continue
+            author = str((issue.get("author") or {}).get("login") or "").lower()
+            team = author in logins if logins else issue.get("authorAssociation") in presence.TRUSTED
+            if not team or title.startswith(("Needs ", wait.COORDINATION)):
+                continue  # an outsider's issue never steers a lead
             kind = "pull request" if issue.get("isPullRequest") else "issue"
             found.append(f"#{issue.get('number')} {title} (open {kind}): read it first")
     try:
@@ -608,29 +614,89 @@ def approval_lines(items: list[dict]) -> list[str]:
 
 
 def check_rule(rule: str) -> str:
-    """A Claude Code permission rule an approval may hold, such as `Bash(npm run migrate:*)`, checked."""
-    rule = rule.strip()
+    """A Claude Code permission rule an approval may hold, checked: `Bash(<command>)` or `Bash(<command>:*)`, which
+    names its command; `WebFetch(domain:<domain>)`; a file tool with a relative path pattern, such as
+    `Edit(docs/**)`; or one of BARE_TOOLS alone. Anything wider, such as a tool with no argument, is refused."""
+    rule = str(rule).strip()
     found = RULE.match(rule)
     if not found:
         raise cli.ColonyError(f"{rule!r} is not a permission rule, such as Bash(npm run migrate:*) or "
                               "WebFetch(domain:example.com)")
     tool, arg = found[1], found[2]
-    if tool == "Bash" and (arg is None or not arg.removesuffix(":*").strip() or "*" in arg.removesuffix(":*")):
-        raise cli.ColonyError("a Bash approval names its command, such as Bash(npm run migrate:*), never every "
-                              "command")
+    if arg is None:
+        if tool not in BARE_TOOLS:
+            raise cli.ColonyError(f"{tool} alone would allow every call of it: name its command, domain or path, "
+                                  f"such as Bash(npm run migrate:*); only {', '.join(BARE_TOOLS)} may stand alone")
+        return rule
+    if tool == "Bash":
+        command = arg.removesuffix(":*").strip()
+        if not command or "*" in command or JOINS.search(command):
+            raise cli.ColonyError("a Bash approval names one command, such as Bash(npm run migrate:*): never every "
+                                  "command, a wildcard, or commands joined together")
+    elif tool == "WebFetch":
+        if not arg.startswith("domain:") or not DOMAIN.fullmatch(arg[len("domain:"):].lower()):
+            raise cli.ColonyError("a WebFetch approval names one domain, such as WebFetch(domain:example.com)")
+    elif tool in FILE_TOOLS:
+        parts = PurePosixPath(arg).parts
+        if not arg.strip() or "\\" in arg or arg.startswith(("/", "~")) or ".." in parts or not parts:
+            raise cli.ColonyError(f"a {tool} approval names a path pattern inside the repo, such as {tool}(docs/**): "
+                                  "never an absolute path, ~ or ..")
+    else:
+        raise cli.ColonyError(f"an approval covers Bash, WebFetch and the file tools ({', '.join(FILE_TOOLS)}), "
+                              f"each with its argument, or {', '.join(BARE_TOOLS)} alone; not {tool}")
     return rule
 
 
+def valid_rule(rule) -> bool:
+    try:
+        check_rule(rule)
+    except cli.ColonyError:
+        return False
+    return True
+
+
+def segments_match(pattern: tuple, parts: tuple) -> bool:
+    """Whether a path's segments match a pattern's: each `*` stays inside one segment, and `**` stands for any number
+    of whole segments."""
+    if not pattern:
+        return not parts
+    head, rest = pattern[0], pattern[1:]
+    if head == "**":
+        return any(segments_match(rest, parts[i:]) for i in range(len(parts) + 1))
+    return bool(parts) and fnmatch.fnmatchcase(parts[0], head) and segments_match(rest, parts[1:])
+
+
+def path_matches(pattern: str, path: str, cwd: str) -> bool:
+    """Whether a file tool's path matches an approval's pattern: the path, resolved against the session's folder with
+    its links followed, must stay inside that folder and hold no `..`, and its segments must match the pattern's."""
+    if not cwd or not path or ".." in PurePath(path).parts:
+        return False
+    root = os.path.realpath(cwd)
+    full = os.path.realpath(os.path.join(root, path))
+    try:
+        if os.path.commonpath([root, full]) != root or full == root:
+            return False
+    except ValueError:  # another drive, on Windows
+        return False
+    return segments_match(PurePosixPath(arg_path(pattern)).parts, PurePath(os.path.relpath(full, root)).parts)
+
+
+def arg_path(pattern: str) -> str:
+    return pattern.strip().removeprefix("./")
+
+
 def matches(rule: str, tool: str, given: dict, cwd: str = "") -> bool:
-    """Whether a tool call matches an approval's rule: a Bash command exactly, or by its start with `:*`, and only a
-    single command, never one joined to others; a web fetch by its domain; a file tool by a path pattern; any other
-    tool by its name."""
+    """Whether a tool call matches an approval's rule, which must pass check_rule: a Bash command exactly, or by its
+    start with `:*`, and only a single command, never one joined to others; a web fetch by its domain; a file tool by
+    its path (path_matches); a tool of BARE_TOOLS by its name."""
+    if not valid_rule(rule):
+        return False
     found = RULE.match(rule.strip())
-    if not found or found[1] != tool:
+    if found[1] != tool:
         return False
     arg = found[2]
     if arg is None:
-        return tool != "Bash"
+        return tool in BARE_TOOLS
     if tool == "Bash":
         command = " ".join(str(given.get("command", "")).split())
         if not command or JOINS.search(str(given.get("command", ""))):
@@ -639,15 +705,12 @@ def matches(rule: str, tool: str, given: dict, cwd: str = "") -> bool:
             start = " ".join(arg[:-2].split())
             return command == start or command.startswith(start + " ")
         return command == " ".join(arg.split())
-    if tool == "WebFetch" and arg.startswith("domain:"):
+    if tool == "WebFetch":
         host = (urlparse(str(given.get("url", ""))).hostname or "").lower()
         domain = arg[len("domain:"):].lower()
         return bool(host) and (host == domain or host.endswith("." + domain))
     path = str(given.get("file_path") or given.get("notebook_path") or given.get("path") or "")
-    if not path:
-        return False
-    relative = os.path.relpath(path, cwd) if cwd and os.path.isabs(path) else path
-    return fnmatch.fnmatch(path, arg) or fnmatch.fnmatch(relative, arg)
+    return path_matches(arg, path, cwd)
 
 
 def tool_decision(config: dict, session: str, payload: dict) -> dict | None:
@@ -676,17 +739,98 @@ def tool_decision(config: dict, session: str, payload: dict) -> dict | None:
     return None
 
 
-def keep_published(config: dict, lead: str, approvals: list) -> None:
-    """Keep the approvals a lead published, for its helpers on this computer."""
-    fresh = [item for item in approvals if isinstance(item, dict) and item.get("id") and is_live(item)]
+# The person's own comment, behind every approval that travels
+
+
+COMMENT_REF = re.compile(r"(?:#issuecomment-|/comments/)?(\d+)$")
+
+
+def person_logins(config: dict, person: str) -> frozenset[str]:
+    """The person's own logins on the code host: `[people.<person>] login`, and the logins [people] names for them."""
+    if not person:
+        return frozenset()
+    table = config.get("people", {}).get(person)
+    own = {str(table["login"]).lower()} if isinstance(table, dict) and table.get("login") else set()
+    return frozenset(own | set(wait.person_logins(config, person)))
+
+
+def squash(text: str) -> str:
+    return " ".join(re.sub(r"[*_`>]", " ", str(text or "")).lower().split())
+
+
+def signed_by_an_agent(body: str) -> bool:
+    """Whether a comment carries what an agent's post carries: a `(from <name>)` signature on a line, a sender's note,
+    an attachment, or a decision's note. The person's own comment carries none."""
+    body = str(body or "")
+    if wait.NOTE_TEXT.search(body) or wait.ATTACHMENT.search(body) or NOTE in body:
+        return True
+    return any(wait.SIGNED.search(wait.MARKUP.sub("", line)) for line in body.splitlines())
+
+
+def persons_comment(config: dict, ref, person: str) -> dict:
+    """The person's own comment `ref`, an id or a comment's address, read from the code host: written by one of the
+    person's logins, and unsigned, so no agent and no outsider wrote it. It raises when it isn't."""
+    found = COMMENT_REF.search(str(ref or "").strip())
+    if not found:
+        raise cli.ColonyError(f"{ref!r} is no comment: give its id or its address, ending #issuecomment-<id>")
+    logins = person_logins(config, person)
+    if not logins:
+        raise cli.ColonyError(f"Colony doesn't know {person or 'the person'}'s login, so it can't check who wrote the "
+                              f"comment: set login under [people.{person or '<person>'}] in {cli.DIR}/{cli.CONFIG_NAME}")
+    data = json.loads(wait.gh("api", f"repos/{config['project']['repo']}/issues/comments/{found[1]}") or "{}")
+    author = str((data.get("user") or {}).get("login") or "").lower()
+    if author not in logins:
+        raise cli.ColonyError(f"comment {found[1]} was written by {author or 'someone unknown'}, not by "
+                              f"{person}: only the person's own comment carries an approval")
+    if signed_by_an_agent(data.get("body", "")):
+        raise cli.ColonyError(f"comment {found[1]} carries an agent's signature or note: only a comment the person "
+                              "wrote themself carries an approval")
+    return {"id": int(found[1]), "url": str(data.get("html_url") or ""), "body": str(data.get("body") or "")}
+
+
+def accept_published(config: dict, lead: str, approvals, person: str) -> list[dict]:
+    """The approvals a lead published that a helper on this computer may use: each must point to the person's own
+    comment, which says its words; every rule must pass check_rule; it lasts at most APPROVAL_MOST hours from now. The
+    rest are dropped, each with a line on stderr. The accepted ones are kept here for the permission hook."""
+    accepted, now = [], time.time()
+    for item in approvals if isinstance(approvals, list) else []:
+        if not isinstance(item, dict) or not re.fullmatch(r"A\d+", str(item.get("id", ""))):
+            continue
+        rules = item.get("rules")
+        why = ""
+        if not isinstance(rules, list) or not rules or not all(valid_rule(rule) for rule in rules):
+            why = "a rule wider than an approval may hold"
+        elif not item.get("comment"):
+            why = "it points to no comment of the person's"
+        else:
+            try:
+                comment = persons_comment(config, item["comment"], person)
+            except (cli.ColonyError, OSError, ValueError) as e:
+                why = str(e)
+            else:
+                if not squash(item.get("words")) or squash(item.get("words")) not in squash(comment["body"]):
+                    why = "the person's comment doesn't say its words"
+        whom = item.get("for") if isinstance(item.get("for"), list) else ["all"]
+        if not why and not all(isinstance(w, str) and (w == "all" or cli.SESSION_NAME.fullmatch(w)) for w in whom):
+            why = "it names a session that can't be one"
+        if why:
+            print(f"{cli.NAME}: approval {item.get('id')} from {lead} is not used: {why}", file=sys.stderr)
+            continue
+        until = min(float(item.get("until") or 0), now + APPROVAL_MOST * 3600)
+        if until > now:
+            accepted.append({"id": item["id"], "words": str(item["words"]), "rules": [str(r).strip() for r in rules],
+                             "for": whom, "until": until, "comment": item["comment"], "lead": lead,
+                             "published": True, "at": now})
     kept = [item for item in read_approvals(config) if item.get("lead") != lead or not item.get("published")]
-    write_approvals(config, [*kept, *({**item, "lead": lead, "published": True} for item in fresh)])
+    write_approvals(config, [*kept, *accepted])
+    return accepted
 
 
 def allow_cmd(config: dict, args) -> int:
-    """`colony allow "<the person's words>" --rule "<permission rule>" … [--for <helper> …] [--hours <h>]`, `colony
-    allow --list`, `colony allow --revoke <id>`: record what the person approved, so the permission checks of this
-    lead and its helpers let it through until it expires."""
+    """`colony allow ["<the person's words>"] --rule "<permission rule>" … [--comment <their comment>] [--for <helper>
+    …] [--hours <h>]`, `colony allow --list`, `colony allow --revoke <id>`: record what the person approved, so the
+    permission checks of this lead and its helpers let it through until it expires. Only an approval that points to
+    the person's own comment on the code host reaches helpers on other computers (accept_published)."""
     lead = lead_of(config, args)
     if args.list:
         items = live_approvals(config, lead)
@@ -708,23 +852,36 @@ def allow_cmd(config: dict, args) -> int:
         boot.publish_quietly(config)
         return 0
     words = (args.words or "").strip()
-    if not words or not args.rule:
-        raise cli.ColonyError("give the person's words, in quotes, and each --rule they cover, such as "
-                              "--rule \"Bash(npm run migrate:*)\"")
+    person = person_of(config, args)
+    rules = [check_rule(rule) for rule in args.rule or []]
+    comment = persons_comment(config, args.comment, person) if args.comment else None
+    if comment and not words:
+        words = " ".join(comment["body"].split())[:500]
+    if not words or not rules:
+        raise cli.ColonyError("give the person's words, in quotes, or --comment with their own comment, and each "
+                              "--rule they cover, such as --rule \"Bash(npm run migrate:*)\"")
+    if comment and squash(words) not in squash(comment["body"]):
+        raise cli.ColonyError(f"the person's comment {comment['id']} doesn't say those words: give their words as "
+                              "the comment says them")
     if found := profile.looks_secret(words):
         raise cli.ColonyError(f"the words hold what looks like {found}, and an approval never carries a secret")
-    rules = [check_rule(rule) for rule in args.rule]
     hours = args.hours if args.hours is not None else APPROVAL_HOURS
     if not 0 < hours <= APPROVAL_MOST:
         raise cli.ColonyError(f"an approval lasts more than 0 and at most {APPROVAL_MOST:g} hours")
     items = read_approvals(config)
     number = 1 + max([int(i["id"][1:]) for i in items if re.fullmatch(r"A\d+", str(i.get("id")))] + [0])
-    item = {"id": f"A{number}", "words": words, "rules": rules, "lead": lead, "for": args.for_ or ["all"],
-            "at": time.time(), "until": time.time() + hours * 3600, "by": me()}
+    whom = args.for_ or ["all"]
+    if not all(name == "all" or cli.SESSION_NAME.fullmatch(name) for name in whom):
+        raise cli.ColonyError("--for names a helper, such as builder-2, or lead")
+    item = {"id": f"A{number}", "words": words, "rules": rules, "lead": lead, "for": whom, "at": time.time(),
+            "until": time.time() + hours * 3600, "by": me(),
+            **({"comment": comment["id"], "comment_url": comment["url"]} if comment else {})}
     write_approvals(config, [*items, item])
     print(f"Recorded {item['id']}: {approval_lines([item])[0]}. The permission checks of {lead} and "
-          + ("its helpers" if item["for"] == ["all"] else ", ".join(item["for"])) + " let it through until then.")
-    person = person_of(config, args)
+          + ("its helpers" if item["for"] == ["all"] else ", ".join(item["for"])) + " on this computer let it through "
+          "until then" + (", and so do those of its helpers on other computers, since it points to the person's own "
+                          "comment." if comment else ". Helpers on other computers get it only with --comment, the "
+                                                     "person's own comment that says it."))
     if person:
         record_item = {"id": item["id"], "lead": lead, "person": person, "status": "approved", "issue": None}
         post_record(config, record_item, f"{cli_title(person)} approved {item['id']}: \"{words}\", as "
@@ -777,6 +934,8 @@ def register(sub) -> None:
     p.add_argument("words", nargs="?", help="the person's words, exactly as they said them")
     p.add_argument("--rule", action="append", metavar="RULE", help="a Claude Code permission rule the words cover, "
                                                                    "such as Bash(npm run migrate:*); repeat it")
+    p.add_argument("--comment", metavar="REF", help="the person's own comment that says it, by id or address; "
+                                                    "without one it stays on this computer")
     p.add_argument("--for", dest="for_", action="append", metavar="HELPER", help="only this helper, or lead; repeat")
     p.add_argument("--hours", type=float, help=f"how long it lasts, {APPROVAL_HOURS:g} by default, at most "
                                                f"{APPROVAL_MOST:g}")
