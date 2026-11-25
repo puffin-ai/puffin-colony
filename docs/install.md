@@ -105,10 +105,11 @@ A pushed tag `v*` publishes nothing by itself: the plugin and `uv tool install g
 5. **Release.** With the version in `colony/__init__.py`, `npm/package.json` and `.claude-plugin/` all at `0.3.0`, on the main branch:
 
    ```sh
-   git tag v0.3.0 && git push --tags
+   git tag v0.3.0
+   git push origin refs/tags/v0.3.0
    ```
 
-   That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
+   Run these in your own terminal: Colony's push guard lets an agent push only its own branch, never a tag. That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
 For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()`, add a CHANGELOG.md entry, commit, and tag `v<version>`.
 

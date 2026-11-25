@@ -905,7 +905,8 @@ def retro(config: dict, args) -> int:
         print(f"{cli.NAME} retro {args.name}: dry run, nothing runs. The agent runs as {gate.account[0]}.")
         print(f"  $ git fetch origin\n  $ {shlex.join(worktree)}")
         print(f"  $ {shlex.join(agent[:2] + ['<the prompt>'] + agent[3:])}")
-        print(f"  then, with a lesson: $ git push -u origin {branch}, and a pull request into {project['base']}")
+        print(f"  then, with a lesson: $ git push -u origin refs/heads/{branch}:refs/heads/{branch}, and a pull request "
+              f"into {project['base']}")
         print(f"\n--- retro prompt\n{prompt}")
         return 0
     _git(root, "fetch", "origin")

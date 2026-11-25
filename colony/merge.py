@@ -609,7 +609,8 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     pr = ["gh", "pr", "create", "--repo", project["repo"], "--base", base, "--head", branch]
     lines = [f"{cli.NAME} merge {branch}: dry run, nothing runs.", "  $ git fetch origin"]
     if why:
-        return "\n".join(lines + [f"  it opens a pull request, since {why}:", f"  $ git push origin {branch}",
+        return "\n".join(lines + [f"  it opens a pull request, since {why}:",
+                                  f"  $ git push origin refs/heads/{branch}:refs/heads/{branch}",
                                   "  $ " + shlex.join(pr)])
     lines += [f"  in {wt}, at origin/{base}:", "  $ " + shlex.join(["git", "merge", "--no-ff", "--no-edit", branch])]
     if project.get("install"):
@@ -617,7 +618,7 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     return "\n".join(lines + [f"  the fast check: $ {batch.every_area(config, batch.fast_check(project))}",
                               f"  when it passes: $ git push origin HEAD:refs/heads/{base}, and it posts "
                               f"`[merged] {branch} → {base} <short sha>, fast check passed` on the board",
-                              f"  on a conflict or a failing check: $ git push origin {branch}, then",
+                              f"  on a conflict or a failing check: $ git push origin refs/heads/{branch}:refs/heads/{branch}, then",
                               "  $ " + shlex.join(pr)])
 
 
@@ -677,7 +678,8 @@ def sync(config: dict, args) -> int:
     if head == before:
         print(f"{branch} already holds origin/{base}: nothing to merge")
     else:
-        print(f"merged origin/{base} into {branch} at {head[:9]} in {wt}{took}; push it with `git push origin {branch}`")
+        print(f"merged origin/{base} into {branch} at {head[:9]} in {wt}{took}; push it from {wt}, as a command of its "
+              f"own, with `git push -u origin HEAD:refs/heads/{branch}`")
     return 0
 
 
