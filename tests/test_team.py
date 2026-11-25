@@ -219,21 +219,46 @@ def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch)
     assert capacity.lead_accounts(config, []) == {}
 
 
-def test_when_only_a_leads_own_account_has_room_helpers_share_it_with_one_warning(host, monkeypatch, capsys):
+def test_a_leads_own_account_is_shared_only_when_it_is_the_persons_only_account(host, monkeypatch, capsys):
+    """Review finding 7, the plan's task 81: helpers never open on a live lead's own account unless the person allows
+    it in config. With several accounts and only the lead's with room, helpers wait; [pool] share_lead_accounts lets
+    them in. With one account, its helpers share it, under a cap one lower, with one warning. (The rule a33bd72 set,
+    sharing whenever no other account had room, no longer holds.)"""
     config = load("[pool]\nmax_busy = 1\n")
     here = [running("builder-1", host.parent / "team"), running("builder-2", host.parent / "spare")]
     monkeypatch.setattr(presence, "everyone",
                         lambda config: ([presence.Status("ana-main-lead", "lead", account="main")], [], ""))
     monkeypatch.setattr(cli, "running_sessions", lambda config: here)
     args = argparse.Namespace(name="builder-3", person="ana", account=None, dry_run=True, here=False)
-    assert cli.open_builder(config, args) == 0 and args.account == "main"
+    with pytest.raises(cli.ColonyError, match="main is kept for ana-main-lead, its own account.*share_lead_accounts"):
+        cli.open_builder(config, args)
+    assert "Warning" not in capsys.readouterr().out
+    shared = load("[pool]\nmax_busy = 1\nshare_lead_accounts = true\n")
+    args.account = None
+    assert cli.open_builder(shared, args) == 0 and args.account == "main"  # the person allowed it
+    alone = load("[pool]\nmax_busy = 1\n")
+    alone["people"]["ana"]["accounts"] = ["main"]
+    args.account = None
+    assert cli.open_builder(alone, args) == 0 and args.account == "main"
     out = capsys.readouterr().out
-    assert out.count("Warning: account main is ana-main-lead's own, and no other account has room") == 1
+    assert out.count("Warning: account main is ana-main-lead's own, and the only account you have") == 1
     assert "at most 1 at once" in out and "put this one in [pool] reserve" in out
     here.append(running("builder-3", host.parent / "main"))  # the lead's account at its lower cap: no more there
     args.account = None
     with pytest.raises(cli.ColonyError, match="main is ana-main-lead's own and runs 1 helpers, the most it takes"):
-        cli.open_builder(config, args)
+        cli.open_builder(alone, args)
+
+
+def test_with_several_accounts_out_of_room_helpers_wait_for_the_soonest_reset_never_the_leads(host):
+    """Review finding 7: with every other account out of room, a helper waits for the soonest reset, as open-later
+    does for NO_FIT, rather than opening on the lead's own account or on an account out of room."""
+    reading(host.parent / "main", five=10, week=10)
+    for name in ("team", "spare"):
+        reading(host.parent / name, five=97, week=10, five_resets_in=timedelta(hours=1))
+    config = load('[pool]\norder = "listed"\n')
+    found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
+    assert found is None and why.startswith(capacity.NO_FIT), why
+    assert "team and spare are out of room until their windows reset" in why
 
 
 def test_colony_capacity_marks_the_account_kept_for_a_lead(host, monkeypatch, capsys):

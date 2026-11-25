@@ -10,7 +10,7 @@ Changes to know before you upgrade:
 - The push guard allows one form of push alone, on a line of its own: `git push -u origin HEAD:refs/heads/<branch>`. Every other push is refused, and so is a kill by name or pattern, such as `pkill` or `killall`. Close a session with `colony stop <name>`.
 - You approve a helper's command at your own terminal, with `colony approve`. No approval travels through GitHub.
 - Worktrees go in `.worktrees` inside the repo by default, and Colony makes them nowhere else. Your own settings go in `.colony/colony.local.toml`, and `colony upgrade` migrates old settings.
-- A lead's own account is kept free of helpers while another account has room, and each session runs at most `[subagents] max_running` subagents, 2 by default. Builders run only as helpers.
+- A lead's own account takes no helper while you have other accounts, unless `[pool] share_lead_accounts = true`; with one account, helpers share it, one fewer than its cap. Each session runs at most `[subagents] max_running` subagents, 2 by default. Builders run only as helpers.
 - `colony release` freezes the integration branch while the release is checked, lists every unreleased pull request, and brings the release back through a pull request instead of a merge.
 
 Standing orders and starting a session (profiles.md, boot.md, decisions.md):

@@ -164,8 +164,8 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 # wave = 3                         # helpers `colony helpers <n> --open` opens at once; the rest in later waves
 # wave_seconds = 60                # the pause between waves
 # stale_minutes = 15               # a usage reading older than this never places a session (at least 10)
-# share_lead_accounts = false      # false: helpers use a live lead's own account only when no other has room,
-                                   # one fewer than its cap; true: as any other account
+# share_lead_accounts = false      # false: helpers use a live lead's own account only when it is the person's
+                                   # only account, one fewer than its cap; true: as any other account
 # helper_rate = 10                 # 5-hour percent one helper uses an hour, a guess until readings show the rate
 # scan_folders = ["~/.claude", "~/.claude-*", "~/.claude_*"]  # where `colony accounts scan` looks
 #
