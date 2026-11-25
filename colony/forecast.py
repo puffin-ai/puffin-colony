@@ -13,7 +13,7 @@ of when each of its windows runs out, and whether one more helper fits before th
 - **Fit.** Before a helper opens on an account, the pace with that helper there too: the account's own rate per
   helper, else the pool's average, else [pool] helper_rate. A helper that would run the account out more than
   FIT_SLACK before a reset goes to another account, or waits for the reset (fits, next_reset). On a lead's own
-  account, which helpers share only when no other account has room, the lead counts as one more busy session, and
+  account, which takes helpers in its place in the ranking, the lead counts as one more busy session, and
   the helpers must leave it LEAD_ROOM percent of each window until the window resets.
 - **Warnings.** The lead's wait says ahead of time, in plain words, when an account's helpers run it out before its
   reset, and how many helpers to move where (lead_part). It counts the helpers on this computer.
@@ -369,13 +369,14 @@ def move_plan(config: dict, name: str, window: str, helpers: int, counts: dict, 
             move = count
             break
     others = [other for other in on_this_computer(config) if other != name and other not in pool.reserve]
-    others.sort(key=lambda other: not pool.share_lead_accounts and other in kept)  # a live lead's own account last
+    when = datetime.fromtimestamp(now, timezone.utc)
+    others.sort(key=lambda other: capacity.judge(config, other, when, pool)[:2])  # the pick's ranking, every account
     for other in others:
         lead = not pool.share_lead_accounts and other in kept  # the lead keeps a helper's place and its room there
         busy_there = len(counts.get(other, ()))
         if busy_there + move > (capacity.lead_cap if lead else capacity.cap)(config, other, pool):
             continue
-        if capacity.judge(config, other, datetime.fromtimestamp(now, timezone.utc), pool)[0] != 0:
+        if capacity.judge(config, other, when, pool)[0] != 0:
             continue
         if fits(config, other, busy_there + move, pool, now, lead=lead)[0]:
             return (f"move {plural(move, 'helper')} to {other}, which has room for them: as each finishes its card, "

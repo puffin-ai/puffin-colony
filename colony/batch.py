@@ -774,8 +774,8 @@ def check_settings(config: dict) -> None:
 
 def _account(config: dict, args) -> tuple[str, str]:
     """Pick the agents' account as (name, config_dir) (capacity.agent_account): --account, else the person's
-    accounts with room, the soonest weekly reset first, then their last-resort accounts, a live lead's own only when
-    no other account has room.
+    accounts with room, the soonest weekly reset first, then their last-resort accounts, a live lead's own in its
+    place there while the lead keeps its room.
 
     The person is --person, else the session's COLONY_PERSON, else cli.default_person.
     """
@@ -913,11 +913,9 @@ def switch_account(b: Batch, name: str, step: str) -> None:
         b.limited.add(name)
         if b.account[0] != name:  # another step moved the batch already
             return
-        from colony import capacity  # onto a live lead's own account last, by the rule placement follows
+        from colony import capacity  # a live lead's own account in its place, while the lead keeps its room
 
-        kept = set(capacity.kept_for_leads(b.config, b.person))
-        found = cli.pick_with_room(b.config, b.person, skip=b.limited | kept) or (
-            cli.pick_with_room(b.config, b.person, skip=b.limited) if kept else None)
+        found = capacity.pick_keeping_lead_room(b.config, b.person, skip=b.limited)
         if found is None:
             raise Stop(f"{step} hit the rate limit on the account {name}, and no other account of {b.person}'s has "
                        f"room: run it again once {name} resets, or add an account")

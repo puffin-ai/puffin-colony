@@ -194,19 +194,27 @@ def ana(account=None) -> argparse.Namespace:
     return argparse.Namespace(person="ana", account=account)
 
 
-# 81. The lead's own account takes helpers last
+# 81. The lead's own account takes its place in the ranking, and keeps the lead room
 
 
-def test_a_helper_opens_on_a_live_leads_own_account_last(host):
-    for name in ("main", "team", "spare"):
-        reading(host.parent / name, five=10, week=10)
-    config = load('[pool]\norder = "listed"\n')
+def test_a_live_leads_own_account_takes_its_place_in_the_soonest_reset_ranking(host):
+    """The person's call on review finding 7: every account is used by its limits and reset times. Three accounts at
+    5% of the week, the lead's resetting tomorrow and the others in 5 and 6 days: the lead's goes first, use it or
+    lose it, under its cap one lower; then the next soonest reset."""
+    reading(host.parent / "main", five=5, week=5, week_resets_in=timedelta(days=1))
+    reading(host.parent / "team", five=5, week=5, week_resets_in=timedelta(days=5))
+    reading(host.parent / "spare", five=5, week=5, week_resets_in=timedelta(days=6))
+    config = load()  # [pool] order "reset", the default
     leads = capacity.lead_accounts(config, [presence.Status("ana-main-lead", "lead", account="main")])
     assert leads == {"main": ["ana-main-lead"]}
     counts = {"main": set(), "team": set(), "spare": set()}
+    name, _, why = capacity.helper_account(config, ana(), counts, leads)
+    assert name == "main" and why.startswith(f"{capacity.SHARED} ana-main-lead") and "helpers 0 of 2" in why, why
+    counts["main"] = {"builder-1", "builder-2"}  # the lead's account at its cap one lower: the next soonest reset
     assert capacity.helper_account(config, ana(), counts, leads)[0] == "team"
-    shared = load('[pool]\norder = "listed"\nshare_lead_accounts = true\n')
-    assert capacity.helper_account(shared, ana(), counts, leads)[0] == "main"
+    counts["main"] = set()
+    reading(host.parent / "main", five=5, week=5, week_resets_in=timedelta(days=6, hours=12))
+    assert capacity.helper_account(config, ana(), counts, leads)[0] == "team"  # the lead's resets last now
     assert capacity.helper_account(config, ana("main"), counts, leads)[0] == "main"  # --account still wins
 
 
@@ -234,11 +242,10 @@ def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch)
 
 
 @pytest.mark.parametrize("alone", [False, True])
-def test_with_no_other_account_free_helpers_share_the_leads_own_under_a_cap_one_lower(host, monkeypatch, capsys,
-                                                                                       alone):
-    """The person's call on review finding 7: every account is used by its room, the lead's own too. With the other
-    accounts at their caps, or with one account, helpers share the lead's, under a cap one lower, with one warning.
-    [pool] share_lead_accounts = true gives it the full cap."""
+def test_helpers_share_a_leads_own_account_under_a_cap_one_lower_with_one_warning(host, monkeypatch, capsys, alone):
+    """The person's call on review finding 7: every account is used by its room, the lead's own too. With several
+    accounts or one, helpers share the lead's, under a cap one lower, with one warning. [pool] share_lead_accounts =
+    true gives it the full cap."""
     config = load("[pool]\nmax_busy = 2\n")
     here = [running(f"builder-{n}", host.parent / name) for n, name in enumerate(("team", "team", "spare", "spare"))]
     if alone:
@@ -249,8 +256,7 @@ def test_with_no_other_account_free_helpers_share_the_leads_own_under_a_cap_one_
     args = argparse.Namespace(name="builder-5", person="ana", account=None, dry_run=True, here=False)
     assert cli.open_builder(config, args) == 0 and args.account == "main"
     out = capsys.readouterr().out
-    assert out.count("Warning: account main is ana-main-lead's own, and no other account has room for a helper "
-                     "now, so helpers share it") == 1
+    assert out.count("Warning: account main is ana-main-lead's own, so helpers share it with the lead") == 1
     assert "at most 1 at once" in out and "Put this one in [pool] reserve" in out
     here.append(running("builder-5", host.parent / "main"))  # the lead's account at its lower cap: no more there
     args.account = None
@@ -300,9 +306,11 @@ def lead_on_main(host, monkeypatch):
     return '[pool]\norder = "listed"\n'
 
 
-def test_researchers_spec_agents_and_testers_keep_off_a_leads_own_account(lead_on_main, capsys):
-    """Task 81's gap: a lead's researcher, spec agent or tester took the plain pick, main, the lead's own account.
-    It now opens as any helper does (capacity.place), and on the lead's account only under the rule finding 7 set."""
+def test_researchers_spec_agents_and_testers_keep_the_lead_its_room(lead_on_main, host, capsys):
+    """Task 81's gap: a lead's researcher, spec agent or tester took the plain pick, main, the lead's own account,
+    with no room kept for the lead. It now opens as any helper does (capacity.place): main's 5-hour window at 70%
+    with an hour to its reset fits one more session, but not the lead's 10% too."""
+    reading(host.parent / "main", five=70, week=10, five_resets_in=timedelta(hours=1))
     load(lead_on_main)
     assert cli.main(["research", "Which queue fits?", "--dry-run", "--person", "ana"]) == 0
     assert "dry run: demo-researcher on account team" in capsys.readouterr().out
@@ -311,8 +319,10 @@ def test_researchers_spec_agents_and_testers_keep_off_a_leads_own_account(lead_o
     assert "dry run: demo-researcher on account main" in capsys.readouterr().out
 
 
-def test_the_helpers_question_names_the_account_a_helper_would_open_on(lead_on_main, capsys):
-    """Task 81's gap: `colony helpers <n>` without --open named the plain pick's account, the lead's own."""
+def test_the_helpers_question_names_the_account_a_helper_would_open_on(lead_on_main, host, capsys):
+    """Task 81's gap: `colony helpers <n>` without --open named the plain pick's account, the lead's own, even where
+    the lead would keep no room."""
+    reading(host.parent / "main", five=70, week=10, five_resets_in=timedelta(hours=1))
     config = load(lead_on_main)
     args = argparse.Namespace(count=2, open=False, paste=False, person="ana", account=None, dry_run=False)
     assert cli.helpers(config, args) == 0
@@ -320,14 +330,17 @@ def test_the_helpers_question_names_the_account_a_helper_would_open_on(lead_on_m
     assert "Open them myself on team, or you paste?" in out and "on main" not in out
 
 
-def test_a_batchs_agents_take_a_leads_own_account_last(lead_on_main, host, monkeypatch):
+def test_a_batchs_agents_take_a_leads_own_account_only_while_the_lead_keeps_room(lead_on_main, host, monkeypatch):
     """Task 81's gap: a batch's reviewer, fixer and walker ran on the plain pick, and a rate-limited one moved to any
-    account with room, the lead's own first among them. Both now take a live lead's account only when no other
-    account has room, under the same rule as helpers."""
+    account with room, the lead's own among them, with no room kept for the lead. Both now take a live lead's account
+    in its place in the ranking only while the lead keeps its room."""
     from colony import batch
 
-    config = load(lead_on_main)
+    config = load(lead_on_main)  # listed: main, the lead's own, first
     args = argparse.Namespace(person="ana", account=None)
+    name, _, why = capacity.agent_account(config, args)
+    assert name == "main" and why.startswith(f"{capacity.SHARED} ana-main-lead"), why
+    reading(host.parent / "main", five=70, week=10, five_resets_in=timedelta(hours=1))  # the lead would keep < 10%
     assert batch._account(config, args)[0] == "team"
     assert capacity.agent_account(load(lead_on_main + "share_lead_accounts = true\n"), args)[0] == "main"
     alone = load(lead_on_main)
@@ -336,15 +349,12 @@ def test_a_batchs_agents_take_a_leads_own_account_last(lead_on_main, host, monke
     b = batch.Batch(config, "b1", {}, "main", Path.cwd(), ("team", str(Path.cwd())), person="ana")
     monkeypatch.setattr(batch.Batch, "save", lambda self: None)
     batch.switch_account(b, "team", "review")
-    assert b.account[0] == "spare"  # main is the lead's own: last
+    assert b.account[0] == "spare"  # main would leave its lead too little
+    reading(host.parent / "main", five=10, week=10)
     batch.switch_account(b, "spare", "review")
-    assert b.account[0] == "main"  # no other account has room: the lead's own, rather than stopping the batch
+    assert b.account[0] == "main"  # the lead's own has room again, rather than stopping the batch
     with pytest.raises(batch.Stop, match="no other account of ana's has room"):
         batch.switch_account(b, "main", "review")
-    for name in ("team", "spare"):  # the other accounts out of room for the week
-        reading(host.parent / name, five=10, week=95)
-    name, _, why = capacity.agent_account(config, args)
-    assert name == "main" and "no other account has room, so it shares ana-main-lead's own account" in why
 
 
 def test_joining_in_session_on_a_leads_own_account_warns_in_one_line(lead_on_main, monkeypatch, capsys):
@@ -373,8 +383,8 @@ def test_colony_capacity_marks_the_account_kept_for_a_lead(host, monkeypatch, ca
     monkeypatch.setattr(cli, "running_sessions", lambda config: [])
     assert capacity.show(config, argparse.Namespace(person="ana", json=False)) == 0
     out = capsys.readouterr().out
-    assert "- main: 5h 10%" in out and "Kept for ana-main-lead, its own account: a helper opens here only when no " \
-        "other account has room, at most 2 at once" in out
+    assert "- main: 5h 10%" in out and "Shared with ana-main-lead, its own account: helpers open here in its turn, " \
+        "at most 2 at once, and only while the lead keeps its room" in out
 
 
 # 83. Live usage before every placement
@@ -485,21 +495,21 @@ def test_the_leads_wait_warns_ahead_in_plain_words_and_names_where_to_move_helpe
     assert forecast.lead_part(config, held) == []  # once a stretch
 
 
-def test_helpers_move_to_a_leads_own_account_last_and_only_where_the_lead_keeps_room(host, monkeypatch):
-    """The person's call on review finding 7: the advice to move helpers names a lead's own account too, after every
-    other account, under its cap one lower and only where the lead keeps its room."""
+def test_helpers_move_by_the_soonest_reset_to_a_leads_own_account_too_where_the_lead_keeps_room(host, monkeypatch):
+    """The person's call on review finding 7: the advice to move helpers ranks every account as the pick does, the
+    soonest weekly reset first, a lead's own among them under its cap one lower and only where the lead keeps room."""
     reading(host.parent / "main", five=60, week=10, five_resets_in=timedelta(hours=3))
-    reading(host.parent / "team", five=5, week=10, five_resets_in=timedelta(hours=1))
-    reading(host.parent / "spare", five=5, week=10, five_resets_in=timedelta(hours=1))
+    reading(host.parent / "team", five=5, week=10, five_resets_in=timedelta(hours=1), week_resets_in=timedelta(days=1))
+    reading(host.parent / "spare", five=5, week=10, five_resets_in=timedelta(hours=1), week_resets_in=timedelta(days=6))
     config = load()
     history(config, "main", [(40, 40, 3), (0, 60, 3)])  # 30% an hour with 3 helpers: move 2
     monkeypatch.setattr(cli, "refresh_usage", lambda folders: None)
     counts, kept, now = {"main": {"builder-1", "builder-2", "builder-3"}}, {"team": ["ana-team-lead"]}, time.time()
     pool = capacity.policy(config)
-    assert "move 2 helpers to spare" in forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool)
-    reading(host.parent / "spare", five=97, week=10)  # spare out of room: team, the lead's own, takes them
     assert "move 2 helpers to team" in forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool)
-    counts["team"] = {"builder-4"}  # 1 + 2 is past team's cap one lower, 2
+    counts["team"] = {"builder-4"}  # 1 + 2 is past team's cap one lower, 2: spare, the next reset
+    assert "move 2 helpers to spare" in forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool)
+    reading(host.parent / "spare", five=97, week=10)
     assert forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool).startswith("no other account")
 
 

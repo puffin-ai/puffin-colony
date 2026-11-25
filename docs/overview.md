@@ -16,7 +16,7 @@ There are three kinds of session:
 
 1. **You talk only to leads.** The session you open and type into is your lead. When no lead runs, `colony hi` makes your session the lead. You never chat with a helper.
 2. **Each helper belongs to one lead.** It works on that lead's cards, each on its own branch, so its context stays on its job.
-3. **Builders are helpers, never subagents.** More helpers means more cards at once, and each one opens on an account with room, in waves, under each account's cap, and on the lead's own account only when no other account has room, where helpers leave the lead room. A subagent runs on its session's own account, where Colony can't see it, so a helper starts one only for a quick search or a browser check, and a lead never starts one to build.
+3. **Builders are helpers, never subagents.** More helpers means more cards at once, and each one opens on an account with room, in waves, under each account's cap, the soonest weekly reset first, the lead's own account among them, where helpers leave the lead room. A subagent runs on its session's own account, where Colony can't see it, so a helper starts one only for a quick search or a browser check, and a lead never starts one to build.
 4. **Leads talk to leads.** On a team, each person's lead meets the others on one coordination issue. A lead never gives orders to another lead's helpers.
 
 ```mermaid

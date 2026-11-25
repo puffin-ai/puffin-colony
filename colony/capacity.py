@@ -370,7 +370,7 @@ def full_accounts(config: dict, counts: dict[str, set[str]], pool: Policy) -> se
 
 AT_CAP = "every account is at its cap of busy helpers"
 NO_FIT = "no account has room for one more helper before its window resets"
-SHARED = "no other account fits it, so it shares the own account of"  # a why's start when a helper shares a lead's
+SHARED = "it shares the own account of"  # a why's start when a helper or agent shares a live lead's account
 
 
 def lead_accounts(config: dict, alive: list | None = None) -> dict[str, list[str]]:
@@ -401,9 +401,8 @@ def lead_accounts(config: dict, alive: list | None = None) -> dict[str, list[str
 
 
 def kept_for_leads(config: dict, person: str, alive: list | None = None) -> dict[str, list[str]]:
-    """The live leads' own accounts a new session takes only when no other account has room, by the rule place()
-    follows: none with [pool] share_lead_accounts, none when the person has one account, else each live lead's
-    (lead_accounts)."""
+    """The live leads' own accounts where a new session keeps the lead room, by the rule place() follows: none with
+    [pool] share_lead_accounts, none when the person has one account, else each live lead's (lead_accounts)."""
     order, last = cli.person_accounts(config, person)
     if policy(config).share_lead_accounts or len(dict.fromkeys(order + last)) <= 1:
         return {}
@@ -412,26 +411,43 @@ def kept_for_leads(config: dict, person: str, alive: list | None = None) -> dict
 
 def agent_account(config: dict, args) -> tuple[str, str, str]:
     """The account a headless agent Colony runs for its own work, such as a batch's reviewer, fixer or walker, runs
-    on, as (name, config_dir, why): --account when given, else the person's pick with room (cli.pick_with_room),
-    a live lead's own account last, by place()'s rule (kept_for_leads, from this computer's heartbeats and this
-    session's own). An agent counts toward no helper's cap. When no account has room, the first account no lead runs
-    on, else the plain pick (cli.pick)."""
+    on, as (name, config_dir, why): --account when given, else the person's best account with room, a live lead's
+    own in its place in the ranking where the lead keeps its room (pick_keeping_lead_room, from this computer's
+    heartbeats and this session's own). An agent counts toward no helper's cap. When no account has room, the first
+    account no lead runs on, else the plain pick (cli.pick)."""
     if getattr(args, "account", None):
         return cli.choose_account_why(config, args)
     person = cli.person_of(config, args)
     kept = kept_for_leads(config, person)
-    found = cli.pick_with_room(config, person, skip=kept)
+    found = pick_keeping_lead_room(config, person, kept=kept)
     if found:
         return found
-    if kept and (found := cli.pick_with_room(config, person)):
-        name, folder, why = found
-        return name, folder, f"{why}; no other account has room, so it shares {' and '.join(kept[name])}'s own account"
     order, last = cli.person_accounts(config, person)
     rest = [name for name in dict.fromkeys(order + last) if name not in policy(config).reserve and name not in kept]
     if rest:
         return (rest[0], config["accounts"][rest[0]]["config_dir"],
                 f"every account is out of room, so {rest[0]}, the first no live lead runs on")
     return cli.pick(config, person)
+
+
+def pick_keeping_lead_room(config: dict, person: str, skip=(), kept: dict[str, list[str]] | None = None
+                           ) -> tuple[str, str, str] | None:
+    """The person's best account with room for a headless agent, as (name, config_dir, why), or None: the ranking
+    cli.pick_with_room keeps for every account, the soonest weekly reset first, with a live lead's own account
+    (`kept`, kept_for_leads by default) in its place there, taken only while the lead and the agent last until each
+    window resets with the lead's share of it kept (forecast.fits with lead)."""
+    from colony import forecast
+
+    kept = kept_for_leads(config, person) if kept is None else kept
+    skip, pool = set(skip), policy(config)
+    while (found := cli.pick_with_room(config, person, skip=skip)) is not None:
+        name, folder, why = found
+        if name not in kept:
+            return found
+        if forecast.fits(config, name, 1, pool, lead=True)[0]:
+            return name, folder, f"{SHARED} {' and '.join(kept[name])}; {why}"
+        skip.add(name)
+    return None
 
 
 def lead_cap(config: dict, name: str, pool: Policy) -> int:
@@ -444,10 +460,10 @@ def shared_warning(config: dict, name: str, leads: list[str], pool: Policy) -> s
     """The one plain line a person and a lead read when helpers open on a lead's own account."""
     from colony import forecast
 
-    return (f"Warning: account {name} is {' and '.join(leads)}'s own, and no other account has room for a helper now, "
-            f"so helpers share it: at most {lead_cap(config, name, pool)} at once, one fewer than its cap, and only "
-            f"while the lead keeps {forecast.LEAD_ROOM:g}% of each window until it resets. Put this one in [pool] "
-            "reserve to keep helpers off it.")
+    return (f"Warning: account {name} is {' and '.join(leads)}'s own, so helpers share it with the lead: at most "
+            f"{lead_cap(config, name, pool)} at once, one fewer than its cap, and only while the lead keeps "
+            f"{forecast.LEAD_ROOM:g}% of each window until it resets. Put this one in [pool] reserve to keep helpers "
+            "off it.")
 
 
 def refusal(config: dict, names: list[str], full: set[str], leads: dict[str, list[str]], pool: Policy,
@@ -468,10 +484,10 @@ def place(config: dict, args, counts: dict[str, set[str]],
     """The account a new helper opens on, as ((name, folder, why), "") or (None, why not). --account wins when given.
     Otherwise the person's pick (cli.pick_with_room) among their accounts under their cap of busy helpers, leaving out
     the ones [pool] reserve keeps free, and taking the first where one more helper lasts until its windows reset
-    (forecast.fits). A live lead's or orchestrator's own account (`kept`, lead_accounts by default) takes a helper
-    only when no other account fits one, under a lower cap (lead_cap) and a fit check that keeps the lead room
-    (forecast.fits with lead), and the why starts with SHARED. [pool] share_lead_accounts = true treats it as any
-    other. When every account with room would run out before its reset, or every one is out of room, none (NO_FIT):
+    (forecast.fits). A live lead's or orchestrator's own account (`kept`, lead_accounts by default) takes its place
+    in that same ranking, the soonest weekly reset first, under a lower cap (lead_cap) and a fit check that keeps the
+    lead room (forecast.fits with lead), and the why starts with SHARED. [pool] share_lead_accounts = true treats it
+    as any other. When every account with room would run out before its reset, or every one is out of room, none (NO_FIT):
     the helper waits for the soonest reset, or opens on an account named with --account."""
     if getattr(args, "account", None):
         return cli.choose_account_why(config, args), ""
@@ -487,18 +503,17 @@ def place(config: dict, args, counts: dict[str, set[str]],
     usable = [name for name in names if name not in full and name not in leads]
     shared = [name for name in names if name in leads and len(counts.get(name, ())) < lead_cap(config, name, pool)]
     tight: list[str] = []
-    for group, lead in ((usable, False), (shared, True)):  # the lead's own account only when no other takes it
-        skip = set(config["accounts"]) - set(group)
-        while group and (found := cli.pick_with_room(config, person, skip=skip)) is not None:
-            name, folder, why = found
-            here = len(counts.get(name, ()))
-            fit, outlook = forecast.fits(config, name, here + 1, pool, lead=lead)
-            if fit:
-                most = lead_cap(config, name, pool) if lead else cap(config, name, pool)
-                head = f"{SHARED} {' and '.join(leads[name])}; " if lead else ""
-                return (name, folder, f"{head}{why}; helpers {here} of {most}" + (f"; {outlook}" if outlook else "")), ""
-            tight.append(outlook)
-            skip.add(name)
+    skip = set(config["accounts"]) - set(usable) - set(shared)  # one ranking: a lead's own account in its place
+    while (found := cli.pick_with_room(config, person, skip=skip)) is not None:
+        name, folder, why = found
+        here, lead = len(counts.get(name, ())), name in leads
+        fit, outlook = forecast.fits(config, name, here + 1, pool, lead=lead)
+        if fit:
+            most = lead_cap(config, name, pool) if lead else cap(config, name, pool)
+            head = f"{SHARED} {' and '.join(leads[name])}; " if lead else ""
+            return (name, folder, f"{head}{why}; helpers {here} of {most}" + (f"; {outlook}" if outlook else "")), ""
+        tight.append(outlook)
+        skip.add(name)
     if tight:
         return None, f"{NO_FIT}: {'; '.join(tight)}"
     now = datetime.now(timezone.utc)
@@ -532,8 +547,8 @@ def helper_account(config: dict, args, counts: dict[str, set[str]],
 
 def choose_helper_account(config: dict, args) -> None:
     """For `colony open` and `colony join`: put the account a new helper opens on in args.account, with why (place):
-    under each account's cap of busy helpers, on a live lead's own account only when no other account fits one and
-    then under a cap one lower, and where it lasts until the account's reset.
+    under each account's cap of busy helpers, a live lead's own in its place in the ranking under a cap one lower,
+    and where it lasts until the account's reset.
     Refuses, saying why, when no account takes it. A named --account stays as it is."""
     from colony import presence
 
@@ -615,8 +630,8 @@ def room_reason(room: dict) -> str:
 def open_helpers(config: dict, args, lead: str) -> int:
     """`colony helpers <n> --open`: open the first wave now, [pool] wave helpers at most, and leave the rest to a
     background run that opens one wave every [pool] wave_seconds (open_later). Every helper opens on an account under
-    its cap of busy helpers, where it lasts until the account's reset (place): on a live lead's own account only when
-    no other account fits one, and there under a cap one lower. It
+    its cap of busy helpers, where it lasts until the account's reset (place), a live lead's own in its place in the
+    ranking under a cap one lower. It
     opens only while this computer has room (limits). Helpers that fit on no account before its reset, or find every
     account out of room, open right after the soonest reset. A dry run prints the plan."""
     pool = policy(config)
@@ -1673,8 +1688,8 @@ def show(config: dict, args) -> int:
         if account["reserved"]:
             print(f"- {account['name']}: reserved, used only with --account. {account['room']}.")
             continue
-        kept_for = (f" Kept for {' and '.join(account['kept_for'])}, its own account: a helper opens here only when no "
-                    f"other account has room, at most {lead_cap(config, account['name'], pool)} at once."
+        kept_for = (f" Shared with {' and '.join(account['kept_for'])}, its own account: helpers open here in its turn, "
+                    f"at most {lead_cap(config, account['name'], pool)} at once, and only while the lead keeps its room."
                     if account["kept_for"] else "")
         print(f"- {account['name']}: {account['room']}; helpers {len(account['helpers'])} of {account['max_busy']}"
               + (f" ({', '.join(account['helpers'])})" if account["helpers"] else "") + f". {account['standing']}."
