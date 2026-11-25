@@ -159,4 +159,6 @@ The person reads a lead's status between other work. Internal shorthand makes th
 
 Links and text in backticks, such as a command to run, are left alone. `[plain] allow` lets the project's own names through, and `[plain] jargon` adds the team's own shorthand. It exits 1 when it finds something.
 
+The same check runs by itself on what reaches the person: `colony ask`, `colony needs`, and `colony post` or `colony say` to `@<login>` or `@all`. There it never stops the message. The message goes out first, and each finding prints beside it as a warning, such as `Warning: the person may not understand 2 things in this message, which went out anyway.`, so the lead writes the next one plainly. A false alarm costs a line, never the message.
+
 `colony plain templates` prints a plain message for each common status: work done, a blocked step, a choice, a release, a failing branch and a person's step. `colony plain fill <name> key=value …` fills one in and checks it.

@@ -91,6 +91,17 @@ def test_a_stop_question_is_always_asked_and_held(lead, capsys):
     assert "Asked as D1 on #9: hold that work until the person answers" in out
 
 
+def test_a_question_for_the_person_is_checked_for_plain_words_and_asked_anyway(lead, capsys):
+    """Regression (audit, Job A task 58): colony ask never ran the plain-words check on what the person reads. Its
+    findings now print as a warning beside the question, which is asked anyway."""
+    code, out = ask(capsys, "keep TD236 w/ the old page?", "no", "scope")
+    assert code == 0 and "Asked as D1 on #9" in out and lead
+    assert "Warning: the person may not understand 2 things in this message, which went out anyway." in out
+    assert '- "TD236": an internal code.' in out and '- "w/": a chat abbreviation.' in out
+    code, out = ask(capsys, "drop the old landing page?", "no", "scope")
+    assert code == 0 and "Warning" not in out
+
+
 def test_a_question_is_posted_with_its_full_explanation_in_one_place(lead, capsys):
     ask(capsys, "keep the old page?", "no", "scope", "--option", "keep: nothing changes",
         "--option", "drop: one route less")

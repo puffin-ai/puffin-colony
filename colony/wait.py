@@ -1103,6 +1103,16 @@ def checked(line: str, sentence: str) -> str:
     return line
 
 
+def person_warning(config: dict, to: str, said: list[str], code: int = 0) -> int:
+    """After a line went out, the plain-words check (plain.warn) on the sentences of one for a person, `@login` or
+    `@all`, printed as a warning beside it and never a stop; then `code`, the post's own exit code."""
+    if to.startswith("@"):
+        from colony import plain
+
+        plain.warn(config, " ".join(said))
+    return code
+
+
 def say(config: dict, args) -> int:
     """`colony say <lead-name|@login|@all> "<sentence>"`: post a line for another lead, or for a person's lead, on the
     coordination issue, or on the board in hack mode (transport.send). Lead-to-lead talk is free text under MAX_LINE
@@ -1131,11 +1141,13 @@ def say(config: dict, args) -> int:
     messages.check_lines(config, args, cli.LEAD, me, to, said)
     lines = [compose(to, sentence, me) for sentence in said]
     if getattr(args, "dry_run", False):
-        return dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
+        code = dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
+        return person_warning(config, to, said, code)
     if getattr(args, "private", False):
         from colony import private
 
-        return private.send(config, to, lines, me, attached=messages.attached(config, args))
+        code = private.send(config, to, lines, me, attached=messages.attached(config, args))
+        return person_warning(config, to, said, code)
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
     body = messages.body(config, args, "\n".join(lines), me, starts=False)
@@ -1143,7 +1155,7 @@ def say(config: dict, args) -> int:
     for line in lines:
         print(f"#{number} {line}")
     messages.after_post(config, args, number, to, "the board" if hack(config) else "the coordination issue")
-    return 0
+    return person_warning(config, to, said)
 
 
 def post(config: dict, args) -> int:
@@ -1191,7 +1203,7 @@ def post(config: dict, args) -> int:
     about = f" (#{card})" if on_board and card is not None else ""
     lines = [compose(to, sentence + about, sender) for sentence in said]
     if getattr(args, "dry_run", False):
-        return dry_post(lines, f"#{board_number(config) if on_board else card}")
+        return person_warning(config, to, said, dry_post(lines, f"#{board_number(config) if on_board else card}"))
     starts = me == cli.LEAD and not to.startswith("@") and any(START.match(sentence) for sentence in said)
     text = "\n".join(lines)
     if me != cli.LEAD and card is not None and not on_board and any(DONE.match(sentence) for sentence in said):
@@ -1210,7 +1222,7 @@ def post(config: dict, args) -> int:
         from colony import watch
 
         watch.note_done(config, card, to)  # it now waits for its next card, on purpose
-    return 0
+    return person_warning(config, to, said)
 
 
 def read_private(config: dict, args) -> int:

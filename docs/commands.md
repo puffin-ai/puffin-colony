@@ -278,7 +278,7 @@ The release pull request, the merge freeze, the long-lived branches, the shared 
 | `colony step add "<what>" [--run "<command>"] [--who <person\|@login\|anyone\|agent>] [--why "…"] [--check "<command>"] [--no-check] [--anyway]` | Hands a step only a person can take over. It tests the step first with `--check`, or the dry-run form of its command when Colony knows one, and never runs the step itself. A failing test stops it unless `--anyway`. It posts the step as one comment on the `Colony: person steps` issue, mentioning who does it, and prints one plain line to tell them. |
 | `colony step list [--who <person>] [--all]` | The open person steps, or one person's, or every one with `--all`. |
 | `colony step done <n> [--note "…"]` | Marks a step done, with who and when, by editing its comment. |
-| `colony plain check "<message>"`, `colony plain check --file <path>\|-` | Names each thing in a message to the person that they may not understand, such as an arrow, a chat abbreviation, an internal code or an unexplained short form, with how to say it instead. Exits 1 when it finds one. |
+| `colony plain check "<message>"`, `colony plain check --file <path>\|-` | Names each thing in a message to the person that they may not understand, such as an arrow, a chat abbreviation, an internal code or an unexplained short form, with how to say it instead. Exits 1 when it finds one. `colony ask`, `colony needs`, and `colony post` or `colony say` to `@<login>` or `@all` run the same check after the message goes out, and print what it finds as a warning beside it. |
 | `colony plain templates [<name>]`, `colony plain fill <name> key=value …` | Prints the plain status templates, or fills one in and checks it. |
 
 ## Flags

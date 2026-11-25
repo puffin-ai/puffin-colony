@@ -750,3 +750,24 @@ def test_refusing_local_paths_can_be_turned_off(home, monkeypatch):
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
     config = {**CONFIG, "messages": {"refuse_local_paths": False}}
     assert wait.post(config, Namespace(card=41, to="builder-2", sentence="answer: see /tmp/x", urgent=False)) == 0
+
+
+# 58. Plain words in what reaches the person
+
+
+def test_a_line_for_a_person_is_checked_for_plain_words_and_posted_anyway(home, monkeypatch, capsys):
+    """Regression (audit, Job A task 58): nothing ran the plain-words check on what reaches the person. A post or say
+    to @login or @all now prints its findings as a warning beside the line, and posts the line anyway."""
+    monkeypatch.setenv(cli.SESSION_ENV, "lead")
+    monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    assert wait.post(CONFIG, Namespace(card=41, to="@all", sentence="TD236 is done w/ the fix", urgent=False)) == 0
+    out = capsys.readouterr().out
+    assert "@all TD236 is done w/ the fix" in out and any(call[:2] == ("issue", "comment") for call in home)
+    assert "Warning: the person may not understand 2 things in this message, which went out anyway." in out
+    assert '- "TD236": an internal code.' in out and '- "w/": a chat abbreviation.' in out
+    assert wait.say(CONFIG, Namespace(to="@all", sentence="TD236 is done w/ the fix", urgent=False)) == 0
+    assert "Warning: the person may not understand 2 things" in capsys.readouterr().out
+    sent = len(home)
+    assert wait.post(CONFIG, Namespace(card=41, to="builder-2", sentence="answer: TD236 is done w/ the fix",
+                                       urgent=False)) == 0
+    assert len(home) > sent and "Warning" not in capsys.readouterr().out  # a line for a session: no warning

@@ -513,6 +513,9 @@ def needs(config: dict, args) -> int:
     number = tidy.keep_short(config, find_issue(repo, needs_title(person), body))
     wait.gh("issue", "comment", str(number), "--repo", repo, "--body", line)
     print(f"#{number} {line}")
+    from colony import plain
+
+    plain.warn(config, f"{args.question} {args.default}")  # it reaches the person: a warning, never a stop
     return 0
 
 

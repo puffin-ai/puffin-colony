@@ -150,6 +150,26 @@ def report(found: list[Finding]) -> str:
     return "\n".join(lines + [f"- \"{f.words}\": {f.kind}. {f.advice}" for f in found])
 
 
+def warning(found: list[Finding]) -> str:
+    """The findings as a warning beside a message that already went to the person."""
+    head = (f"Warning: the person may not understand {len(found)} thing{'' if len(found) == 1 else 's'} in this "
+            f"message, which went out anyway. Write the next one plainly (`{cli.NAME} plain check` reads a draft):")
+    return "\n".join([head] + [f"- \"{f.words}\": {f.kind}. {f.advice}" for f in found])
+
+
+def warn(config: dict | None, text: str) -> list[Finding]:
+    """Check a message that reaches the person, from `colony ask`, `colony needs`, or a post or say to @login, and
+    print a warning beside it for each finding (warning). It never stops the message: its callers run it after the
+    message went out, and a check that fails prints nothing, so a false alarm never stops work."""
+    try:
+        found = findings(text, config)
+    except (cli.ColonyError, ValueError, TypeError, re.error):
+        return []
+    if found:
+        print(warning(found))
+    return found
+
+
 def run(config: dict, args) -> int:
     """`colony plain check|templates|fill`."""
     if args.action == "templates":

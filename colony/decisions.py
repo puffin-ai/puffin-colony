@@ -392,6 +392,9 @@ def ask_cmd(config: dict, args) -> int:
                  else "hold that work")
         print(f"Asked as {item['id']} on #{number}: keep working on {default}; the answer wins. With no answer in "
               f"{wait_minutes} minutes, {after}.")
+    from colony import plain
+
+    plain.warn(config, " ".join([question, why, *(args.option or []), f"My pick is {default}."]))  # never stops it
     return 0
 
 
