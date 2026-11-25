@@ -685,3 +685,14 @@ def test_a_named_leads_limit_wakes_it_with_a_line_it_takes_from_colony(home, mon
     lead = wait.Session("lead", frozenset({"ana-main-lead"}))
     assert wait.taken("for ana-main-lead: urgent: carry on (from colony)", lead, "5") == \
         [("for ana-main-lead: urgent: carry on (from colony)", True)]
+
+
+def test_a_limit_inside_claude_code_starts_one_follower_to_wake_it_at_the_reset(host, monkeypatch):
+    config = load()
+    stub(host.parent, "claude", "exit 0")
+    started = []
+    monkeypatch.setattr(capacity, "spawn", lambda argv, log: started.append(argv[2:]))
+    assert capacity.note_limited(config, "builder-2", "rate_limit") and started == []  # outside Claude Code
+    monkeypatch.setenv("CLAUDECODE", "1")
+    assert capacity.note_limited(config, "builder-2", "rate_limit")
+    assert started == [[cli.NAME, "wake", "--follow"]]

@@ -479,7 +479,8 @@ def write_limited(config: dict, records: dict[str, dict]) -> None:
 
 def note_limited(config: dict, me: str, error: str) -> bool:
     """The StopFailure hook's part: when this session's turn ended on a usage limit, note it with its account and
-    when that account resets, so it is woken then. Returns whether it noted one; it never raises."""
+    when that account resets, so it is woken then, and inside a Claude Code session start `colony wake --follow`,
+    which wakes it even when no wait on this computer runs. Returns whether it noted one; it never raises."""
     if not me or not LIMIT_ERROR.search(error or ""):
         return False
     me = wait.state_name(me)  # a named lead by its own name, which its wait and its lines go by
@@ -490,6 +491,8 @@ def note_limited(config: dict, me: str, error: str) -> bool:
         records[me] = {"session": os.environ.get(cli.CLAUDE_SESSION_ENV, ""), "account": account, "at": time.time(),
                        "resets_at": resets}
         write_limited(config, records)
+        if cli.in_claude_code():
+            start_follower(config)
     except (cli.ColonyError, OSError, ValueError, KeyError) as e:
         print(f"{cli.NAME}: the usage limit was not noted for a wake at its reset: {e}", file=sys.stderr)
         return False

@@ -32,7 +32,7 @@ Once the reset time has passed and the account has room again, Colony wakes the 
 1. When the session's own `colony wait` still runs, it prints a line saying the limit reset, which wakes the session.
 2. Otherwise the lead's wait, or `colony wake --follow`, wakes it. A background session that sits idle is stopped with `claude stop` and continued under its own id with `claude --bg --resume`, with a prompt to carry on. An idle session in a cmux window gets the prompt typed in. A session that is busy, or waits on a person's answer, is left alone.
 
-`colony wake --follow` starts by itself when a wait sees a limit noted, and stops once no session waits for a reset. Only one runs per project on each computer. It needs no lead and no wait, so a session still wakes when every wait on the computer ended during the limit.
+`colony wake --follow` starts by itself when the hook notes a limit, or when a wait sees one noted, and stops once no session waits for a reset. Only one runs per project on each computer. It needs no lead and no wait, so a session still wakes when every wait on the computer ended during the limit.
 
 ## Service checks
 

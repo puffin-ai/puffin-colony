@@ -110,7 +110,7 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 | `colony lock <name> [--slots N] [--wait MINUTES] -- <command>` | Runs the command while holding the named lock on this computer, such as `test-db` for one shared test database. Another run waits for it, saying who holds it, up to `--wait` minutes (30). The command gets its slot in `$COLONY_LOCK_SLOT`. Slots come from `--slots`, `[locks.<name>] slots`, or for `tests` and `builds`, this computer's runs at once; else 1. It ends with the command's exit code. |
 | `colony lock --list` | Names each held lock, who holds it, its command and for how long. |
 | `colony wake [--after-sleep] [--dry-run]` | Wakes the sessions on this computer whose usage limit has reset, and the idle helpers whose wait stopped. `--after-sleep` also continues, under their own ids, the background helpers that ran before the computer slept and no longer run. `--dry-run` says what it would do. |
-| `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. A wait starts it by itself when a limit is noted; one runs per project on each computer. |
+| `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. The StopFailure hook, or a wait, starts it by itself when a limit is noted; one runs per project on each computer. |
 | `colony open-later <n>` | The later waves of `colony helpers <n> --open`, which it starts in the background. You don't run it yourself. |
 
 ## Flags
