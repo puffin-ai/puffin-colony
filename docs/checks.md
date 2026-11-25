@@ -63,7 +63,7 @@ A check that returns early ends on this line, and exits 3:
 fast check: running in the background past its 300 s budget, so work goes on: `colony check watch fast-…` follows it, and `colony check status` shows it
 ```
 
-`[checks] caps` stops a run past its cap, in seconds, and counts it as failed. Without a cap, a run goes on until it ends. A batch round past its cap stops the batch.
+`[checks] caps` stops a run past its cap, in seconds, and counts it as failed. Without a cap, a run goes on until it ends. A batch round past its cap stops the batch. Every command that runs a check follows the same settings: `colony merge` runs the fast check for the merged change in `[checks] scope` and stops it past the `fast` cap, a batch whose gate runs the fast check stops its round past the `fast` cap, and a batch's run on its start commit and its reruns stop at the round's cap.
 
 Each run lives on this computer, under `~/.colony/<project>/checks/runs/`: its state, and its whole output in a log. `colony check status` lists the runs, the running ones first, with how long each has run against its budget and its first failure. `colony status` lists the running ones too. Colony keeps the newest 50 ended runs.
 

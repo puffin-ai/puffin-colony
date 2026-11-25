@@ -137,7 +137,7 @@ Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 **Each builder then:**
 1. keeps `colony wait` running in the background all session;
 2. stamps the card's Last update on the board, `colony board set 41 Last_update=now`, at the start and after each commit: progress goes there, never in a line;
-3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
+3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`, with the command `colony take` prints; `<worktrees>` is `.worktrees` inside the repo by default ([folders.md](folders.md#worktrees));
 4. runs the fast check and fixes what it reports;
 5. writes a test for a bug fix or new logic (a style change needs none), and checks touch or layout work in a browser at phone width, 390×844;
 6. updates the living spec and wiki pages the change makes stale, in the same commit;
@@ -151,8 +151,8 @@ Builders run at medium effort by default, write no reports, and ask no person an
 When a `done` line arrives, the lead runs `colony tier --head origin/<branch>`. When the branch prints a higher tier than its card, it raises the card's Tier. Then it sets the card to In review and merges that branch into the batch so far, so a conflict shows now and not at the end:
 
 ```sh
-git fetch origin && git worktree add --detach <worktrees>/<project>-next-<batch> origin/<base>    # first card of a batch
-git fetch origin && git -C <worktrees>/<project>-next-<batch> merge --no-ff --no-edit origin/<branch>
+colony worktree add next-<batch> origin/<base> --detach    # first card of a batch
+git fetch origin && git -C "$(colony worktree path next-<batch>)" merge --no-ff --no-edit origin/<branch>
 ```
 
 `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day. On a conflict, the lead aborts the merge and asks the builder to merge the other branch into its own, resolve it, push, and post `done` again.
@@ -273,6 +273,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
+| `.colony/colony.local.toml` | This computer's own settings over `.colony/colony.toml`, which git never tracks. See [configuration.md](configuration.md#layers) |
+| `.git/colony/leads.json` | The clone's lead registry: each lead's folders, the rest of the repo's owner, loans, borrows and asks, which every worktree of the clone reads. See [folders.md](folders.md) |
 | `.colony/team.toml`, `~/.config/colony/profile.toml` | The team's standing orders, committed, and your own, never committed. See [profiles.md](profiles.md) |
 | `~/.colony/<project>/waits/<pid>.json` | Each running `colony wait`: its session, and whether it follows. `colony waits` reads them |
 | `~/.colony/<project>/names.json` | The session names the waits learned from GitHub, which `colony post` and `colony say` check a recipient against |

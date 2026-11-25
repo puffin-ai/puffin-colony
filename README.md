@@ -54,6 +54,7 @@ cd your-repo && colony
 - [Checks](docs/checks.md): tests in proportion to the change, time budgets, live failures, no repeated runs, and CI on any commit
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
 - [Capacity](docs/capacity.md): accounts, usage limits, service checks, the computer's room, locks and sleep
+- [Folders and worktrees](docs/folders.md): one lead registry for every copy of the repo, lending and borrowing folders, silent leads, and worktrees inside the repo
 - [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## The 3 setups
