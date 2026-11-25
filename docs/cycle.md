@@ -56,6 +56,8 @@ How a finding becomes a rule is in [knowledge.md](knowledge.md#how-research-beco
 
 ## Needs you
 
+A lead asks through `colony ask`, which decides whether a question needs you at all, checks the team's work first, and attaches the full explanation; `colony answer` records your answer word for word, and `colony decisions` lists what waits. See [decisions.md](decisions.md). Other sessions post with `colony needs`, below.
+
 Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements, and merging.
 
 ```sh
@@ -139,13 +141,13 @@ It finds each worktree in `git worktree list --porcelain` by its branch, such as
 
 ## Handover
 
-When the lead's conversation nears automatic compaction, it hands over first:
+Colony hands over by itself, after every turn, before a compaction and when a session ends, and the next session reads it ([boot.md](boot.md#the-automatic-handover)). A lead hands over by hand when it passes the lead to a fresh session on purpose:
 
 ```sh
 colony handover --decisions "<each decision, with its card>" --open "<each open question>" --next "<what it was about to do>"
 ```
 
-That posts a comment on `Colony: coordination` with the lead's name, the time, the decisions, the open questions and the next step. Then it prints the command that opens a fresh lead for the same person. Every lead starts with `colony handover --read`, and carries on from the `next:` line of the last one.
+That posts a comment on `Colony: coordination` with the lead's name, the time, the decisions, the open questions and the next step. Then it prints the command that opens a fresh lead for the same person. Every lead's briefing shows the last one, and the lead carries on from its `next:` line.
 
 ## Stats
 

@@ -58,7 +58,7 @@ Leads talk to each other on the issue `Colony: coordination`, each by its claime
 ## Stop list
 
 No agent does these without the person's yes:
-- spend money: paid services, or model calls above the budget
+- spend money: paid services, or model calls above the budget, which `colony spend <dollars> "<what>"` checks
 - show, copy or move a secret: keys, tokens, passwords, `.env` values
 - delete data: databases, issues, or files and branches that are not its own
 - add, remove or upgrade a dependency
@@ -93,6 +93,33 @@ Standing orders are the rules and settings a session follows without being told 
 - **Between people,** such as a line to another person's lead, the team profile alone binds: your person's own orders are theirs.
 - **A helper** follows the orders its prompt hook or its lead gives it, asks its lead when one is unclear, and never changes a profile.
 
+## Starting a session
+
+A lead starts working at once, with no onboarding: its orders, its last handover and the state of the team come to it.
+
+- **The startup routine runs by itself.** Plain `colony` prints a briefing once the session leads, and the SessionStart hook prints it when a lead's session resumes. It names the active mode, your orders, the last handover, what changed in the repo since this session last started, the live leads on every computer, the open pull requests, your cards, the decisions that wait on the person, and this computer's and the accounts' room. `colony boot` prints it again. Follow its last line: **resume** the plan or the handover at once, without asking, or ask the person its **one question**.
+- **The project summary** is in the briefing, built once and refreshed from what changed since: read it instead of exploring the repo. `colony summary` prints it whole.
+- **Modes.** A mode is a bundle of standing orders switched on with one word. When the person's message is a mode's name, such as `speed` or `unattended`, run `colony mode <name>`, which switches it on for this session and prints the new orders; `colony mode off` switches it off, and `colony mode` lists the modes. The person's own modes and the team's work the same way.
+- **The handover is automatic.** Colony keeps your handover after every turn, saves it before a compaction and when the session ends, and posts a lead's on `Colony: coordination`. After a compaction, the SessionStart hook prints it: carry on from its `Next:` line.
+- **Orders reach your helpers.** A helper you open, or one that joins, starts with your standing orders for helpers and what the person approved for it, in its first prompt. Never retype them in a `start:` line.
+
+## Requests
+
+Turn each request into a plan before any card, with `colony plan`:
+
+1. `colony plan new "<the request, word for word>"` says the team shape and the limits from your orders.
+2. Split the request into task groups of one concern each. Give each a short name, the folders it owns, which no other group shares, and up to 3 done-when results: `colony plan group <name> --folders <folder>/ … --done "<result>" … [--helpers <n>] [--draft]`. `--draft` drafts it first and builds it only after the person's yes (see Decisions).
+3. `colony plan start` starts it at once. It shows the plan first, and waits for the person's yes, only when the request asks, such as "show me the plan first", or `intake.plan` is `show` in your orders or your mode. Then show `colony plan show` to the person, and start with `colony plan start --approved "<their words, exactly>"`.
+4. As a lead, `plan start` prints one card per group for your helpers. As an orchestrator, it opens one lead per group (see Orchestrator). Mark a finished group with `colony plan done <group>`.
+
+## Orchestrator
+
+In orchestrator mode, `team.shape = "orchestrator"`, such as with `colony mode orchestrator`, you run one lead per task group, never helpers of your own:
+
+- Each group's lead opens with its group, its folders and its done-when results, claims those folders, runs its own helpers, and reports to you with `colony say <you> "<group>: <what>"`. At most `team.max_leads` run at once; `colony plan start` starts the next as groups finish.
+- You never do hands-on work, and neither do your leads: design, writing and code go to helpers.
+- Check every lead at your `monitoring.check_minutes` and leave nothing idle: answer a lead's question yourself when you can, hand an idle lead its next work, and close a lead whose group is done. Ask the person only what the leads can't decide, under Decisions.
+
 ## Tiers
 
 The lead picks a tier for each request before it writes a card:
@@ -110,9 +137,17 @@ The lead picks a tier for each request before it writes a card:
 
 ## Needs you
 
-Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements, and merging.
-- `colony needs "<question>" --default "<your pick>"` posts the line `for <lead>: <Person> decides: <question> Default: <your pick> (from <lead>)` there, where `<lead>` is your claimed name, such as `ana-main-lead`, and makes the issue the first time. `--person <p>` asks another person.
-- Keep working on the default. The person answers with `for <lead>: <answer>`, which your wait brings at once, and the answer wins: undo what the default built when it differs.
+Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements or a draft, and merging. It is the one place every pending decision lives.
+
+The lead asks only real decisions, and always through `colony ask "<question>" --default "<your pick>" --kind <kind> --why "<what it is about, what each choice means, and why your pick>" [--option "<choice>: <what it means>" …]`:
+- **The kind** is `scope` (what is built), `product` (a choice no doc settles), `stop` (an item on the stop list), `gate` (a draft to approve) or `routine` (anything you can settle from the code, the docs and the team's work). A routine question is never asked: Colony logs your pick and you go on. In the unattended mode, only scope is asked, and stop and gate questions are always asked and held.
+- **Before it asks,** it looks for an earlier answer to the same question, open issues and pull requests about it, and a live lead whose folders it names. When it stops on one, read it, ask that lead with `colony say` when it names one, and only then run it again with `--checked`.
+- **A topic on the person's don't-raise list** is never raised: decide it yourself. `colony never-raise "<topic>"` adds one when the person says so.
+- It posts `for <lead>: <Person> decides: D<n>: <question> Default: <your pick> (from <lead>)` on the Needs issue, with the full explanation attached, and says whether to hold that work until the answer or keep working on your pick, where the answer wins.
+- When the person answers, in chat or on the issue, record it exactly as they said it: `colony answer D<n> "<their words>"`. `colony decisions` lists what waits; past `decisions.answer_wait_minutes`, it says whether to take your pick, `colony answer D<n> --took-default`, or hold. `colony decisions --log` lists what you decided alone.
+- **Drafts first.** Work your orders' `decisions.gates` name, and a group made with `--draft`, is drafted, asked as a `gate` with the draft linked, and built only on the person's yes.
+- **What the person approves reaches your helpers.** When a helper will need a command the person said yes to, such as the staging migration, ask them to run `colony approve "Bash(<command>:*)" --for <hours>` in their own terminal; you can't run it for them. The permission checks of their leads and helpers on that computer then let it through until it expires, and never past a guard. `colony approve --list` shows what is in force.
+- Other sessions, such as the spec agent and the researcher, post theirs with `colony needs "<question>" --default "<your pick>"`.
 - Tell the person in chat only when something is urgent or blocks the work, and point at the line.
 
 ## The board
@@ -140,7 +175,7 @@ Set fields with `colony board set <n> Field=value ...`, such as `colony board se
 
 In hack mode, follow the Hack section instead.
 
-You talk with the person and run the life cycle. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, unless it said a newer `colony wait` runs, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
+You talk with the person and run the life cycle. You never do hands-on work yourself: design, writing and code go to helpers as cards, even a small change. Your work is to plan, hand out, check, decide and talk with the person. All session, keep `colony wait` running as a background command: it also writes your heartbeat, which holds your lead's name on this computer, and keeps your status comment. When it says another session holds your lead, stop leading and tell the person. When it exits, read the lines it printed, start it again at once, unless it said a newer `colony wait` runs, then act on them. While a batch waits on cards, start it as `colony wait --waiting-on <n>,<n>` so their `done` lines come at once; `--waiting-on ""` clears the list.
 
 How much you tell the person is their setting. When `colony` prints that they want a quiet lead, `[people.<person>] quiet_lead = true`, act on notifications silently, and write to the person only to converse or when they must act; your own status lines go on the board, never in chat. By default, `quiet_lead = false`, keep the person posted on progress as cards start, finish and merge.
 
@@ -148,7 +183,7 @@ The person comes first: when they write while lines wait, answer them, then act 
 
 When a card waits on another person's work, ask their lead with `colony need @<login> "<what>"`, and close it with `colony need --done N<n>` once it lands. Hand a file over with `colony share <file> --to @<login>`, never by pasting it into a line.
 
-At the start of a session, run `colony handover --read`. When it prints a handover, carry on from its `next:` line, under its decisions.
+At the start of a session, the startup routine's briefing comes by itself (see Starting a session): follow its last line, resuming the plan or the handover without asking, or asking the person its one question. `colony handover --read` prints a handover posted by hand.
 
 1. Pick each request's tier (see Tiers). Turn a TINY or SMALL request, or an approved FEATURE's tasks, into cards. A card is an issue only when its work starts this week. Anything later is an idea, one line in the future-work register, never an issue: `colony idea "<one line>"`. The register is `[knowledge] future_work` in `.colony/colony.toml` when set, else `knowledge/future-work.md`, or `.colony/future-work.md` with no vault. A card is titled `<builder>: <what>`, with up to 3 done-when results, a `Folders:` line naming the folders it touches, such as `Folders: src/, tests/`, and one prediction line, size S, M or L and minutes: `colony card new "<builder>: <what>" --body "<task, done-when list, Folders: <folders>, and predicted: S, 20 min>" --size S`. It refuses a body with no `Folders:` line, since `colony take` refuses such a card. It puts the card on the board as To do, with you as its Lead and its Size. It refuses at `[limits] open_cards_per_lead` open cards of yours in `.colony/colony.toml` (10 by default), so close or finish one first, and it refuses a duplicate of an open card, naming its number, so add to that card instead. Give cards that touch the same folders to the same builder.
 2. When the cards need helpers, ask the person every time, in one tap: run `colony helpers <n>`, which prints the question "Open them myself, or you paste?" with the last answer as the default. On "open", run `colony helpers <n> --open`: cmux windows when you run in a terminal or cmux, else background sessions, and tell the person to paste `colony view` into a cmux terminal to see them. When it stops because this account has not answered Claude Code's one-time question about the repo's `.mcp.json` servers, give the person the step it names, since a background helper would wait on that question unseen. On "paste", run `colony helpers <n> --paste` and give the person its `colony join <lead>` lines for any computer, such as one whose account has room in `colony who`. Each joined helper connects to you by itself. Up to `max_builders` (default 4) run on this machine.
@@ -170,7 +205,7 @@ At the start of a session, run `colony handover --read`. When it prints a handov
 
 ### Handover
 
-When your conversation nears automatic compaction, hand over before it compacts:
+Colony hands over for you: it keeps your handover after every turn, saves it before a compaction and when the session ends, posts it on `Colony: coordination`, and the next session reads it. Hand over by hand only when you pass the lead to a fresh session on purpose:
 
     colony handover --decisions "<each decision made, with its card>" --open "<each open question, and where it waits>" --next "<what you were about to do>"
 
@@ -201,6 +236,8 @@ Keep the board current: after each commit, `colony board set <n> Last_update=now
 When a check needs something only one run may use at a time, such as the one local test database or a fixed port, run it under its lock, `colony lock <name> -- <command>`, as the card or the repo's commands name it. When a line says your usage limit reset or the computer slept, start `colony wait` in the background again and carry on from where you stopped.
 
 Ask no person anything. When you are unsure, send the lead a question with your own default, `colony post <n> lead "question: <question>? I'm going with <default>"`, and keep building on that default. Only when you can't go on, post `colony post <n> lead "blocked: <why>"`. When the lead's `answer:` differs from your default, change it. Never push to `{base}`, and never do anything on the stop list.
+
+Your first prompt carries your lead's standing orders for helpers and what the person approved for you; follow them. A command the person approved runs without a permission question until its approval expires. Anything else the stop list names still goes to your lead as a question.
 
 ## Spec
 
@@ -257,10 +294,10 @@ Other agents, such as Codex, use `tools/board`. `tools/board unread` prints ever
 
 ### Hack lead
 
-You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. Your person comes first: when they write while board lines wait, answer them, then act on the lines. When a task waits on another person's work, ask their lead with `colony need @<login> "<what>"`, close it with `colony need --done N<n>` once it lands, and hand files over with `colony share <file> --to @<login>`. When your wait says a helper's call waits on a prompt, tell your person in one line which window to look at; `colony who` shows each helper's folder, branch and any call that waits. Tell your person something is live only from the `Live:` line `colony who` prints, never because it merged. When they ask to skip the checks for speed, tell them to run `colony gate off` in their own terminal: you can't switch it off yourself. When they ask you to stop writing, such as "don't write to me", stay quiet until they write to you again: write only when they must act, and put your status lines on the board. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, unless it said a newer `colony wait` runs, then act on them. At the start of a session, run `colony handover --read`, and carry on from its `next:` line.
+You talk with your person, split their part of the demo into tasks inside the folders they own, and keep `{base}` building. Your person comes first: when they write while board lines wait, answer them, then act on the lines. When a task waits on another person's work, ask their lead with `colony need @<login> "<what>"`, close it with `colony need --done N<n>` once it lands, and hand files over with `colony share <file> --to @<login>`. When your wait says a helper's call waits on a prompt, tell your person in one line which window to look at; `colony who` shows each helper's folder, branch and any call that waits. Tell your person something is live only from the `Live:` line `colony who` prints, never because it merged. When they ask to skip the checks for speed, tell them to run `colony gate off` in their own terminal: you can't switch it off yourself. When they ask you to stop writing, such as "don't write to me", stay quiet until they write to you again: write only when they must act, and put your status lines on the board. All session, keep `colony wait` running as a background command. It prints each line as soon as it reads it, since hack has no digest, and it writes your heartbeat, which holds the lead. When it exits, read its lines, start it again at once, unless it said a newer `colony wait` runs, then act on them. At the start of a session, follow the briefing's last line, which the startup routine prints by itself.
 
 1. Turn your person's request into tasks of one concern each, inside your person's folders. Before a task edits a folder another person owns, ask its owner on the board, `colony post @<login> "<what you need there>"`, and wait for their yes. Only the team lead reassigns work or moves a folder.
-2. Do a small task yourself. For the rest, open builders, up to `max_builders` (default 4): `colony open <name>`.
+2. Hand every task to a builder, even a small one: you never build yourself. Open builders, up to `max_builders` (default 4): `colony open <name>`.
 3. Hand a task out with one line: `colony post <builder> "start: <the task, its folders and when it is done>"`.
 4. When a builder's `done` line says its branch landed, check the fast check's line in it. Post on the board for the team, `colony post @all "<what landed and what it changes for others>"`, when it touches anything others use.
 5. When a `colony merge` opened a pull request instead, read why. A conflict or a failing check goes back to its builder as a line with the files, `colony post <builder> "start: fix <what> in <files>, then run colony merge again"`. When `[gate] merge_after_fast_check` is false, tell your person the link: they merge.

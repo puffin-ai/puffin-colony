@@ -171,6 +171,32 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 | `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. The StopFailure hook, or a wait, starts it by itself when a limit is noted; one runs per project on each computer. |
 | `colony open-later <n>` | The later waves of `colony helpers <n> --open`, which it starts in the background. You don't run it yourself. |
 
+## Starting a session and decisions
+
+The startup routine, the project summary, modes, request intake, and what a lead asks you. See [boot.md](boot.md) and [decisions.md](decisions.md). `ask`, `answer` and `plan`, except `plan show`, refuse to run outside a lead's session, `approve` runs only at the person's own terminal, and a helper never switches or defines a mode.
+
+| Command | What it does |
+| --- | --- |
+| `colony boot [--offline] [--json]` | The startup routine, which also runs by itself when a session becomes a lead and from the SessionStart hook: it loads the orders and the last handover, refreshes the project summary, reads the live leads on every computer, the open pull requests, your cards, the plan, the decisions that wait on you, and the computer's and accounts' room, and prints a briefing that names the active mode and ends on one next step: resume, or ask one question. `--offline` reads nothing from GitHub. |
+| `colony summary [--rebuild] [--json]` | The project summary: what the project is, its areas with their files, languages and purpose, its checks, and what changed since this session last started. Built once, and refreshed from what changed; `--rebuild` builds it again. |
+| `colony mode [<name> \| off] [--personal]` | Alone, lists the modes, yours, the team's and Colony's, and which is on. With a name, switches that mode on for this session, or with `--personal` for every session, and prints the new orders; `off` switches it off. |
+| `colony mode show <name>` | What a mode sets. |
+| `colony mode define <name> --set <key>=<value> … [--rule "<rule>" …] [--about "<what it is for>"] [--team]` | Writes a mode of your own to `modes/<name>.toml` in your user config folder, or with `--team` the team's `.colony/modes/<name>.toml`, for a pull request. |
+| `colony plan new "<request>" [--show-first] [--replace]` | Starts a plan for one request, kept word for word, and says the team shape and limits from your orders. |
+| `colony plan group <name> --folders <folder> … --done "<result>" … [--helpers <n>] [--draft]` | Adds or changes one task group: the folders it owns, which no other group shares, 1 to 3 done-when results, and its helpers, at most `team.helpers_per_lead`. `--draft` drafts it first. |
+| `colony plan [show] [--of <lead>] [--group <name>] [--json]` | The plan and where each group stands. |
+| `colony plan start [--approved "<words>"] [--dry-run]` | Starts the groups: one card each for a lead, one lead each for an orchestrator, at most `team.max_leads` at once. When the request or `intake.plan` asks to see the plan first, it shows it and starts only with `--approved`, the person's yes, kept word for word. |
+| `colony plan done <group>`, `colony plan approve <group> "<words>"` | Marks a group done, or records the person's yes on a group's draft. |
+| `colony orders [--publish]` | The standing orders this lead passes its helpers, with what the person approved for them; `--publish` posts them now for helpers on other computers. A helper sees the orders its lead gave it. |
+| `colony ask "<question>" --default "<pick>" --kind scope\|product\|stop\|gate\|routine --why "<explanation>" [--why-file <file>] [--option "<choice>: <meaning>" …] [--checked] [--person <p>]` | The lead's one way to ask the person. A routine question, and others under `decisions.autonomy`, are decided and logged instead; a topic on the don't-raise list is never raised. It first looks for an earlier answer, matching issues and pull requests, and a lead whose folders the question names, and ends with 1 when it found one; `--checked` asks anyway. A question it asks goes on the Needs issue with its full explanation attached, and it says whether to hold the work or keep going on the pick. |
+| `colony decisions [--log \| --all] [--json]` | The decisions that wait on the person, with their age and what to do past their wait; `--log` those decided alone; `--all` every one. |
+| `colony answer <id> "<the person's words>" [--on-issue]`, `colony answer <id> --took-default \| --withdraw` | Records the person's answer exactly as they said it, on the Needs issue too; for a draft, says whether it reads as a yes or a no. `--took-default` records that no answer came in time and the pick stands, never for a stop or gate question; `--withdraw` takes the question back. |
+| `colony never-raise ["<topic>"] [--remove] [--team]` | The topics never raised with the person: lists them, adds one to your personal profile, or takes one off. |
+| `colony spend <dollars> "<what>" [--approved <id>]` | Checks a spend against today's `budgets.dollars_per_day` and records it. Past the budget it ends with 1, unless `--approved` names a decision the person said yes to. |
+| `colony approve "<rule>" … [--for <hours>] [--lead <lead>] [--only <session> …]` | The person, at their own terminal: lets their leads and helpers on this computer run what each Claude Code permission rule covers, such as `Bash(npm run migrate:*)`, without a permission question, until it expires, 8 hours by default, at most 24. It refuses unless it runs at an interactive terminal outside any agent's session, and asks the person to type yes. A rule names its command, domain or path; a joined command never matches. |
+| `colony approve --list`, `colony approve --revoke <id>` | The approvals in force, which any session may list, or, at the person's terminal, ends one at once. |
+| `colony session-hook start\|compact\|end\|turn\|tool` | The startup, handover and approval hooks. Claude Code runs them. |
+
 ## Flags
 
 | Flag | Where | What it does |

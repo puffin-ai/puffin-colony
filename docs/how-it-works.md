@@ -93,7 +93,7 @@ After setup, `colony` opens your lead.
    Remote Control lets you follow the session from the Claude apps under that title.
 5. **It opens where it can.** It uses a new cmux workspace when cmux takes its commands (inside cmux). It uses this terminal when you run it at one, or when you pass `--here`. Otherwise, as when a lead opens builders from inside its own session, it starts a background Claude session under Remote Control. You follow that session in the Claude app, or with `claude attach <id>`.
 
-The lead first runs `colony handover --read`. When an earlier lead left a handover, it carries on from its `next:` line.
+The lead starts with the startup routine's briefing, which comes by itself: its orders and mode, the last handover, the project summary, the live leads, the open pull requests and cards, the decisions that wait on you, and the room for helpers. It resumes the plan or the handover without asking, or asks you one question. See [boot.md](boot.md).
 
 `colony --dry-run` prints the command line and the env names, never their values, and runs nothing.
 
@@ -280,5 +280,10 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `~/.colony/<project>/<lead>-starts.json` | The lead's start lines that wait for an acknowledgement |
 | `~/.colony/<project>/sessions/<name>.json` | The session ledger: each session's Claude Code id, start folder, account and last sign of life, which `colony crash-report` and `colony resume` read |
 | `~/.colony/<project>/tasks/<pid>.json` | A long background command while it runs, such as `colony wait`; one left behind stopped from outside |
+| `~/.colony/<project>/summary.json`, `<session>-seen.json` | The project summary, and the commit each session last started on. See [boot.md](boot.md) |
+| `~/.colony/<project>/<session>-handover.json` | Each session's automatic handover, readable by you alone |
+| `~/.colony/<project>/plan-<lead>.json`, `<lead>-helper-orders.json` | A lead's plan for its request, and the orders it passes its helpers |
+| `~/.colony/<project>/decisions.json`, `spend.json`, `approvals.json` | The decisions asked, answered and taken alone, today's spending, and what you approved for the helpers. See [decisions.md](decisions.md) |
+| `<user config folder>/modes/<name>.toml`, `.colony/modes/<name>.toml` | Your own modes, and the team's |
 
 Every command, with one line each, is in [commands.md](commands.md).

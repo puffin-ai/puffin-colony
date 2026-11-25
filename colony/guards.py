@@ -256,8 +256,12 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
         ("Stop", None, {"type": "command", "command": quiet_command("tasks", program), "timeout": HOOK_TIMEOUT},
          "hooks tasks"),
     ]
+    from colony import boot  # the startup routine, the automatic handover, and the approvals hook (boot.py)
+
     if not plugin:
-        return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE")]
+        return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE"),
+                *boot.hook_entries(program)]
+    entries += boot.hook_entries(program)
     # The repo's guard needs only its copied script, and its other hooks need its launcher.
     repo_guard = f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{GUARD}" ]'
     launcher = f"[ -x {REPO_BIN} ]"

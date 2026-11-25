@@ -253,11 +253,13 @@ def test_show_names_each_order_and_where_it_came_from(repo, capsys):
 
 
 def test_a_helper_gets_only_the_orders_for_its_work_and_a_lead_hears_how_to_learn(home):
-    personal('mode = "speed"\n[decisions]\nautonomy = "unattended"\n[tests]\nfull_suite = "batch"\n'
+    # A mode no file defines adds nothing, so the personal profile's orders are the ones shown; the built-in speed mode
+    # would set tests.full_suite itself (boot.py).
+    personal('mode = "focus"\n[decisions]\nautonomy = "unattended"\n[tests]\nfull_suite = "batch"\n'
              '[merge]\npolicy = "pr"\nbranches = ["integration"]\n\n[[rules]]\ntext = "Write plainly."\n')
     loaded = profile.load(person="ana")
     lead = profile.render(loaded, "lead")
-    assert lead.startswith("Standing orders for ana's session, mode speed (")
+    assert lead.startswith("Standing orders for ana's session, mode focus (")
     assert "- Decide alone: take your recommended default for every decision, and log each one." in lead
     assert "colony prefer add" in lead and "Branches you may merge into" not in lead
     helper = profile.render(loaded, "helper")

@@ -1,0 +1,13 @@
+# The speed mode: build fast, check only what changed, and say what went unchecked.
+description = "Trade polish for speed: run only the tests for what changed and the guard tests, keep checks short, and name what went unchecked."
+
+[tests]
+full_suite = "release"
+time_cap_minutes = 5
+
+[monitoring]
+report = "quiet"
+
+[[rules]]
+id = 1
+text = "Trade polish for speed: build, run only the tests for what changed, and name what went unchecked in each done line."

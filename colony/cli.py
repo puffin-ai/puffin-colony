@@ -580,7 +580,7 @@ def where_to_open(args) -> str:
     return "terminal" if portable.is_terminal(sys.stdin) else "background"
 
 
-def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
+def launch(config: dict, args, session: str, role: str, prompt: str, title: str = "") -> int:
     """Open one session on --account, else the person's account (pick_account): in cmux, in this terminal, or in the
     background.
 
@@ -589,6 +589,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     the repo's .mcp.json servers, since nobody would see that question (unanswered_mcp). A dry run prints the command,
     the env names (never their values) and where it would open, and runs nothing. A lead's session claims its own name by running `colony` inside itself, or `colony claim`. Every other
     session is a helper of one lead: the lead `colony join` picked, else the lead that runs the command ($COLONY_LEAD).
+    `title` names the session instead of `<project>-<session>`, such as a task group's lead (boot.plan_start).
     """
     from colony.wait import LEAD_ENV
 
@@ -596,7 +597,7 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
         prompt = f"{prompt} {rename_line(session)}"
     person = person_of(config, args)
     account, config_dir, why = choose_account_why(config, args)
-    title = f"{config['project']['name']}-{session}"
+    title = title or f"{config['project']['name']}-{session}"
     lead = "" if session == LEAD else (getattr(args, "lead_name", "") or os.environ.get(LEAD_ENV, ""))
     env = session_env(person, session, config_dir, lead, account)
     argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env, masked=args.dry_run))
@@ -864,6 +865,9 @@ def claim(config: dict, args) -> int:
     print(f"{identity_note(*lead_pairs(config, args, name, token)).capitalize()}, and start `{NAME} wait` in the "
           "background within 2 minutes: it keeps the heartbeat and the status comment that hold the lead. Commit "
           f"{DIR}/{presence.LEADS_FILE} with your next change.")
+    from colony import boot  # the startup routine, without being asked
+
+    boot.after_claim(config, args)
     return 0
 
 
@@ -969,7 +973,10 @@ def here(args) -> int:
         print(f"No other lead is alive, so this session leads {name}, over the whole repo.")
         print(rename_line(name))
         print(f"Next: {identity_note(*lead_pairs(config, args, name, token))}; start `{NAME} wait` in "
-              "the background within 2 minutes, load the colony-lead skill, and ask the person what they want.")
+              "the background within 2 minutes, load the colony-lead skill, and follow the briefing's next step.")
+        from colony import boot  # the startup routine, without being asked
+
+        boot.after_claim(config, args)
         return 0
     held = sorted({folder for status in leads for folder in status.folders})
     print(f"Live leads ({len(leads)}), whose folders this lead avoids:")
@@ -1224,9 +1231,10 @@ def lead(config: dict, args) -> int:
                                                                                          section(config, "Lead")))
 
 
-def builder_prompt(name: str, config: dict) -> str:
-    """A builder's first prompt."""
-    return BUILDER_PROMPT.replace("{dir}", DIR).replace("{section}", section(config, "Builder")).replace("{builder}", name)
+def builder_prompt(name: str, config: dict, orders: str = "") -> str:
+    """A builder's first prompt, with the standing orders its lead passes it (boot.helper_brief) after it."""
+    prompt = BUILDER_PROMPT.replace("{dir}", DIR).replace("{section}", section(config, "Builder")).replace("{builder}", name)
+    return f"{prompt}\n\n{orders}" if orders else prompt
 
 
 def open_builder(config: dict, args) -> int:
@@ -1240,7 +1248,9 @@ def open_builder(config: dict, args) -> int:
     lead = os.environ.get(wait.LEAD_ENV, "").lower()
     if lead and not args.dry_run:
         wait.expect_status(config["project"]["name"], lead, args.name)
-    return launch(config, args, args.name, "builder", builder_prompt(args.name, config))
+    from colony import boot
+
+    return launch(config, args, args.name, "builder", builder_prompt(args.name, config, boot.helper_brief(config)))
 
 
 LOCAL = "local.toml"  # this computer's own answers, such as the last helpers answer; git-ignored
@@ -1514,6 +1524,10 @@ def join(config: dict, args) -> int:
         print(f"Next: {how}; start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
               f"{section(config, 'Builder')} section. Never ask the person anything: your lead gives you cards.")
+        from colony import boot  # the standing orders its lead passes its helpers
+
+        if orders := boot.helper_brief(config, args.lead_name, fetch=True):
+            print(orders)
         return 0
     from colony import capacity
 
@@ -1527,7 +1541,10 @@ def join(config: dict, args) -> int:
     if not args.dry_run:
         wait.expect_status(config["project"]["name"], args.lead_name, name)
         tell_lead_joined(config, args.lead_name, name)
-    return launch(config, args, name, "builder", builder_prompt(name, config))
+    from colony import boot
+
+    orders = boot.helper_brief(config, args.lead_name, fetch=not args.dry_run)
+    return launch(config, args, name, "builder", builder_prompt(name, config, orders))
 
 
 def card_folders(text: str) -> list[str]:
@@ -1893,6 +1910,9 @@ def build_parser() -> argparse.ArgumentParser:
     capacity.register(sub)
     from colony import recover
     recover.register(sub)  # crash-report and resume
+    from colony import boot, decisions  # the startup routine, modes, intake, and the person's decisions
+    boot.register(sub)
+    decisions.register(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")

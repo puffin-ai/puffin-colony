@@ -654,7 +654,7 @@ def test_merging_the_hooks_keeps_the_hooks_and_settings_already_there(tmp_path):
               "PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "fmt"}]}]}
     path.write_text(json.dumps({"permissions": {"deny": ["Read(**/.env)"]}, "hooks": json.loads(json.dumps(theirs))}))
     assert guards.merge_hooks(path) == (["PreToolUse", "Notification", "StopFailure", "UserPromptSubmit",
-                                         "SessionStart", "SessionEnd", "Stop"], [])
+                                         "SessionStart", "SessionEnd", "Stop", "PreCompact"], [])
     data = json.loads(path.read_text())
     assert data["permissions"] == {"deny": ["Read(**/.env)"]}
     for event, groups in theirs.items():
@@ -725,7 +725,7 @@ def test_install_copies_the_guard_and_the_settings_command_runs_it(repo, capsys)
     assert copied.read_text() == GUARD.read_text()
     data = json.loads((repo / ".claude" / "settings.json").read_text())
     assert set(data["hooks"]) == {"PreToolUse", "Notification", "StopFailure", "UserPromptSubmit", "SessionStart",
-                                  "SessionEnd", "Stop"}
+                                  "SessionEnd", "Stop", "PreCompact"}  # SessionEnd and Stop: the ledger and boot.py's handover
     env = {"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": str(repo)}
     command = commands(data, "PreToolUse")[0]
     for call, code in (("sleep 30", 2), ("npm test", 0)):
