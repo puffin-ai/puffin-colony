@@ -78,6 +78,9 @@ def stop(config: dict, args) -> int:
     if not stopped and not kept:
         print(f"No other {cli.DISPLAY} session of {project} runs on this computer.")
         return 0
+    from colony import capacity
+
+    capacity.forget_seen(config, [name.removeprefix(f"{project}-").lower() for name in stopped])  # no restart after sleep
     if cli.mode(config) != "solo" and stopped:  # other people's leads hear it: on the board, or the coordination issue
         line = f"@{wait.ALL} {' and '.join(stopped)} stopped on {presence.computer()}"
         if kept:

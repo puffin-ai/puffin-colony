@@ -615,6 +615,9 @@ def stopped(config: dict, args) -> int:
     if not me:
         return 0
     cause = error if ERROR_CODE.fullmatch(error) else "unknown error"
+    from colony import capacity
+
+    capacity.note_limited(config, me, cause)  # a usage limit: wake the session once its account resets
     at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if me == cli.LEAD:
         sender = lead if person else cli.LEAD

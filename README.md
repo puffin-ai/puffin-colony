@@ -52,6 +52,7 @@ cd your-repo && colony
 - [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
 - [Profiles](docs/profiles.md): standing orders, yours and your team's, that every session follows from its start
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
+- [Capacity](docs/capacity.md): accounts, usage limits, service checks, the computer's room, locks and sleep
 - [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## The 3 setups

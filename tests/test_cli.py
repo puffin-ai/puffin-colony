@@ -39,7 +39,7 @@ walk = true
 [budget]
 provider_dollars = 0
 """
-ENV_NAMES = ("COLONY_SESSION COLONY_PERSON CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
+ENV_NAMES = ("COLONY_SESSION COLONY_PERSON COLONY_ACCOUNT CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
              "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS CLAUDE_CODE_AUTO_COMPACT_WINDOW")
 LEAD_PROMPT = "'Run `colony` and do what it prints, then read .colony/playbook.md, Lead section, and start.'"
 
@@ -509,7 +509,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
     # Windows has no `env`, so there the session drops CLAUDE_CONFIG_DIR from its own environment instead.
     unset = "" if portable.WINDOWS else "env -u CLAUDE_CONFIG_DIR "
     assert f"command: {unset}claude --remote-control demo-lead" in run.stdout
-    assert "env: COLONY_SESSION COLONY_PERSON CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
+    assert "env: COLONY_SESSION COLONY_PERSON COLONY_ACCOUNT CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
     assert "on account first, in a background session" in run.stdout  # a subprocess has no terminal
     assert not claude_log.exists()
 
@@ -534,8 +534,8 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
-            "tidy", "idea", "card", "release", "profile", "prefer", "setup", "fix-links", "skill-install", "tools",
-            "ack", "redeliver", "waits", "nudge")
+            "tidy", "idea", "card", "release", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later",
+            "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

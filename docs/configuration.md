@@ -37,6 +37,10 @@ One table per Claude Code settings folder. You need at least one.
 | --- | --- | --- | --- |
 | `config_dir` | yes | `"~/.claude"` | The settings folder. `~/.claude` is Claude Code's default, and Colony leaves `CLAUDE_CONFIG_DIR` unset for it. |
 | `person` | yes | `"ana"` | Whose account it is. `"any"` shares it with everyone. |
+| `provider` | no | `"claude"` | The AI provider the account belongs to. `"claude"`, the default, reads its usage and sign-in from its settings folder. Any other provider uses `usage_command` and `auth_command`. |
+| `usage_command` | no | `"python3 tools/usage.py"` | A command that prints the account's usage as JSON in Claude Code's shape, `{"five_hour": {"utilization": 40, "resets_at": "<ISO time>"}, "seven_day": {...}}`. It runs with the account's folder in `$COLONY_ACCOUNT_DIR`, at most once every 10 minutes. With it, any provider's account is judged for room like a Claude Code one. |
+| `auth_command` | no | `"tools/signed-in.sh"` | A command that ends with 0 while the account is signed in. Its service check uses it instead of Claude Code's own sign-in check. |
+| `max_busy` | no | `2` | The most helpers this account runs at once, instead of `[pool] max_busy`. |
 
 ```toml
 [accounts.ana]
@@ -48,7 +52,7 @@ config_dir = "~/.claude"
 person = "ben"
 ```
 
-**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one whose weekly window resets soonest goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing.
+**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one whose weekly window resets soonest goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing. `[pool]`, below, sets the order of use, the percentages at which a session switches, the accounts kept free, and how many helpers one account runs at once. [capacity.md](capacity.md) says more.
 
 **How much the lead tells the person.** `[people.<person>] quiet_lead = true` makes that person's lead act on notifications silently, and write to them only to converse or when they must act; its own status lines go on the board, never in chat. `colony` prints the line when it starts a lead for that person. It is false by default, and the lead keeps the person posted on progress.
 
@@ -248,6 +252,84 @@ How a session works for its person and the team, such as how much a lead decides
 | --- | --- | --- |
 | `COLONY_CONFIG_HOME` | `~/dotfiles/colony` | The folder that holds your personal profile. Without it: `%APPDATA%\colony` on Windows, else `$XDG_CONFIG_HOME/colony`, else `~/.config/colony`. |
 
+## `[pool]`
+
+Optional. The team's rules for its pool of accounts. Every key has a default. See [capacity.md](capacity.md#the-account-pool).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `order` | `"reset"` | The order accounts with room are used in: `"reset"`, the soonest weekly reset first, so usage about to expire gets spent, then the most 5-hour room; or `"listed"`, the person's own order in `[people.<person>] accounts`. |
+| `out_at` | `95` | A window at or past this percent has no room, and a new session switches to the next account. |
+| `near_at` | `80` | A 5-hour window at or past this percent, with its reset more than `near_hours` away, is skipped too. |
+| `near_hours` | `1` | How far off a reset must be for `near_at` to skip the account. |
+| `reserve` | `[]` | Accounts kept free: never picked, used only when named with `--account`. A session that runs on one anyway is named to its lead. |
+| `max_busy` | `3` | The most helpers one account runs at once, on every computer together. `colony helpers`, `colony open` and `colony join` open no helper past it. |
+| `wave` | `3` | How many helpers `colony helpers <n> --open` opens at once. The rest open in later waves. |
+| `wave_seconds` | `60` | The pause between waves. |
+
+```toml
+[pool]
+order = "reset"
+reserve = ["admin"]
+max_busy = 3
+```
+
+## `[machine]`
+
+Optional. What one helper, test run and build needs on this computer, and what stays free for the person. Colony reads the cores, memory, free disk and load itself, and sets from these how many helpers, test runs and builds run at once. See [capacity.md](capacity.md#this-computer).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `helper_gb` | `1` | The memory one helper session needs, in GB. |
+| `test_gb`, `build_gb` | `2`, `2` | The memory one test run or one build needs, in GB. |
+| `test_cores`, `build_cores` | `2`, `2` | The cores one test run or one build keeps busy. |
+| `keep_free_gb` | `2` | Memory left for the person and the system, in GB. |
+| `keep_free_disk_gb` | `10` | Below this much free disk where worktrees go, the computer counts as busy. |
+| `busy_load` | `1` | At or past this load per core, the computer counts as busy: no new helper opens, and test runs and builds drop toward one at a time. |
+| `max_helpers` | `[project] max_builders` | The most helpers on this computer, whatever its size. |
+| `max_tests`, `max_builds` | none | The most test runs or builds at once, whatever the computer's size. |
+
+## `[services]`
+
+Optional. A check for each service the team relies on, such as an AI provider, a cloud CLI, the code host or a package registry. Colony always checks each account whose folder is on this computer, and `gh auth status`, unless `builtin = false`. `colony services` runs every check, and the lead's wait runs each one on its own schedule and says when one fails. See [capacity.md](capacity.md#service-checks).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `builtin` | `true` | Whether to check each account and GitHub besides your own checks. |
+
+Each `[services.<name>]` table, named in lowercase letters, digits and dashes:
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `check` | yes | `"aws sts get-caller-identity"` | The command that checks the service. It runs through your shell, from the temp folder. Its output is read, never printed. |
+| `exit` | no | `0` | The exit code that passes. Default `0`. |
+| `expect` | no | `"Logged in"` | A regular expression the output must match. |
+| `at_least`, `at_most` | no | `500` | The first number in the output must be at least, or at most, this, such as requests left on an API. |
+| `every_minutes` | no | `30` | How often the lead's wait runs it. Default 30. |
+| `timeout` | no | `20` | Seconds it may run. Default 20. |
+| `fix` | no | `"aws sso login"` | What the person does when it fails. The alert names it. |
+| `restart` | no | `"docker start test-db"` | For a local service, a command that brings it back when its check fails. Colony's recovery runs it; the checks here never do. |
+
+```toml
+[services.aws]
+check = "aws sts get-caller-identity"
+fix = "aws sso login"
+
+[services.github-api]
+check = "gh api rate_limit --jq .resources.core.remaining"
+at_least = 500
+fix = "wait for GitHub's hourly reset"
+```
+
+## `[locks]`
+
+Optional. Each `[locks.<name>]` table sets one named lock's `slots`, how many runs may hold it at once, 1 by default. A lock needs no table to work: `colony lock <name> -- <command>` makes it. The locks `tests` and `builds` take this computer's test runs and builds at once as their slots. See [capacity.md](capacity.md#locks).
+
+```toml
+[locks.test-db]
+slots = 1
+```
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.
@@ -257,6 +339,7 @@ Colony sets these for every interactive session: the lead, each builder, the res
 | `COLONY_SESSION` | `lead`, the builder's name, `researcher` or `spec` |
 | `COLONY_PERSON` | Whose session it is |
 | `COLONY_LEAD` | The lead's name, such as `ana-engine-lead`, on a lead from `colony claim` and on each of its helpers. A helper belongs to this lead. |
+| `COLONY_ACCOUNT` | The account Colony opened the session on, which its checks compare with the one it runs on |
 | `CLAUDE_CONFIG_DIR` | The picked settings folder, left unset for `~/.claude` |
 | `CLAUDE_CODE_RETRY_WATCHDOG` | `1`. Without it, the prompt hook says so once a day. |
 | `CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS` | `21600000`, the longest the retry watchdog waits: 6 hours |
