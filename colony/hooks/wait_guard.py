@@ -98,7 +98,15 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),
     "busybox": (frozenset(), 0),  # busybox sh, busybox kill: the applet after it runs
 }
-SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "csh", "tcsh", "fish"}
+# The shells, by name, with a version suffix too, such as bash5, ksh93 or bash-5.2 (is_shell).
+SHELLS = ("sh", "bash", "rbash", "zsh", "dash", "ksh", "mksh", "oksh", "loksh", "pdksh", "ash", "yash", "posh", "csh",
+          "tcsh", "fish")
+SHELL_RE = re.compile(rf"^(?:{'|'.join(SHELLS)})(?:[-_]?[0-9][0-9.]*)?$")
+
+
+def is_shell(name: str) -> bool:
+    """Whether a program's name is a shell's (SHELLS), with or without a version."""
+    return bool(SHELL_RE.fullmatch(name))
 PYTHON = re.compile(r"^python(\d+(\.\d+)?)?$")
 PYTHON_SLEEP = re.compile(r"\bsleep\(\s*([^)]*?)\s*\)")
 PYTHON_LOOP = re.compile(r"\b(while|for)\b")
@@ -227,6 +235,7 @@ GH_COMMANDS = frozenset((
 GH_VARIABLE = re.compile(r"^(GH_\w*|GITHUB_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where gh finds its repo, host and config
 DEPTH = 4  # nested shells, evals and aliases the guard follows before it refuses
 FOLDER_OPTIONS = ("-C", "-D", "--chdir", "--git-dir", "--work-tree")  # a wrapper's options that move a command
+MOVING_GROUP = re.compile(r"^-[A-Za-z0-9]*[CD]|^--ch")  # -C or -D inside a short option group, or a --chdir prefix
 SCRIPT_REFUSAL = ("script guard: refused, {reason}. The script guard reads each shell script a line runs, and the "
                   "scripts it runs in turn, so a push, a merge or a kill can't hide in one; it refuses a script it "
                   "can't read or find.")
@@ -420,20 +429,91 @@ def program_words(words: list[str]) -> list[str]:
             option = words[index]
             if name == "command" and option in ("-v", "-V"):
                 return []  # command -v names a program and runs none
-            if name == "env" and (option in ("-S", "--split-string") or option.startswith("--split-string=")
-                                  or (option.startswith("-S") and len(option) > 2)):
-                if option in ("-S", "--split-string"):
-                    value, rest = (words[index + 1] if index + 1 < len(words) else ""), words[index + 2:]
-                else:
-                    value, rest = option.partition("=")[2] if option.startswith("--") else option[2:], words[index + 1:]
-                try:
-                    parts = shlex.split(value)
-                except ValueError:
-                    parts = value.split()
-                return program_words([*parts, *rest])
+            if name == "env":
+                command = env_command(words[index:])
+                return program_words(command) if command is not None else ["env", *words[index:]]
             index += 2 if option in value_options else 1
         index += plain_words
     return words[index:]
+
+
+# env's long options, as getopt matches any unique prefix: each a flag, one that takes a value, one that takes one only
+# after =, or -S's string, which env splits into more words.
+ENV_LONG = {"--ignore-environment": "flag", "--null": "flag", "--debug": "flag", "--list-signal-handling": "flag",
+            "--unset": "value", "--chdir": "value", "--split-string": "split", "--default-signal": "optional",
+            "--ignore-signal": "optional", "--block-signal": "optional", "--argv0": "value"}
+
+
+def env_split(value: str) -> list[str] | None:
+    """env -S's string as the words env splits it into, or None when it holds an escape or a variable, which env reads
+    its own way and the guard can't be sure of."""
+    if "\\" in value or "$" in value:
+        return None
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return None
+
+
+def env_command(arguments: list[str]) -> list[str] | None:
+    """The command env runs, from the words after `env`, as getopt reads env's options: bundled short options such as
+    -iS, a long option's unique prefix, -u, -C, -P and -a with their values, and -S's string split into more words
+    that env reads again. None when env holds an option the guard doesn't know, or a string it can't be sure of."""
+    queue = list(arguments)
+    while queue:
+        word = queue.pop(0)
+        if word == "--":
+            return queue
+        if word == "-":
+            continue  # the same as -i
+        if word.startswith("--"):
+            name, equals, value = word.partition("=")
+            matches = [option for option in ENV_LONG if option.startswith(name)]
+            if len(matches) != 1:
+                return None
+            kind = ENV_LONG[matches[0]]
+            if kind == "value" and not equals:
+                if not queue:
+                    return None
+                queue.pop(0)
+            elif kind == "split":
+                if not equals:
+                    if not queue:
+                        return None
+                    value = queue.pop(0)
+                parts = env_split(value)
+                if parts is None:
+                    return None
+                queue = [*parts, *queue]
+            continue
+        if word.startswith("-") and len(word) > 1:
+            letters = word[1:]
+            for at, letter in enumerate(letters):
+                rest = letters[at + 1:]
+                if letter in "i0v":
+                    continue
+                if letter in "uCPa":
+                    if not rest:
+                        if not queue:
+                            return None
+                        queue.pop(0)
+                    break
+                if letter == "S":
+                    if not rest:
+                        if not queue:
+                            return None
+                        rest = queue.pop(0)
+                    parts = env_split(rest)
+                    if parts is None:
+                        return None
+                    queue = [*parts, *queue]
+                    break
+                return None
+            continue
+        if ASSIGNMENT.match(word):
+            continue
+        return [word, *queue]
+    return []
 
 
 def command_waits(words: list[str], in_loop: bool) -> list[str]:
@@ -459,7 +539,7 @@ def command_waits(words: list[str], in_loop: bool) -> list[str]:
             return ["`gh pr checks --watch` waits on the checks in the foreground"]
         if arguments[:2] == ["run", "watch"]:
             return ["`gh run watch` waits on the run in the foreground"]
-    elif name in SHELLS:
+    elif is_shell(name):
         return [reason for i, word in enumerate(arguments[:-1]) if word.startswith("-") and "c" in word.lstrip("-")
                 for reason in waits(arguments[i + 1], in_loop)]
     elif name == "eval":
@@ -1110,7 +1190,7 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
                     changed = changed or f"`git {subcommand}`"
                     if subcommand in ("config", "branch", "remote"):  # each can change where a later push goes
                         moved = moved or f"`git {subcommand}`"
-        elif name in SHELLS or name == "eval":
+        elif is_shell(name) or name == "eval":
             for inner in shell_lines(name, program[1:]):
                 found = pushes(inner, cwd, depth + 1, changed, moved or wrapped)
                 refused, updates = refused + found[0], updates + found[1]
@@ -1375,7 +1455,7 @@ PROGRAM_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xf
                  b"\xca\xfe\xba\xbe", b"MZ")
 # A #! line's interpreter that is a shell, which reads the file as shell commands; any other, such as node or python,
 # runs a program the guard doesn't read (docs/safety.md says so).
-SHELL_NAME = re.compile(r"^(?:sh|bash|zsh|dash|ksh|mksh|ash|csh|tcsh|fish|busybox)(?:[0-9][0-9.]*)?$")
+SHELL_NAME = re.compile(rf"^(?:{'|'.join((*SHELLS, 'busybox'))})(?:[-_]?[0-9][0-9.]*)?$")
 # The #! interpreters that run a program, which the guard doesn't read but whose text it still scans for a push, a
 # merge or a kill. An interpreter it doesn't know is read as a shell: never skipped.
 KNOWN_PROGRAMS = re.compile(r"^(?:node|nodejs|deno|bun|tsx|ts-node|python[0-9.]*|pypy[0-9.]*|ruby[0-9.]*|perl[0-9.]*"
@@ -1408,13 +1488,15 @@ NESTED = "nests shells, evals or scripts deeper than the guard follows, so run t
 # container or another computer: a shell's name among their words runs nothing here. Any other program that names a
 # shell among its words, such as caffeinate, arch, xargs or find -exec, may run it, so the script guard refuses it.
 INERT = {"which", "type", "whereis", "whence", "hash", "file", "ls", "stat", "readlink", "realpath", "echo", "printf",
-         "cat", "head", "tail", "less", "more", "man", "info", "help", "apropos", "grep", "egrep", "fgrep", "rg", "ag",
-         "ack", "wc", "sort", "uniq", "cut", "tr", "sed", "basename", "dirname", "test", "[", "chsh", "chmod", "chown",
-         "touch", "mkdir", "rm", "rmdir", "cp", "mv", "ln", "brew", "apt", "apt-get", "dnf", "yum", "pacman", "port",
-         "apk", "pkg", "git", "gh", "jq", "yq", "diff", "cmp", "tee", "du", "df", "ps", "pgrep", "pidof", "id",
-         "whoami", "uname", "hostname", "date", "printenv", "tput", "stty", "true", "false", "shellcheck", "shfmt",
-         "colony", "docker", "podman", "kubectl", "ssh"}
-SHELL_WORD = re.compile(r"^(?:\S*/)?(?:sh|bash|zsh|dash|ksh|mksh|ash|csh|tcsh|fish|busybox)$")
+         "cat", "head", "tail", "info", "help", "apropos", "grep", "egrep", "fgrep", "rg", "ag", "ack", "wc", "sort",
+         "uniq", "cut", "tr", "basename", "dirname", "test", "[", "chsh", "chmod", "chown", "touch", "mkdir", "rm",
+         "rmdir", "cp", "mv", "ln", "jq", "yq", "diff", "cmp", "tee", "du", "df", "ps", "pgrep", "pidof", "id",
+         "whoami", "uname", "hostname", "date", "printenv", "tput", "stty", "true", "false", "shellcheck", "shfmt"}
+SHELL_WORD = re.compile(rf"^(?:\S*/)?(?:{'|'.join((*SHELLS, 'busybox'))})(?:[-_]?[0-9][0-9.]*)?$")
+# Programs whose words are a program of their own, which can run a command anywhere in it, such as sed's e command or
+# awk's system(): a shell's name anywhere in their words counts.
+TEXT_RUNNERS = {"sed", "gsed", "awk", "gawk", "nawk", "mawk"}
+SHELL_IN_TEXT = re.compile(rf"(?<![\w.-])(?:{'|'.join((*SHELLS, 'busybox'))})(?:[-_]?[0-9][0-9.]*)?(?![\w.-])")
 STDIN_REFUSAL = ("a shell on this line reads its script on standard input from something the guard can't read: save "
                  "the script to a file, read it, and run it as `sh <file>`")
 PLAIN_FOLDER = re.compile(r"^[^\s$`*?\[\]{}~'\"\\]+$|^~(?:/[^\s$`*?\[\]{}'\"\\]*)?$")  # a folder a cd names in full
@@ -1440,8 +1522,7 @@ def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str,
     def moved(done: list[str], after: str) -> str:
         """The folder after a finished command, followed by `after`."""
         program = run_program(done)
-        head = done[:len(done) - len(program)]
-        if any(word.partition("=")[0] in FOLDER_OPTIONS for word in head):
+        if moves_folder(done):
             return here  # a wrapper moves only its own command
         name = PurePath(program[0]).name if program else ""
         if name not in LINE_CHANGES:
@@ -1472,8 +1553,7 @@ def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str,
             stdin = descriptor == 0 or (descriptor is None and token.startswith("<"))
         elif token and set(token) <= PUNCTUATION:
             if words:
-                own = "" if any(w.partition("=")[0] in FOLDER_OPTIONS for w in words[:len(words) -
-                                                                                     len(run_program(words))]) else here
+                own = "" if moves_folder(words) else here
                 found.append((words, given, before, own, writes or writer(words)))
                 here = moved(words, token)
             if token == "(":
@@ -1484,10 +1564,17 @@ def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str,
         elif token not in ("{", "}"):
             words.append(token)
     if words:
-        own = "" if any(w.partition("=")[0] in FOLDER_OPTIONS for w in words[:len(words) - len(run_program(words))]) \
-            else here
+        own = "" if moves_folder(words) else here
         found.append((words, given, before, own, writes or writer(words)))
     return found
+
+
+def moves_folder(words: list[str]) -> bool:
+    """Whether a simple command's wrapper runs its program in another folder: -C, -D, --chdir and the rest
+    (FOLDER_OPTIONS), also inside a short option group such as env's -iC, or as a --chdir prefix."""
+    program = run_program(words)
+    head = words[:words.index(program[0])] if program and program[0] in words else words
+    return any(word.partition("=")[0] in FOLDER_OPTIONS or MOVING_GROUP.match(word) for word in head)
 
 
 def writer(words: list[str]) -> bool:
@@ -1531,7 +1618,7 @@ def script_named(program: list[str]) -> tuple[str, bool]:
     ("", False) for none."""
     if not program:
         return "", False
-    if PurePath(program[0]).name in SHELLS:
+    if is_shell(PurePath(program[0]).name):
         if program[1:2] and program[1] in SHELL_NO_SCRIPT:  # only first: later, it is the script's own argument
             return "", True
         skip, ended = False, False
@@ -1687,7 +1774,7 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
     for index, (words, given, before, here, _) in enumerate(segments):
         program = run_program(words)
         name = PurePath(program[0]).name if program else ""
-        if name in SHELLS or name == "eval":
+        if is_shell(name) or name == "eval":
             inner = shell_lines(name, program[1:])
             if inner:
                 if probe:
@@ -1697,8 +1784,15 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
                 else:
                     found += [item for text in inner for item in scripts(text, here or cwd, depth + 1)]
                 continue
-        named = next((word for word in program[1:] for part in word.split()[:1] if SHELL_WORD.fullmatch(part)), "")
-        if named and name not in SHELLS | INERT | SCRIPT_SOURCES and name != "eval":
+        if name == "env":  # env_command couldn't read env's options or its -S string
+            found.append(("script", "", "`env` holds an option or a string the guard can't read, so it can't tell what "
+                                        "env runs: run the command without env, or with plain options"))
+            continue
+        arguments = program[2:] if name in ("gh", "gh.exe") else program[1:]  # gh's first word names a subcommand
+        named = next((word for word in arguments for part in word.split()[:1] if SHELL_WORD.fullmatch(part)), "")
+        if not named and name in TEXT_RUNNERS:
+            named = next((hit[0] for word in arguments if (hit := SHELL_IN_TEXT.search(word))), "")
+        if named and not is_shell(name) and name not in INERT | SCRIPT_SOURCES and name != "eval":
             shell = PurePath(named.split()[0]).name
             found.append(("script", "", f"`{name}` names the shell `{shell}` among its words, and the guard can't tell "
                                         f"whether it runs it: run the shell as a command of its own, such as "
@@ -1784,7 +1878,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
     for words in simple_commands(line):
         program = run_program(words)
         name = PurePath(program[0]).name if program else ""
-        if name in SHELLS or name == "eval":
+        if is_shell(name) or name == "eval":
             found += [reason for inner in shell_lines(name, program[1:])
                       for reason in gh_merges(inner, cwd, depth + 1)]
             continue
@@ -1927,7 +2021,7 @@ def command_kills(program: list[str], searching: bool) -> list[str]:
         return ["`taskkill /IM` or `/FI` ends every process its name or filter matches"]
     if name in POWERSHELLS and POWERSHELL_KILL.search(" ".join(arguments)):
         return ["PowerShell's `Stop-Process -Name`, or a pipe into it, ends every process the name or search matches"]
-    if name in SHELLS:
+    if is_shell(name):
         return [reason for i, word in enumerate(arguments[:-1]) if word.startswith("-") and "c" in word.lstrip("-")
                 for reason in kills(arguments[i + 1])]
     if name == "eval":
@@ -1995,8 +2089,8 @@ def plain_line(command: str, kind: str, pattern: re.Pattern) -> str:
     commands = simple_commands(line)
     program = run_program(commands[0]) if len(commands) == 1 else []
     name = PurePath(program[0]).name if program else ""
-    if name in ("eval", "alias", "function", *SHELLS) or kind_of(program) != kind:
-        return f"`{name}` around it" if name in ("eval", "alias", "function", *SHELLS) else \
+    if name in ("eval", "alias", "function") or is_shell(name) or kind_of(program) != kind:
+        return f"`{name}` around it" if name in ("eval", "alias", "function") or is_shell(name) else \
             "words that only name it, as text does"
     return ""
 

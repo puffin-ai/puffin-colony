@@ -959,9 +959,26 @@ def test_the_ways_around_the_script_check_are_closed(command, which, on_feature)
     assert run.returncode == 2 and run.stderr.startswith(f"{which}: refused"), (command, run.stderr)
 
 
+@pytest.mark.parametrize("command", [
+    "env -iS 'bash push.sh'", "env -i -S 'bash push.sh'", "env --spl='bash push.sh'",  # getopt's own reading
+    "env -u FOO -S 'bash push.sh'", "env -S 'bash\\_push.sh'", "env --no-such-option bash push.sh",
+    "git rebase --exec 'bash push.sh' main", "sed -n '1e bash push.sh' notes.txt",  # programs that run commands
+    "awk 'BEGIN { system(\"bash push.sh\") }'", "ssh localhost bash push.sh", "brew install fish",
+    "bash5 push.sh", "rbash push.sh", "yash push.sh", "oksh push.sh", "loksh push.sh", "posh push.sh",
+    "ksh93 push.sh", "/usr/local/bin/bash-5.2 push.sh",
+])
+def test_env_options_programs_that_run_commands_and_more_shell_names_close_the_gaps(command, on_feature):
+    """Regression (security review of 3e2064c): env's bundled options, long-option prefixes and -S escapes hid the
+    command it runs; git, sed, awk, ssh and brew can run a shell named among their words; and shells with a version
+    suffix or a name the guard didn't list ran a script unread."""
+    executable(on_feature / "push.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2, (command, run.stderr)
+
+
 @pytest.mark.parametrize("command", ["command -v bash", "which bash", "type sh", "grep -rn bash scripts/",
-                                     "chsh -s /bin/zsh", "sed -i s/bash/zsh/ notes.txt", "bash --version",
-                                     "bash -lc 'echo hi'", "brew install fish"])
+                                     "chsh -s /bin/zsh", "echo use bash", "sed -i s/foo/bar/ notes.txt",
+                                     "bash --version", "bash -lc 'echo hi'"])
 def test_a_line_that_only_names_a_shell_runs(command, on_feature):
     run = push_guard(command, on_feature)
     assert (run.returncode, run.stderr) == (0, ""), command
