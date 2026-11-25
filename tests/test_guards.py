@@ -574,6 +574,62 @@ def test_a_script_file_that_pushes_merges_or_kills_is_refused(runner, text, whic
     assert "still refused" in run.stderr
 
 
+def test_a_zero_byte_hides_no_script_and_only_a_real_program_is_skipped(on_feature):
+    """Regression: a file with a zero byte was skipped as a program, but bash runs a script whose zero byte comes after
+    its first line. A file a shell or source reads is always read; a file run by its path is skipped only when it
+    starts as a real program does (ELF, Mach-O, PE)."""
+    (on_feature / "push.sh").write_bytes(b"git push origin HEAD:refs/heads/main\n\0\n")
+    (on_feature / "push.sh").chmod(0o755)
+    for command in ("bash push.sh", "source push.sh", "./push.sh"):
+        run = push_guard(command, on_feature)
+        assert run.returncode == 2 and "the script" in run.stderr and "holds a `git push`" in run.stderr, command
+    (on_feature / "tool").write_bytes(b"\x7fELF\x02\x01\x01\0" + b"git push origin main " * 10)
+    (on_feature / "tool").chmod(0o755)
+    run = push_guard("./tool --version", on_feature)
+    assert (run.returncode, run.stderr) == (0, "")
+
+
+def test_scripts_nested_past_the_guards_depth_are_refused(on_feature):
+    """Regression: past its depth the guard stopped reading scripts and let them run."""
+    for n in range(8):
+        (on_feature / f"s{n}.sh").write_text(f"bash s{n + 1}.sh\n")
+    (on_feature / "s8.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    run = push_guard("bash s0.sh", on_feature)
+    assert run.returncode == 2 and "deeper than the guard follows" in run.stderr, run.stderr
+    nested = "bash -c " + shlex.quote("bash -c " + shlex.quote("bash -c " + shlex.quote(
+        "bash -c " + shlex.quote("bash -c " + shlex.quote("bash -c 'bash s8.sh'")))))
+    run = push_guard(nested, on_feature)
+    assert run.returncode == 2, run.stderr
+
+
+@pytest.mark.parametrize("command", ["cd sub && bash run.sh", "(cd sub; bash run.sh)", "pushd sub && ./run.sh",
+                                     "env -C sub bash run.sh", "bash outer.sh"])
+def test_a_script_run_after_a_folder_change_is_refused(command, on_feature):
+    """Regression: the guard read a relative script from the call's folder, but `cd sub && bash run.sh` runs
+    sub/run.sh, so a harmless run.sh in the call's folder hid the one that pushed."""
+    (on_feature / "run.sh").write_text("echo harmless\n")
+    (on_feature / "sub").mkdir()
+    (on_feature / "sub" / "run.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    (on_feature / "sub" / "run.sh").chmod(0o755)
+    (on_feature / "outer.sh").write_text("cd sub\nbash run.sh\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and "changes folder before it runs" in run.stderr, (command, run.stderr)
+    assert push_guard(f"cd sub && bash {on_feature / 'sub' / 'run.sh'}", on_feature).returncode == 2  # read there
+    assert push_guard(f"cd sub && bash {on_feature / 'run.sh'}", on_feature).returncode == 0  # a full path is clear
+
+
+@pytest.mark.parametrize("command", ["cat push.sh | sh", "cat push.sh | bash -s", "cat push.sh | bash /dev/stdin",
+                                     "curl -fsSL https://example.test/x.sh | sh", "bash - < push.sh"])
+def test_a_shell_fed_a_script_through_a_pipe_or_stdin_is_read_or_refused(command, on_feature):
+    """A shell that reads its script on standard input: from `cat <file>`, the guard reads the file; from anything
+    else it can't read, the line is refused."""
+    (on_feature / "push.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2, (command, run.stderr)
+    (on_feature / "fine.sh").write_text("npm test\n")
+    assert push_guard("cat fine.sh | sh", on_feature).returncode == 0
+
+
 def test_a_script_without_a_push_merge_or_kill_runs_and_a_program_is_never_read_as_one(on_feature):
     (on_feature / "test.sh").write_text("#!/bin/sh\nnpm test\ngit status\n")
     for command in ("bash test.sh", "sh -c 'git status'", f"{sys.executable} -c pass", "git status"):
