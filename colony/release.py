@@ -615,9 +615,9 @@ def act(config: dict, args) -> int:
 
 
 def add_commands(sub) -> None:
-    """cli.py's route to the release workstream's commands: `release`, and `freeze`, `branches`, `step` and `plain`,
-    each registered by its own module."""
-    from colony import plain, steps
+    """cli.py's route to the release workstream's commands: `release`, and `freeze`, `branches`, `health`, `step` and
+    `plain`, each registered by its own module."""
+    from colony import health, plain, steps
 
     p = sub.add_parser("release", help="the lead: open the release pull request from the integration branch into the "
                                        "release branch, with a drafted description, or --after a person merged it, "
@@ -634,5 +634,5 @@ def add_commands(sub) -> None:
                    help="rewrite the open release pull request's description from the work and checks as they are now")
     p.add_argument("--dry-run", action="store_true", help="print the plan and run nothing")
     p.set_defaults(run=run)
-    for module in (freeze, branches, steps, plain):
+    for module in (freeze, branches, health, steps, plain):
         module.register(sub)
