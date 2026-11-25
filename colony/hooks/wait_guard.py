@@ -96,8 +96,9 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "stdbuf": (frozenset({"-i", "-o", "-e"}), 0),
     "time": (frozenset({"-f", "-o"}), 0),
     "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),
+    "busybox": (frozenset(), 0),  # busybox sh, busybox kill: the applet after it runs
 }
-SHELLS = {"sh", "bash", "zsh", "dash"}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "csh", "tcsh", "fish"}
 PYTHON = re.compile(r"^python(\d+(\.\d+)?)?$")
 PYTHON_SLEEP = re.compile(r"\bsleep\(\s*([^)]*?)\s*\)")
 PYTHON_LOOP = re.compile(r"\b(while|for)\b")
@@ -402,7 +403,8 @@ def without_repo_flag(arguments: list[str]) -> list[str]:
 
 
 def program_words(words: list[str]) -> list[str]:
-    """One simple command's words from the program it runs, past assignments, keywords and wrappers."""
+    """One simple command's words from the program it runs, past assignments, keywords and wrappers. `command -v`
+    runs nothing, and `env -S` splits its string into the command it runs."""
     index = 0
     while index < len(words):
         word = words[index]
@@ -415,7 +417,21 @@ def program_words(words: list[str]) -> list[str]:
         value_options, plain_words = WRAPPERS[name]
         index += 1
         while index < len(words) and words[index].startswith("-"):
-            index += 2 if words[index] in value_options else 1
+            option = words[index]
+            if name == "command" and option in ("-v", "-V"):
+                return []  # command -v names a program and runs none
+            if name == "env" and (option in ("-S", "--split-string") or option.startswith("--split-string=")
+                                  or (option.startswith("-S") and len(option) > 2)):
+                if option in ("-S", "--split-string"):
+                    value, rest = (words[index + 1] if index + 1 < len(words) else ""), words[index + 2:]
+                else:
+                    value, rest = option.partition("=")[2] if option.startswith("--") else option[2:], words[index + 1:]
+                try:
+                    parts = shlex.split(value)
+                except ValueError:
+                    parts = value.split()
+                return program_words([*parts, *rest])
+            index += 2 if option in value_options else 1
         index += plain_words
     return words[index:]
 
@@ -913,7 +929,7 @@ def shell_lines(name: str, arguments: list[str]) -> list[str]:
     if name == "eval":
         return [" ".join(arguments)]
     return [arguments[i + 1] for i, word in enumerate(arguments[:-1])
-            if word.startswith("-") and "c" in word.lstrip("-")]
+            if word.startswith("-") and not word.startswith("--") and "c" in word[1:]]  # -c, -ec, -lc; never --norc
 
 
 def fed(arguments: list[str], program: str, known: frozenset[str], words: set[str]) -> str:
@@ -1380,6 +1396,17 @@ HELD = (("push", RAW_PUSH, "a `git push`"), ("merge", RAW_MERGE, "a gh merge"), 
 # In a script's text the guard can't read as commands, what may run another script.
 RAW_SCRIPT = re.compile(r"(?<![\w.-])(?:bash|sh|zsh|dash|source|eval)(?![\w-])|(?:^|[\s;&|(])\.\s|(?:^|[\s;&|(])\.{0,2}/")
 NESTED = "nests shells, evals or scripts deeper than the guard follows, so run them plainly"
+# Programs that only look at their words, or run commands somewhere this clone's credentials aren't, such as a
+# container or another computer: a shell's name among their words runs nothing here. Any other program that names a
+# shell among its words, such as caffeinate, arch, xargs or find -exec, may run it, so the script guard refuses it.
+INERT = {"which", "type", "whereis", "whence", "hash", "file", "ls", "stat", "readlink", "realpath", "echo", "printf",
+         "cat", "head", "tail", "less", "more", "man", "info", "help", "apropos", "grep", "egrep", "fgrep", "rg", "ag",
+         "ack", "wc", "sort", "uniq", "cut", "tr", "sed", "basename", "dirname", "test", "[", "chsh", "chmod", "chown",
+         "touch", "mkdir", "rm", "rmdir", "cp", "mv", "ln", "brew", "apt", "apt-get", "dnf", "yum", "pacman", "port",
+         "apk", "pkg", "git", "gh", "jq", "yq", "diff", "cmp", "tee", "du", "df", "ps", "pgrep", "pidof", "id",
+         "whoami", "uname", "hostname", "date", "printenv", "tput", "stty", "true", "false", "shellcheck", "shfmt",
+         "colony", "docker", "podman", "kubectl", "ssh"}
+SHELL_WORD = re.compile(r"^(?:\S*/)?(?:sh|bash|zsh|dash|ksh|mksh|ash|csh|tcsh|fish|busybox)$")
 STDIN_REFUSAL = ("a shell on this line reads its script on standard input from something the guard can't read: save "
                  "the script to a file, read it, and run it as `sh <file>`")
 PLAIN_FOLDER = re.compile(r"^[^\s$`*?\[\]{}~'\"\\]+$|^~(?:/[^\s$`*?\[\]{}'\"\\]*)?$")  # a folder a cd names in full
@@ -1541,6 +1568,9 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
     if held:
         return held
     text = "\n".join(line for line in text.splitlines() if line.strip() != UV_INSTALL)  # Colony's own installer
+    parsed = parsed_findings(text, cwd)  # what the guards' own reading finds, past quotes the raw patterns miss
+    if parsed:
+        return parsed
     try:
         tokens(text)
     except ValueError:  # its text can't be read as commands: refuse when it may run another script
@@ -1550,6 +1580,20 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
         return [("script", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
     return [(kind, f"runs {inner}, which {what}" if inner else f"runs a line where {what}")
             for kind, inner, what in scripts(text, cwd, depth + 1)]
+
+
+def parsed_findings(text: str, cwd: str) -> list[tuple[str, str]]:
+    """(kind, what) for each push, merge or kill the guards' own reading of a script's text refuses, as they read a
+    line typed directly: a push, a merge or a kill the raw patterns miss, such as git "push" or pk''ill."""
+    try:
+        rewrites, merged = pushes(text, cwd)
+        merged = [*merged, *gh_merges(text, cwd)]
+        killed = kills(text)
+    except (ValueError, RecursionError):
+        return [("script", "holds commands the guard can't read")]
+    return [*(("push", f"holds a push the push guard refuses: {reason}") for reason in rewrites),
+            *(("merge", f"holds a command the merge guard refuses: {reason}") for reason in merged),
+            *(("kill", f"holds a kill the kill guard refuses: {reason}") for reason in killed)]
 
 
 def fed_files(segments: list[tuple[list[str], str, str, str]], index: int, given: str,
@@ -1595,6 +1639,13 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False) -> list
                 else:
                     found += [item for text in inner for item in scripts(text, here or cwd, depth + 1)]
                 continue
+        named = next((word for word in program[1:] for part in word.split()[:1] if SHELL_WORD.fullmatch(part)), "")
+        if named and name not in SHELLS | INERT | SCRIPT_SOURCES and name != "eval":
+            shell = PurePath(named.split()[0]).name
+            found.append(("script", "", f"`{name}` names the shell `{shell}` among its words, and the guard can't tell "
+                                        f"whether it runs it: run the shell as a command of its own, such as "
+                                        f"`{shell} <file>`"))
+            continue
         script, read_by_shell = script_named(program)
         if script and probe:
             return [("script", "", NESTED)]

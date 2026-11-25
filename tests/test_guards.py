@@ -905,6 +905,38 @@ def test_a_file_whose_shebang_names_a_shell_is_read_and_another_interpreter_is_a
         assert push_guard("./x", on_feature).returncode == 0, shebang  # a program, which the guard doesn't read
 
 
+@pytest.mark.parametrize("command, which", [
+    ("bash --norc push.sh", "push guard"), ("bash --restricted push.sh", "push guard"),
+    ("zsh --no-rcs push.sh", "push guard"), ("bash --norc merge.sh", "merge guard"),
+    ("bash --norc kill.sh", "kill guard"),  # a long option with a c in it is no -c: the file is still read
+    ("ksh push.sh", "push guard"), ("mksh push.sh", "push guard"), ("ash push.sh", "push guard"),
+    ("csh push.sh", "push guard"), ("tcsh push.sh", "push guard"), ("fish push.sh", "push guard"),
+    ("busybox sh push.sh", "push guard"),
+    ("env -S 'bash push.sh'", "push guard"),  # env splits its string into a command the guard reads
+    ("caffeinate -i bash push.sh", "script guard"), ("arch -arm64 bash push.sh", "script guard"),
+    ("echo push.sh | xargs bash", "script guard"), ("find . -name push.sh -exec bash {} ;", "script guard"),
+    ("bash quoted.sh", "push guard"), ("bash qmerge.sh", "merge guard"), ("bash qkill.sh", "kill guard"),
+])
+def test_the_ways_around_the_script_check_are_closed(command, which, on_feature):
+    """Regression (audit, Job B finding 2): a long option such as --norc read as -c, shells the guard didn't list, a
+    shell run by a program the guard doesn't know, and a script whose push, merge or kill only the parser sees, each
+    ran a script the guard never read."""
+    for name, text in (("push.sh", "git push origin HEAD:refs/heads/main"), ("merge.sh", "gh pr merge 5"),
+                       ("kill.sh", "pkill -f 'colony wait'"), ("quoted.sh", 'git "push" origin HEAD:refs/heads/main'),
+                       ("qmerge.sh", 'gh pr "merge" 5'), ("qkill.sh", "pk''ill -f x")):
+        (on_feature / name).write_text(f"#!/bin/sh\n{text}\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and run.stderr.startswith(f"{which}: refused"), (command, run.stderr)
+
+
+@pytest.mark.parametrize("command", ["command -v bash", "which bash", "type sh", "grep -rn bash scripts/",
+                                     "chsh -s /bin/zsh", "sed -i s/bash/zsh/ notes.txt", "bash --version",
+                                     "bash -lc 'echo hi'", "brew install fish"])
+def test_a_line_that_only_names_a_shell_runs(command, on_feature):
+    run = push_guard(command, on_feature)
+    assert (run.returncode, run.stderr) == (0, ""), command
+
+
 def test_a_script_without_a_push_merge_or_kill_runs_and_a_program_is_never_read_as_one(on_feature):
     (on_feature / "test.sh").write_text("#!/bin/sh\nnpm test\ngit status\n")
     for command in ("bash test.sh", "sh -c 'git status'", f"{sys.executable} -c pass", "git status"):
