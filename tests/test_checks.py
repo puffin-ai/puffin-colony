@@ -582,6 +582,20 @@ def test_ci_deletes_its_branch_only_while_origin_still_holds_the_commit_it_pushe
     # A branch still at the commit it pushed is deleted: test_ci_says_how_to_start_it_when_no_check_ever_shows.
 
 
+def test_a_profiles_time_cap_shortens_a_checks_budget_the_stricter_wins(config):
+    """Regression: tests.time_cap_minutes in a profile only became a sentence in the prompts, while a check's budget,
+    how long it blocks before it goes on in the background, came from [checks] budgets alone."""
+    from colony import profile
+
+    config["checks"] = {"budgets": {"full": 600, "fast": 30}}
+    assert (checks.check_budget(config, "full"), checks.check_budget(config, "fast")) == (600, 30)
+    (profile.config_home() / profile.PERSONAL_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (profile.config_home() / profile.PERSONAL_FILE).write_text("[tests]\ntime_cap_minutes = 2\n")
+    assert (checks.check_budget(config, "full"), checks.check_budget(config, "fast")) == (120, 30)
+    config["checks"] = {"budgets": {"full": 0}}
+    assert checks.check_budget(config, "full") == 0  # never blocking is already stricter than any cap
+
+
 # Settings and the command line
 
 

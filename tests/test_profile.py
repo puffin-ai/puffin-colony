@@ -543,3 +543,19 @@ def test_the_docs_name_every_key_and_every_command():
                     "profile resolve", "profile import", "profile init", "prefer add", "prefer list",
                     "prefer remove"):
         assert f"`colony {command}" in commands, command
+
+
+def test_setup_says_merges_are_colony_tomls_and_prints_the_change_for_branches(home, capsys, monkeypatch):
+    """Regression: setup asked whether agents may merge, and a `branches` answer went into the profile alone, which
+    no merge guard reads: every merge was then refused, with the lead's orders saying yes. Setup now says only
+    [safety] merge_into on the default branch allows a merge, and prints that change for a reviewed pull request."""
+    monkeypatch.setattr(profile.portable, "is_terminal", lambda stream: False)
+    assert profile.setup_cmd(argparse.Namespace(person="ana", set=None, defaults=False, again=False)) == 0
+    asked = capsys.readouterr().out
+    assert "only [safety] merge_into in .colony/colony.toml, on the repo's default branch, lets an agent merge" in asked
+    assert profile.setup_cmd(argparse.Namespace(person="ana", set=["merge.policy=branches",
+                                                                   "merge.branches=dev, release/*"],
+                                                defaults=False, again=False)) == 0
+    out = capsys.readouterr().out
+    assert '[safety]\nmerge_into = ["dev", "release/*"]' in out
+    assert "in .colony/colony.toml, through a reviewed pull request into the default branch" in out

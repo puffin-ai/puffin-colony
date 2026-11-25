@@ -138,8 +138,11 @@ def policy(config: dict) -> Policy:
     if not isinstance(scan, list) or not all(isinstance(item, str) and item.strip() for item in scan):
         raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] scan_folders is a list of folders, such as "
                               '["~/.claude", "~/.claude-*"]')
+    from colony import profile  # a profile's pool.max_busy binds placement too, the stricter of the two
+
+    busy = profile.stricter(config, "pool.max_busy", number(table, "max_busy", 3, 1, whole=True))
     return Policy(order, number(table, "out_at", 95, 1, 100), number(table, "near_at", 80, 1, 100),
-                  number(table, "near_hours", 1, 0), frozenset(reserve), number(table, "max_busy", 3, 1, whole=True),
+                  number(table, "near_hours", 1, 0), frozenset(reserve), busy,
                   number(table, "wave", 3, 1, whole=True), number(table, "wave_seconds", 60, 0),
                   # a reading is fetched again once it is cli.USAGE_STALE old, so a shorter limit would never be met
                   stale_minutes=number(table, "stale_minutes", 15, cli.USAGE_STALE / 60),
@@ -148,8 +151,12 @@ def policy(config: dict) -> Policy:
 
 
 def cap(config: dict, name: str, pool: Policy) -> int:
-    """The most helpers one account runs at once: its own max_busy, else [pool] max_busy."""
-    return number(config["accounts"][name], "max_busy", pool.max_busy, 1, whole=True, where=f"[accounts.{name}]")
+    """The most helpers one account runs at once: its own max_busy, else [pool] max_busy, and never more than a
+    profile's pool.max_busy."""
+    from colony import profile
+
+    own = number(config["accounts"][name], "max_busy", pool.max_busy, 1, whole=True, where=f"[accounts.{name}]")
+    return profile.stricter(config, "pool.max_busy", own)
 
 
 _readings: dict[str, tuple[float, dict]] = {}  # each usage_command's last output in this process, and when
@@ -1284,12 +1291,16 @@ def machine_policy(config: dict) -> MachinePolicy:
     w = "[machine]"
     default = MachinePolicy()
     helpers = config.get("project", {}).get("max_builders", default.max_helpers)
+    from colony import profile  # a profile's machine limits bind too, the stricter of the two
+
+    def limit(key: str, value):
+        return profile.stricter(config, f"machine.{key}", value)
     return MachinePolicy(*(number(table, key, getattr(default, key), 0.1, where=w) for key in MACHINE_KEYS[:5]),
                          number(table, "keep_free_gb", default.keep_free_gb, 0, where=w),
                          number(table, "keep_free_disk_gb", default.keep_free_disk_gb, 0, where=w),
-                         number(table, "busy_load", default.busy_load, 0.1, where=w),
-                         number(table, "max_helpers", helpers, 0, whole=True, where=w),
-                         number(table, "max_tests", None, 1, whole=True, where=w),
+                         limit("busy_load", number(table, "busy_load", default.busy_load, 0.1, where=w)),
+                         limit("max_helpers", number(table, "max_helpers", helpers, 0, whole=True, where=w)),
+                         limit("max_tests", number(table, "max_tests", None, 1, whole=True, where=w)),
                          number(table, "max_builds", None, 1, whole=True, where=w))
 
 

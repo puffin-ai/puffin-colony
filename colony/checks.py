@@ -169,6 +169,16 @@ def delete_ci_branch(root: Path, made: str, sha: str) -> None:
                check=False)
 
 
+def check_budget(config: dict, kind: str) -> float:
+    """How long a check of this kind blocks before it goes on in the background: [checks] budgets, and never more
+    than a profile's tests.time_cap_minutes. 0, never blocking, is already the strictest."""
+    from colony import profile
+
+    seconds = float(settings(config)["budgets"].get(kind, 0))
+    cap = profile.limit(config, "tests.time_cap_minutes")
+    return min(seconds, cap * 60) if seconds and cap is not None else seconds
+
+
 def validate(config: dict) -> None:
     """Refuse `[checks]` and `[ci]` settings this version can't run, naming the key in one line."""
     s, areas = settings(config), batch.check_areas(config)
@@ -926,7 +936,7 @@ def run_scoped(config: dict, root: Path, plan: Plan, *, kind: str, label: str, a
     if state.get("joined"):
         print(f"joining {state['id']}, which already runs this check on this same code", flush=True)
     wait = getattr(args, "wait", None)
-    budget = float(settings(config)["budgets"].get(kind, 0) if wait is None else wait)
+    budget = check_budget(config, kind) if wait is None else float(wait)
     if budget == 0:  # a budget of 0 leaves the run in the background at once
         state = load(run_files(runs_dir(config), state["id"])[0]) or state
     else:
@@ -993,15 +1003,15 @@ def check_run(config: dict, args) -> int:
 def status_lines(config: dict, limit: int = 8, running_only: bool = False) -> list[str]:
     """One line per check run on this computer, the running ones first, then the newest ended ones: what it checks,
     where, how long it has run against its budget, and its first failure."""
-    budgets, lines = settings(config)["budgets"], []
+    lines = []
     runs = all_runs(config)
     shown = [s for s in runs if s.get("status") in RUNNING]
     shown += [] if running_only else [s for s in runs if s.get("status") not in RUNNING]
     for s in shown[:limit]:
         started = s.get("started") or s.get("created", time.time())
         took = (s.get("ended") or time.time()) - started
-        budget = budgets.get(s.get("kind"), 0)
-        over = " (over its budget)" if s.get("status") in RUNNING and budget and took > budget else ""
+        allowed = check_budget(config, s.get("kind"))
+        over = " (over its budget)" if s.get("status") in RUNNING and allowed and took > allowed else ""
         first = f", first failure: {s['first_failure']}" if s.get("first_failure") else ""
         why = f", {s['why']}" if s.get("why") and s.get("status") != "fail" else ""
         if s.get("waiting") and s.get("status") in RUNNING:

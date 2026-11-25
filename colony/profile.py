@@ -776,6 +776,44 @@ def load(root=None, person: str | None = None, *, config: dict | None = None, se
 # Rendering
 
 
+# The limits Colony's own commands share with colony.toml: they take the stricter, the smaller, of the two.
+LIMITS = ("pool.max_busy", "machine.max_helpers", "machine.max_tests", "machine.busy_load", "tests.time_cap_minutes")
+LIMIT_FRESH = 60  # seconds one process keeps the merged profile it read for limit(), unless a profile file changes
+_limits: dict[tuple, tuple[float, Profile | None]] = {}
+
+
+def limit(config: dict, name: str) -> int | float | None:
+    """A number a profile sets for one of LIMITS, which a command takes with colony.toml's own, the stricter of the
+    two; None when no profile sets it, or the profiles can't be read, so colony.toml decides alone. A default no one
+    wrote never counts. One process reads the merged profile again once a profile file on this computer changes, and
+    at least once a minute, for the team's, so a long run such as a wait sees a change soon."""
+    if name not in LIMITS:
+        raise ValueError(f"{name} is no limit a command reads")
+    project = str((config.get("project") or {}).get("name") or "")
+    home = config_home()
+    files = [*home.glob("*.toml"), *home.glob(f"{PEOPLE_DIR}/*.toml")]
+    held_session = session_path(project or None)
+    files += [held_session] if held_session else []
+    stamps = tuple(sorted((str(path), path.stat().st_mtime_ns) for path in files if path.is_file()))
+    key = (project, str(home), os.environ.get(cli.PERSON_ENV, ""), os.getcwd(), stamps)
+    now = time.monotonic()
+    held = _limits.get(key)
+    if held is None or now - held[0] > LIMIT_FRESH:
+        try:
+            merged = load(config=config)
+        except (cli.ColonyError, OSError, ValueError):
+            merged = None
+        held = _limits[key] = (now, merged)
+    value = held[1].value(name) if held[1] is not None else None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def stricter(config: dict, name: str, value):
+    """colony.toml's `value` for one of LIMITS, or the profile's when that is smaller (limit)."""
+    found = limit(config, name)
+    return value if found is None or (value is not None and value <= found) else found
+
+
 def say(setting: Setting, profile: Profile) -> str:
     """One setting as the order a session follows."""
     key = setting.key
@@ -888,7 +926,9 @@ QUESTIONS = (
     Question("tests.full_suite", "When should the full test suite run: change (after every change), batch (once per "
              "batch) or release (only at release; the tests for the changed code otherwise)?"),
     Question("merge.policy", "May agents merge: pr (no, they open pull requests and you merge) or branches (yes, into "
-             "branches you name)?"),
+             "branches you name)? This is advice to your leads: only [safety] merge_into in .colony/colony.toml, on "
+             "the repo's default branch, lets an agent merge, so for branches setup prints that change for you to "
+             "make through a reviewed pull request."),
     Question("decisions.never_raise", "Any topics agents should never raise with you? Comma-separated."),
     Question("budgets.dollars_per_day", "The most a session may spend a day on paid services and model calls "
              "without asking you, in dollars?"),
@@ -1374,9 +1414,21 @@ def setup_cmd(args) -> int:
     note = privacy_note(path)
     if note:
         print(f"Note: {note}.")
+    branches = answers.get("merge.branches") if answers.get("merge.policy") == "branches" else None
+    if branches:
+        print(merge_change(branches))
     print(f"Next: `{cli.NAME} profile import` finds preferences in your agent tool's memory and instruction files, "
           "and adds each one only after your yes.")
     return 0
+
+
+def merge_change(branches: list[str]) -> str:
+    """What lets agents merge into the branches a person named: the colony.toml change, since the merge guard reads
+    [safety] merge_into on the repo's default branch alone, never a profile."""
+    listed = ", ".join(json.dumps(branch) for branch in branches)
+    return (f"Merges into {', '.join(branches)} are allowed only once [safety] merge_into names them in "
+            f".{cli.NAME}/{cli.CONFIG_NAME}, through a reviewed pull request into the default branch. The profile "
+            f"only tells your leads. Add this, and merge it:\n\n[safety]\nmerge_into = [{listed}]\n")
 
 
 def ask_setup(defaults: dict) -> dict:

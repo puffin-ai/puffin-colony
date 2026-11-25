@@ -86,6 +86,10 @@ Colony writes `[person] name`, whose profile it is, and `[person] setup`, the da
 
 The `pool.*` and `machine.*` keys have the names and units of the same keys in `colony.toml`'s `[pool]` and `[machine]` tables, so one name means one thing in both places.
 
+**Which orders Colony's own commands follow.** Most keys are orders for your leads and helpers, in their prompts. Five are limits Colony's commands also enforce, together with `colony.toml`: `pool.max_busy`, `machine.max_helpers`, `machine.max_tests`, `machine.busy_load` and `tests.time_cap_minutes`. When a profile sets one, placement, this computer's limits and a check's time budget take the stricter of the two, the smaller number; a key no profile sets changes nothing. The other `pool.*` keys guide your leads, and `colony.toml`'s `[pool]` decides where a helper opens.
+
+**Merging is `colony.toml`'s alone.** `merge.policy` and `merge.branches` tell your leads what you want, and nothing more: the merge guard lets an agent merge only into a branch `[safety] merge_into` names in `.colony/colony.toml` on the repo's default branch ([safety.md](safety.md#the-merge-guard)). When you answer `branches` in setup, it prints the exact `[safety] merge_into` change for you to make through a reviewed pull request; until that merges, agents open pull requests.
+
 For a choice, the stricter value is the one listed first: `ask` before `routine`, `hold` before `default`, `change` before `batch`, `pr` before `branches`, `show` before `start`.
 
 ## Modes

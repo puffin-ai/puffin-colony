@@ -164,6 +164,30 @@ def running(name: str, folder: Path, kind="background", state="idle", session="s
             "config_dir": str(folder), "cwd": str(folder), **more}
 
 
+def personal_limits(text: str) -> None:
+    """A personal profile with these settings, the one a session's commands read (profile.limit)."""
+    from colony import profile
+
+    (profile.config_home() / profile.PERSONAL_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (profile.config_home() / profile.PERSONAL_FILE).write_text(text)
+
+
+def test_a_profiles_busy_cap_and_machine_limits_bind_colonys_own_commands_the_stricter_wins(host):
+    """Regression: pool.max_busy and the machine limits in a profile only became sentences in a lead's prompt, while
+    placement and the computer's limits read colony.toml alone, so `colony helpers 6 --open` placed three per account
+    when the orders said two. The commands now take the stricter of the two; a key no profile sets changes nothing."""
+    config = load()
+    assert capacity.policy(config).max_busy == 3 and capacity.machine_policy(config).max_tests is None
+    personal_limits("[pool]\nmax_busy = 2\n[machine]\nmax_helpers = 1\nmax_tests = 1\nbusy_load = 0.5\n")
+    config = load()
+    assert capacity.policy(config).max_busy == 2 and capacity.cap(config, "main", capacity.policy(config)) == 2
+    machine = capacity.machine_policy(config)
+    assert (machine.max_helpers, machine.max_tests, machine.busy_load) == (1, 1, 0.5)
+    config = load("[pool]\nmax_busy = 1\n[machine]\nmax_tests = 3\n")
+    assert capacity.policy(config).max_busy == 1  # colony.toml's is the stricter here
+    assert capacity.machine_policy(config).max_tests == 1
+
+
 def test_busy_counts_each_accounts_helpers_here_and_on_other_computers_once(home):
     config = {"project": {"name": "demo"}, "accounts": {"main": {"config_dir": str(home / "main"), "person": "ana"},
                                                         "team": {"config_dir": str(home / "team"), "person": "ana"}}}
