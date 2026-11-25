@@ -1297,3 +1297,47 @@ def test_upgrade_refresh_rewrites_the_copied_files_and_the_role_skills_the_repo_
 def test_a_here_documents_body_on_a_line_whose_quoting_cant_be_read_holds_no_kill_or_merge():
     unreadable = """echo "$(echo 'a"b')"; cat <<EOF > notes.md\npkill -f x, then gh pr merge 5\nEOF"""
     assert guard(json.dumps({"tool_input": {"command": unreadable}})).returncode == 0
+
+
+# A `<<` counts as a here-document only where the shell reads commands, and its body only up to an exact terminator:
+# text that merely looks like one never hides the lines after it from any guard.
+UNREADABLE = """echo "$(echo 'a"b')" """
+FAKE_HEREDOCS = [
+    'echo "<<EOF"\n{hidden}',  # the << is in double quotes
+    "echo '<<EOF'\n{hidden}",  # in single quotes
+    "# <<EOF\n{hidden}",  # in a comment
+    UNREADABLE + '"<<EOF"\n{hidden}',  # on a line whose quoting can't be read
+    "cat <<EOF\n{hidden}",  # a here-document with no terminator
+    "cat <<EOF\n{hidden}\nEOF ",  # a terminator line that isn't the delimiter exactly
+    "cat <<-EOF\n{hidden}\n  EOF",  # <<- strips leading tabs alone
+    UNREADABLE + "; cat <<EOF\n{hidden}",
+]
+
+
+@pytest.mark.parametrize("fake", FAKE_HEREDOCS)
+def test_a_fake_here_document_hides_no_kill(fake):
+    run = guard(json.dumps({"tool_input": {"command": fake.format(hidden="pkill -f x")}}))
+    assert run.returncode == 2 and run.stderr.startswith("kill guard: refused, "), (fake, run.stderr)
+
+
+@pytest.mark.parametrize("fake", FAKE_HEREDOCS)
+def test_a_fake_here_document_hides_no_merge(fake, hosted):
+    run = push_guard(fake.format(hidden="gh pr merge 5"), hosted)
+    assert merge_refused(run), (fake, run.stderr)
+
+
+@pytest.mark.parametrize("fake", FAKE_HEREDOCS[:3])
+def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
+    assert merge_refused(push_guard(fake.format(hidden="git push origin main"), hosted))
+    assert guard(json.dumps({"tool_input": {"command": fake.format(hidden="sleep 600")}})).returncode == 2
+
+
+@pytest.mark.parametrize("command", [
+    "cat <<-EOF\n\tpkill -f x\n\tEOF",
+    "git commit -m \"$(cat <<'EOF'\nfeat: refuse pkill and gh pr merge 5\n\nkill $(pgrep x) too\nEOF\n)\"",
+    "echo $((1 << 2)); cat <<<'pkill x'",
+    "(( n = 1 << 3 )); echo $n",
+])
+def test_a_real_here_document_or_shift_still_reads_as_text(command):
+    run = guard(json.dumps({"tool_input": {"command": command}}))
+    assert (run.returncode, run.stderr) == (0, ""), command

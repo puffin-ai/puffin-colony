@@ -90,8 +90,9 @@ PYTHON = re.compile(r"^python(\d+(\.\d+)?)?$")
 PYTHON_SLEEP = re.compile(r"\bsleep\(\s*([^)]*?)\s*\)")
 PYTHON_LOOP = re.compile(r"\b(while|for)\b")
 GH_REPO_FLAGS = {"-R", "--repo"}
-# A here-document's operator and its delimiter, quoted or not; <<< is a here-string, which has no body.
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# A here-document's operator, - for <<-, and its delimiter: in single quotes, in double quotes, or bare (split_heredocs
+# skips <<<, a here-string, which has no body).
+HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_][A-Za-z0-9_.-]*))")
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 DURATION = re.compile(r"^(\d+(?:\.\d*)?|\.\d+)([smhd]?)$")
 UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -205,18 +206,127 @@ def sleep_seconds(arguments: list[str]) -> float | None:
     return total
 
 
-def without_heredoc_bodies(command: str) -> str:
-    """The command line without the body lines of its here-documents."""
-    kept: list[str] = []
-    pending: list[str] = []
-    for line in command.split("\n"):
-        if pending:
-            if line.strip() == pending[0]:
-                pending.pop(0)
+def split_heredocs(command: str) -> tuple[str, bool]:
+    """The command line without the bodies of its here-documents, and whether every body ended at its terminator.
+
+    A `<<` opens a here-document only where the shell reads commands: outside single and double quotes and comments,
+    or inside a $(...) or `...`, even one within double quotes, as in git commit -m "$(cat <<'EOF' ... EOF)". So text
+    that only looks like one, such as "<<EOF" in quotes, never hides the lines after it. A body starts on the line
+    after its opener's and ends at a line that is its delimiter exactly, after leading tabs alone for <<-. A body
+    that never ends counts as not ended, and its lines stay in the text."""
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []  # each opened here-document's delimiter, and whether it is <<-
+    stack: list[str] = []  # the quotes and substitutions the scan is inside
+    at, size, word_start = 0, len(command), True
+    while at < size:
+        char, top = command[at], stack[-1] if stack else ""
+        if top == "'":
+            stack.pop() if char == "'" else None
+            out.append(char)
+            at += 1
             continue
-        kept.append(line)
-        pending = [match[2] for match in HEREDOC.finditer(line)]
-    return "\n".join(kept)
+        if top == "((":  # arithmetic, where << shifts bits
+            if command.startswith("))", at):
+                stack.pop()
+                out.append("))")
+                at += 2
+            else:
+                out.append(char)
+                at += 1
+            continue
+        if char == "\\":
+            out.append(command[at:at + 2])
+            at += 2
+            word_start = False
+            continue
+        if top == '"':
+            if command.startswith("$((", at):
+                stack.append("((")
+                out.append("$((")
+                at += 3
+                continue
+            if command.startswith("$(", at):
+                stack.append("$(")
+                out.append("$(")
+                at += 2
+                continue
+            if char == '"':
+                stack.pop()
+            elif char == "`":
+                stack.append("`")
+            out.append(char)
+            at += 1
+            continue
+        if char == "\n" and pending:  # the bodies start on the next line, one after another
+            out.append(char)
+            at += 1
+            while pending:
+                delimiter, tabs = pending.pop(0)
+                while True:
+                    if at >= size:
+                        return command, False  # no terminator: nothing counts as a body
+                    end = command.find("\n", at)
+                    end = size if end == -1 else end
+                    line, at = command[at:end], end + 1
+                    if (line.lstrip("\t") if tabs else line) == delimiter:
+                        break
+            word_start = True
+            continue
+        if char == "#" and word_start:  # a comment, to the end of its line
+            end = command.find("\n", at)
+            end = size if end == -1 else end
+            out.append(command[at:end])
+            at = end
+            continue
+        if command.startswith("<<<", at):  # a here-string, which has no body
+            out.append("<<<")
+            at += 3
+            word_start = False
+            continue
+        arithmetic = 3 if command.startswith("$((", at) else 2 if command.startswith("((", at) and word_start else 0
+        if arithmetic:
+            stack.append("((")
+            out.append(command[at:at + arithmetic])
+            at += arithmetic
+            continue
+        opener = HEREDOC.match(command, at) if command.startswith("<<", at) else None
+        if opener:
+            delimiter = next(part for part in (opener[2], opener[3], opener[4]) if part is not None)
+            pending.append((delimiter, opener[1] == "-"))
+            out.append(opener[0])
+            at = opener.end()
+            word_start = False
+            continue
+        if char in "'\"":
+            stack.append(char)
+        elif char == "`":
+            stack.pop() if top == "`" else stack.append("`")
+        elif command.startswith("$(", at):
+            stack.append("$(")
+            out.append("$(")
+            at += 2
+            word_start = True
+            continue
+        elif char == "(":
+            stack.append("(")
+        elif char == ")" and top in ("$(", "("):
+            stack.pop()
+        out.append(char)
+        at += 1
+        word_start = char in " \t\n;&|()"
+    return "".join(out), not pending
+
+
+def without_heredoc_bodies(command: str) -> str:
+    """The command line without the bodies of its here-documents (split_heredocs)."""
+    return split_heredocs(command)[0]
+
+
+def raw_text(command: str) -> str:
+    """The text a guard scans in a line whose quoting can't be read: the line without its here-documents' bodies
+    when each one ended at its terminator, else the whole line, so a body that may be no body hides nothing."""
+    text, ended = split_heredocs(command)
+    return text if ended else command
 
 
 def python_waits(code: str) -> list[str]:
@@ -321,8 +431,13 @@ def operators(run: str) -> list[str]:
 
 
 def tokens(command: str) -> list[str]:
-    """The command line's words and operators. Raises ValueError when its quoting can't be read."""
-    lexer = shlex.shlex(without_heredoc_bodies(command).replace("\n", ";"), posix=True, punctuation_chars=True)
+    """The command line's words and operators. Raises ValueError when its quoting can't be read, or a here-document
+    has no terminator line. Each newline stays before the `;` that stands for it, so a comment ends with its line, as
+    the shell ends it, and never hides the lines after it."""
+    text, ended = split_heredocs(command)
+    if not ended:
+        raise ValueError("a here-document has no terminator line")
+    lexer = shlex.shlex(text.replace("\n", "\n;"), posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     found: list[str] = []
     for token in lexer:
@@ -333,7 +448,7 @@ def tokens(command: str) -> list[str]:
 def raw_sleeps(command: str) -> list[str]:
     """The long sleeps in a line whose quoting can't be read, found in its plain text."""
     found = []
-    for argument in RAW_SLEEP.findall(without_heredoc_bodies(command)):
+    for argument in RAW_SLEEP.findall(raw_text(command)):
         seconds = sleep_seconds([argument])
         if seconds is not None and seconds > MAX_SLEEP_SECONDS:
             found.append(f"`sleep {argument}` waits {seconds:g} seconds in the foreground")
@@ -1160,7 +1275,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        text = without_heredoc_bodies(command)  # a body is text a command reads, such as a commit message
+        text = raw_text(command)  # a body that ended at its terminator is text a command reads
         if re.search(r"(?<![\w.-])gh(?![\w-])", text) and "merge" in text.lower():
             return ["this line's quoting could not be read and it holds a gh merge, so run the merge as a command of "
                     "its own"]
@@ -1318,7 +1433,7 @@ def kills(command: str) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        if RAW_KILL.search(without_heredoc_bodies(command)):
+        if RAW_KILL.search(raw_text(command)):
             return ["this line's quoting could not be read and it holds a kill, so run the kill as a command of its "
                     "own"]
         return []
