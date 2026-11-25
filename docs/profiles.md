@@ -80,15 +80,32 @@ Colony writes `[person] name`, whose profile it is, and `[person] setup`, the da
 | `merge.branches` | list | only what both name applies | The branches agents may merge into |
 | `writing.style` | text | both apply | How agents write messages, docs, commits and pull requests |
 | `writing.language` | text | you are asked once | The language a lead writes to you in |
-| `budgets.dollars_per_day` | dollars | the smaller wins | The most a session spends a day on paid services and model calls without your yes |
+| `budgets.dollars_per_day` | dollars | the smaller wins | The most a session spends a day on paid services and model calls without your yes. `colony spend` checks it |
+| `intake.plan` | `show` or `start` | the stricter wins | Whether a lead shows you its plan for a request, its task groups, owners and done-when results, and waits for your yes, or starts at once and posts the plan for the record |
+| `decisions.gates` | list | both apply | Kinds of work drafted first and built only after your yes on the draft, such as new screens or schema changes |
 
 The `pool.*` and `machine.*` keys have the names and units of the same keys in `colony.toml`'s `[pool]` and `[machine]` tables, so one name means one thing in both places.
 
-For a choice, the stricter value is the one listed first: `ask` before `routine`, `hold` before `default`, `change` before `batch`, `pr` before `branches`.
+For a choice, the stricter value is the one listed first: `ask` before `routine`, `hold` before `default`, `change` before `batch`, `pr` before `branches`, `show` before `start`.
+
+## Modes
+
+A mode is a named bundle of these settings and rules, switched on with one word. `colony mode speed` switches the speed mode on for this session, `colony mode speed --personal` for every session, and `colony mode off` switches it off. When your whole message to a lead is a mode's name, such as `unattended` or `mode unattended`, the prompt hook tells the lead to switch it on. `colony mode` lists the modes, and `colony mode show <name>` shows what one sets. The briefing a lead starts with names the active mode.
+
+Colony ships four:
+
+| Mode | What it sets |
+| --- | --- |
+| `orchestrator` | `team.shape = "orchestrator"` and a 10-minute check: one lead per task group, each with its own helpers, reporting to you, and nothing idle |
+| `unattended` | `decisions.autonomy = "unattended"`, `decisions.without_answer = "default"` and a quiet lead: leads decide alone, log each decision, and ask you only about scope |
+| `plan-first` | `intake.plan = "show"`: you see every plan before work starts |
+| `speed` | `tests.full_suite = "release"`, a 5-minute check cap and a quiet lead: only the tests for what changed, and each done line names what went unchecked |
+
+**Your own modes.** A mode is a TOML file in this page's format, with an optional `description`. `colony mode define <name> --set <key>=<value> … --rule "<rule>" … --about "<what it is for>"` writes yours to `modes/<name>.toml` in your user config folder. `--team` writes the team's to `.colony/modes/<name>.toml` instead, which, like the team profile, takes effect when its pull request merges. Your own mode beats the team's of the same name, and the team's beats Colony's. A mode never sets `mode` or `person.*`.
 
 ## How the levels combine
 
-On your side, a session setting beats a mode's, and a mode's beats your personal profile. The team profile applies to everyone, and where it and your side disagree, the key's rule in the table above decides:
+On your side, a session setting beats a mode's, and a mode's beats your personal profile. The active mode is the one your session settings name, else your personal profile's `mode`. The team profile applies to everyone, and where it and your side disagree, the key's rule in the table above decides:
 
 - **The stricter wins**, for a choice with an order, such as `decisions.autonomy`.
 - **The smaller wins**, for a limit, such as `machine.max_helpers`.
@@ -133,6 +150,6 @@ Each person's leads follow that person's profile, and the team profile applies t
 
 `colony/profile.py` has a small Python API, described in its docstring:
 
-- `load(root=None, person=None, *, config=None, session=True, layers=(), team_only=False)` returns the merged `Profile` for one session. `layers` takes extra levels, such as a mode's bundle built with `layer_from`, that sit between the personal profile and the session.
+- `load(root=None, person=None, *, config=None, session=True, layers=(), team_only=False)` returns the merged `Profile` for one session, with the active mode's bundle between the personal profile and the session (`boot.mode_layer`). `layers` takes other levels, built with `layer_from`, in its place.
 - `render(profile, role="lead")` returns the standing-order text for a lead's or a helper's start prompt.
 - `show_lines(profile)`, `needs_setup(person)`, `QUESTIONS`, `change_lines(config, me)`, `watcher(config, me)` and `looks_secret(text)` cover the rest.
