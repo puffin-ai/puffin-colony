@@ -38,7 +38,7 @@ search of the running processes on the same line, such as `kill $(pgrep -f x)`, 
 `ps` output. It also refuses `kill -1`, `kill 0` and a negative id, which signal every process or a whole group. A
 pattern matches more than anyone means: on macOS, `pkill -f "colony wait" -U $(id -u) -n` reads each word after the
 pattern as one more pattern, and ended every Claude Code session on the computer. A kill of numbers, job specs such
-as %1, `$!`, or ids from a file passes. A session closes another by name with `colony stop <name>`.
+as %1, or `$!` passes. A session closes another by name with `colony stop <name>`.
 
 The merge guard refuses a merge the person hasn't allowed. A `gh pr merge`, and a GitHub tool's merge of a pull
 request, pass only when the pull request is in this repo, origin's, and its base is a branch `[safety] merge_into`
@@ -55,9 +55,10 @@ remote's URL, fetch or push refspec or mirror, a URL rewrite, an include, push.d
 branch's merge, remote or pushRemote.
 
 Both follow a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuse an xargs or
-a shell alias that builds one. As a backstop, the kill, push and merge guards refuse any line whose raw text names
-more kills, `git push`es or gh merges than their reading of it shows, since quoting or a here-document the shell
-reads otherwise can hide one; text that only names one is refused too, with the advice to write it to a file.
+a shell alias that builds one. Beside that, a line whose raw text names a kill, a `git push` or a gh merge anywhere
+must be one plain command of that kind, with no other command, substitution, here-document, eval or `sh -c` around
+it, since quoting the shell reads otherwise can hide one; text that only names one is refused too, with the advice
+to write it to a file.
 A `gh pr merge` that shares its line with a cd, a wrapper that moves it, or a GH_ or GIT_ variable is refused,
 since the pull request checked may not be the one merged.
 
@@ -110,13 +111,15 @@ OPERATORS = ("&&", "||", ";;", "|&", ">>", "<<", ">&", "<&", "&>", ">|", "(", ")
 PUNCTUATION = set("();<>|&")
 RAW_SLEEP = re.compile(r"(?<![\w.-])sleep\s+([0-9.]+[smhd]?)(?![\w.])")
 RAW_GIT = re.compile(r"git")  # in a line shlex can't read, any git with a push is refused (pushes())
-# The backstop: what the raw text of any line names, counted, against what the guard's parsed reading shows. When the
-# text names more, something, such as quoting or a here-document the shell reads otherwise, hid a command.
+# The plain-line rule: a line whose raw text names a push, a gh merge or a kill (RAW_KILL) anywhere must be one plain
+# command of that kind, which the guard's own reading then checks; quoting, a substitution or a here-document can
+# otherwise hide one from that reading.
 RAW_PUSH = re.compile(r"(?<![\w.-])git\b[^\n;&|]*?\spush(?=\s|$|[;&|)'\"])")
 RAW_MERGE = re.compile(r"(?<![\w.-])gh\b[^\n;&|]*?\s(?:pr\s+merge(?=\s|$|[;&|)'\"])|api\s[^\n;&|]*?"
                        r"(?:/merges?\b|mergePullRequest|enablePullRequestAutoMerge|mergeBranch))")
-HIDDEN = ("this line names a {what} the guard's own reading of it doesn't show, as quoting or a here-document "
-          "the shell reads otherwise can hide one")
+NOT_PLAIN = ("\n", "$(", "`", "<<", "<(", ">(")  # raw text a plain command never holds
+PLAIN_STEP = {"push": "run the push as its own plain command", "merge": "run the pull request step as its own plain "
+              "command", "kill": "run the kill as its own plain command, by its exact process id"}
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
 PIPES = {"|", "|&"}
 BACKGROUND = "&"
@@ -154,7 +157,7 @@ ELEVATORS = {"sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", 
                                 "--prompt", "--chdir", "--close-from", "--role", "--type", "--other-user"}),
              "doas": frozenset({"-u", "-C"})}
 POWERSHELLS = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
-KILLERS = {*PATTERN_KILLERS, "kill", "taskkill", "fuser", "powershell", "pwsh"}  # the commands the backstop counts
+KILLERS = {*PATTERN_KILLERS, "kill", "taskkill", "fuser", "powershell", "pwsh"}  # what a kill's plain line may run
 POWERSHELL_KILL = re.compile(r"\b(?:stop-process|spps)\b[^;|]*\s-(?:name|processname)\b"
                              r"|\|\s*(?:stop-process|spps|kill)\b"
                              r"|\.kill\(\)", re.I)
@@ -985,17 +988,14 @@ def line_variable(line: list[str], pattern: re.Pattern) -> str:
     return ""
 
 
-def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str = "",
-           seen: dict[str, int] | None = None) -> tuple[list[str], list[str]]:
+def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str = "") -> tuple[list[str], list[str]]:
     """A reason for each `git push` in the command line that takes none of the allowed forms (push_refusal), and one
     for each git command that rewrites what the guard reads as origin's (forges), or that the guard can't follow. It
     follows `sh -c`, `eval`, sudo and git aliases to the push. A push is refused whatever its words when its line
     sets a GIT_, HOME or XDG_CONFIG_HOME variable, moves it to another folder (a cd, `git -C`, `env -C`), or points
     git elsewhere (`-c`, --config-env, --git-dir, --work-tree): where git pushes is then the guard's guess, and the
     guard doesn't guess. `moved` carries such a change into a nested shell's line. A line whose quoting can't be read
-    is refused whenever its text holds `git` and `push` anywhere. Any line whose raw text names more `git ... push`
-    than the guard read is refused (the backstop): `seen` counts the pushes read, through nested lines too."""
-    top, seen = seen is None, {"push": 0} if seen is None else seen
+    is refused whenever its text holds `git` and `push` anywhere."""
     try:
         line = tokens(command)
     except ValueError:
@@ -1044,7 +1044,7 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
                     break
                 if alias.startswith("!"):  # a shell alias: the guard reads the line it runs
                     found = pushes(f"{alias[1:]} {shlex.join(program[index + 1:])}", cwd, depth + 1, changed,
-                                   elsewhere, seen)
+                                   elsewhere)
                     refused, updates = refused + found[0], updates + found[1]
                     break
                 try:
@@ -1054,7 +1054,6 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
                     break
             subcommand = program[index] if index < len(program) else ""
             if subcommand == "push":
-                seen["push"] += 1
                 reason = (f"{elsewhere} on this line can change where git pushes" if elsewhere else
                           push_refusal(program[index + 1:], cwd, protected_branches(cwd), changed))
                 if reason:
@@ -1068,7 +1067,7 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
                         moved = moved or f"`git {subcommand}`"
         elif name in SHELLS or name == "eval":
             for inner in shell_lines(name, program[1:]):
-                found = pushes(inner, cwd, depth + 1, changed, moved or wrapped, seen)
+                found = pushes(inner, cwd, depth + 1, changed, moved or wrapped)
                 refused, updates = refused + found[0], updates + found[1]
             if name == "eval":  # it runs in this shell, so its cd or checkout carries on along the line
                 changed = changed or "`eval`"
@@ -1080,8 +1079,6 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
             updates.append("this line defines a shell alias that pushes, which the guard can't follow")
         elif name in LINE_CHANGES:
             changed, moved = changed or f"`{name}`", moved or f"`{name}`"
-    if top and not refused and len(RAW_PUSH.findall(command)) > seen["push"]:
-        refused.append(HIDDEN.format(what="`git push`"))
     return refused, updates
 
 
@@ -1194,14 +1191,12 @@ def context_change(line: list[str]) -> str:
     return variable
 
 
-def gh_merges(command: str, cwd: str, depth: int = 0, seen: dict[str, int] | None = None) -> list[str]:
+def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
     """A reason for each `gh` call on the line that merges a pull request into a branch [safety] merge_into doesn't
     allow, merges a pull request in another repo, merges through the API, or defines an alias that can merge. It
     follows `sh -c`, `eval`, sudo and gh aliases. A `gh pr merge` that shares its line with a cd, `env --chdir` or a
     GH_ variable is refused, since the pull request the guard checks may not be the one it merges. A line whose
-    quoting can't be read is refused whenever it holds gh and merge. Any line whose raw text names more gh merges
-    than the guard read is refused (the backstop): `seen` counts the merges read, through nested lines too."""
-    top, seen = seen is None, {"merge": 0} if seen is None else seen
+    quoting can't be read is refused whenever it holds gh and merge."""
     try:
         line = tokens(command)
     except ValueError:
@@ -1218,7 +1213,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0, seen: dict[str, int] | Non
         name = PurePath(program[0]).name if program else ""
         if name in SHELLS or name == "eval":
             found += [reason for inner in shell_lines(name, program[1:])
-                      for reason in gh_merges(inner, cwd, depth + 1, seen)]
+                      for reason in gh_merges(inner, cwd, depth + 1)]
             continue
         if name == "xargs" and (sub := fed(program[1:], "gh", GH_COMMANDS, {"merge", "api"})):
             found.append(f"`xargs` runs `gh` ({sub}) with words the guard can't see, so run it as a command of its own")
@@ -1239,7 +1234,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0, seen: dict[str, int] | Non
             if alias is None:
                 break  # an extension, such as gh dash
             if alias.startswith("!"):
-                found += gh_merges(f"{alias[1:]} {shlex.join(rest[1:])}", cwd, depth + 1, seen)
+                found += gh_merges(f"{alias[1:]} {shlex.join(rest[1:])}", cwd, depth + 1)
                 rest = []
                 break
             try:
@@ -1252,19 +1247,12 @@ def gh_merges(command: str, cwd: str, depth: int = 0, seen: dict[str, int] | Non
         elif rest[:2] == ["alias", "import"]:
             found.append("`gh alias import` can define aliases that merge, which the guard can't follow")
         elif rest[:2] == ["pr", "merge"] and "--disable-auto" not in rest:
-            seen["merge"] += 1
             found.append(f"`gh pr merge` shares its line with {context}, so the pull request the guard checks may not "
                          "be the one it merges: run it on a line of its own, with --repo for another repo" if context
                          else pr_merge(rest[2:], repo, cwd))
         elif rest[:1] == ["api"]:
-            seen["merge"] += 1
             found.append(api_merge(rest[1:]))
-        elif rest[:2] == ["pr", "merge"]:
-            seen["merge"] += 1  # --disable-auto: it turns a merge off
-    found = [reason for reason in found if reason]
-    if top and not found and len(RAW_MERGE.findall(command)) > seen["merge"]:
-        found.append(HIDDEN.format(what="gh merge"))
-    return found
+    return [reason for reason in found if reason]
 
 
 def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
@@ -1333,7 +1321,7 @@ def target_reason(word: str) -> str | None:
     return None
 
 
-def command_kills(program: list[str], searching: bool, seen: dict[str, int] | None = None) -> list[str]:
+def command_kills(program: list[str], searching: bool) -> list[str]:
     """Why one simple command, from its program on, kills by name or pattern. `searching` says the line looks
     running processes up, so a kill id that isn't a number can be a search's output."""
     if not program:
@@ -1364,18 +1352,15 @@ def command_kills(program: list[str], searching: bool, seen: dict[str, int] | No
         return ["PowerShell's `Stop-Process -Name`, or a pipe into it, ends every process the name or search matches"]
     if name in SHELLS:
         return [reason for i, word in enumerate(arguments[:-1]) if word.startswith("-") and "c" in word.lstrip("-")
-                for reason in kills(arguments[i + 1], seen)]
+                for reason in kills(arguments[i + 1])]
     if name == "eval":
-        return kills(" ".join(arguments), seen)
+        return kills(" ".join(arguments))
     return []
 
 
-def kills(command: str, seen: dict[str, int] | None = None, backstop: bool = True) -> list[str]:
+def kills(command: str) -> list[str]:
     """A reason for each kill by name or pattern a command line holds (see the module's docstring). A line whose
-    quoting can't be read is refused whenever its plain text holds such a kill. With `backstop`, a line whose raw
-    text names more kills than the guard read is refused too: `seen` counts the kill commands read, through nested
-    lines too."""
-    top, seen = seen is None, {"kill": 0} if seen is None else seen
+    quoting can't be read is refused whenever its plain text holds such a kill."""
     try:
         line = tokens(command)
     except ValueError:
@@ -1384,18 +1369,49 @@ def kills(command: str, seen: dict[str, int] | None = None, backstop: bool = Tru
                     "own"]
         return []
     searching = bool(SEARCHES.search(command))
-    found = []
-    for words in simple_commands(line):
-        program = run_program(words)
-        name = PurePath(program[0]).name.lower() if program else ""
-        name = name[:-4] if name.endswith(".exe") else name
-        if name in KILLERS or (name == "xargs" and any(PurePath(word).name in {*PATTERN_KILLERS, "kill"}
-                                                       for word in program[1:])):
-            seen["kill"] += 1
-        found += command_kills(program, searching, seen)
-    if top and backstop and not found and len(RAW_KILL.findall(command)) > seen["kill"]:
-        found.append(HIDDEN.format(what="kill"))
+    found = [reason for words in simple_commands(line) for reason in command_kills(run_program(words), searching)]
     return list(dict.fromkeys(found))
+
+
+def kind_of(program: list[str]) -> str:
+    """What one simple command runs, of what the plain-line rule asks about: "push" for `git push`, "merge" for
+    `gh pr merge` or `gh api`, "kill" for a kill command, else ""."""
+    name = PurePath(program[0]).name.lower() if program else ""
+    name = name[:-4] if name.endswith(".exe") else name
+    if name == "git":
+        index = 1
+        while index < len(program) and program[index].startswith("-"):
+            index += 2 if program[index] in GIT_VALUE_OPTIONS else 1
+        return "push" if program[index:index + 1] == ["push"] else ""
+    if name == "gh":
+        rest = without_repo_flag(program[1:])
+        return "merge" if rest[:2] == ["pr", "merge"] or rest[:1] == ["api"] else ""
+    if name in KILLERS or (name == "xargs" and any(PurePath(word).name in {*PATTERN_KILLERS, "kill"}
+                                                   for word in program[1:])):
+        return "kill"
+    return ""
+
+
+def plain_line(command: str, kind: str) -> str:
+    """Why a line whose raw text names a `kind` ("push", "merge" or "kill") is no plain command of that kind, or "".
+    A plain line is one simple command, with no other command, operator, substitution, here-document or process
+    substitution, alias or function definition, eval or `sh -c`, and the command it runs is of that kind, so the
+    guard's own reading of it is the shell's."""
+    if mark := next((mark for mark in NOT_PLAIN if mark in command.strip()), ""):
+        return {"\n": "a second line", "<<": "a here-document"}.get(mark, f"a `{mark}`")
+    try:
+        line = tokens(command)
+    except ValueError:
+        return "quoting the guard can't read"
+    if operator := next((token for token in line if token in OPERATORS and token not in REDIRECTIONS), ""):
+        return f"a `{operator}` that joins it to other commands"
+    commands = simple_commands(line)
+    program = run_program(commands[0]) if len(commands) == 1 else []
+    name = PurePath(program[0]).name if program else ""
+    if name in ("eval", "alias", "function", *SHELLS) or kind_of(program) != kind:
+        return f"`{name}` around it" if name in ("eval", "alias", "function", *SHELLS) else \
+            "words that only name it, as text does"
+    return ""
 
 
 def main() -> int:
@@ -1420,22 +1436,30 @@ def main() -> int:
             raise TypeError("the command is not text")
     except (ValueError, KeyError, TypeError):
         return 0  # a call the guard can't read runs, and Claude Code's own checks still apply to it
-    refusals, merged = [], []
+    rewrites: list[str] = []
+    merged: list[str] = []
+    killed: list[str] = []
     if "push" in command or re.search(r"(?<![\w.-])git(?![\w-])", command):
         rewrites, merged = pushes(command, cwd)
-        if rewrites:
-            branches = protected_branches(cwd)
-            refusals.append(PUSH_REFUSAL.format(reason="; ".join(dict.fromkeys(rewrites)),
-                                                branches=" and ".join(branches)))
     if "merge" in command.lower() or re.search(r"(?<![\w.-])gh(?![\w-])", command):
         merged += gh_merges(command, cwd)
-    if merged:
-        refusals.append(MERGE_REFUSAL.format(reason="; ".join(dict.fromkeys(merged))))
     lowered = command.lower()
     if any(word in lowered for word in ("kill", "fuser", "stop-process", "spps")):
         killed = kills(command)
-        if killed:
-            refusals.append(KILL_REFUSAL.format(reason="; ".join(killed)))
+    # The plain-line rule: a line that names a push, a gh merge or a kill anywhere is one plain command of that kind.
+    for kind, pattern, reasons in (("push", RAW_PUSH, rewrites), ("merge", RAW_MERGE, merged),
+                                   ("kill", RAW_KILL, killed)):
+        if pattern.search(command) and (why := plain_line(command, kind)):
+            what = {"push": "a `git push`", "merge": "a gh merge", "kill": "a kill"}[kind]
+            reasons.append(f"this line names {what} with {why}: {PLAIN_STEP[kind]}")
+    refusals = []
+    if rewrites:
+        branches = protected_branches(cwd)
+        refusals.append(PUSH_REFUSAL.format(reason="; ".join(dict.fromkeys(rewrites)), branches=" and ".join(branches)))
+    if merged:
+        refusals.append(MERGE_REFUSAL.format(reason="; ".join(dict.fromkeys(merged))))
+    if killed:
+        refusals.append(KILL_REFUSAL.format(reason="; ".join(dict.fromkeys(killed))))
     if refusals:
         sys.stderr.write("\n".join(refusals) + "\n")
         return 2

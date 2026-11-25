@@ -454,7 +454,7 @@ def kill_events(seens: list[Seen]) -> list[tuple[float, str, str]]:
     found = []
     for seen in seens:
         for at, command in seen.facts.get("calls", []):
-            if at and guard().kills(command, backstop=False):  # a real kill, never a word in text
+            if at and guard().kills(command):
                 line = " ".join(command.split())
                 shown = f"`{line[:100]}`" if not transport.holds_secret(line) else "a command"
                 found.append((at, seen.name, shown))

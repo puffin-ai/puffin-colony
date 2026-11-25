@@ -164,10 +164,7 @@ PUSHES_ALLOWED = [
     "git push --dry-run origin HEAD:refs/heads/ana/login",
     "git push -n origin HEAD:refs/heads/ana/login",
     "git push -q origin HEAD:refs/heads/ana/login",
-    "npm test && git push -u origin HEAD:refs/heads/ana/login",
-    "git push origin HEAD:refs/heads/ana/login &",
-    "git checkout -b ana/new && git push -u origin ana/new:refs/heads/ana/new",
-    "bash -c 'git push origin HEAD:refs/heads/ana/login'",
+    "git push origin HEAD:refs/heads/ana/login 2>&1",
     "git log --oneline -3",
 ]
 PUSHES_REFUSED = [
@@ -599,7 +596,6 @@ KILL_ALLOWED = [
     "npm run dev & sleep 1; kill $!",
     "ps -p 12345 -o pid=,command= && kill 12345",
     "kill -l",
-    "kill $(cat server.pid)",
     "kill 12345 2>/dev/null",
     "kill -9 12345 1>/dev/null",
     "colony stop builder-2",
@@ -1353,3 +1349,49 @@ def test_text_that_names_a_kill_push_or_merge_is_refused_with_the_way_out(comman
     run = push_guard(command, on_feature)
     assert run.returncode == 2 and f"{which}: refused, this line names a" in run.stderr, (command, run.stderr)
     assert "write the text to a file with your file tool" in run.stderr
+
+
+# The plain-line rule: a line whose raw text names a push, a gh merge or a kill anywhere must be one plain command of
+# that kind, which the guard's reading then checks. It replaces a count of what the reading saw, which a gh api call,
+# --disable-auto, a plain kill or an alias could make up for a command a quote hid.
+NOT_ALONE = [
+    ("npm test && git push -u origin HEAD:refs/heads/ana/login", "push guard", "a `&&` that joins it"),
+    ("git push origin HEAD:refs/heads/ana/login &", "push guard", "a `&` that joins it"),
+    ("git checkout -b ana/new && git push -u origin ana/new:refs/heads/ana/new", "push guard", "a `&&`"),
+    ("bash -c 'git push origin HEAD:refs/heads/ana/login'", "push guard", "`bash` around it"),
+    ("git push origin HEAD:refs/heads/ana/login; echo pushed", "push guard", "a `;`"),
+    ("git push origin HEAD:refs/heads/$(git branch --show-current)", "push guard", "a `$(`"),
+    ("kill $(cat server.pid)", "kill guard", "a `$(`"),
+    ("gh pr merge 5 | tee merge.log", "merge guard", "a `|`"),
+]
+
+
+@pytest.mark.parametrize("command, which, why", NOT_ALONE)
+def test_a_push_merge_or_kill_runs_only_as_one_plain_command(command, which, why, on_feature):
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and f"this line names a" in run.stderr and why in run.stderr, (command, run.stderr)
+    assert "as its own plain command" in run.stderr and f"{which}: refused" in run.stderr
+
+
+# Each made the count backstop's numbers match while a quote hid a command from the guard's reading.
+GAMED_COUNTS = [
+    ("gh api repos/acme/demo/issues > /dev/null\ncat <<EOF > n.txt\ndon't\nEOF\ngh pr merge 5 # '", "merge guard"),
+    ("gh pr merge 5 --disable-auto\ncat <<EOF > n.txt\ndon't\nEOF\ngh pr merge 6 # '", "merge guard"),
+    ("kill 4242\ncat <<EOF > n.txt\ndon't\nEOF\npkill -f x # '", "kill guard"),
+    ("git ship\ncat <<EOF > n.txt\ndon't\nEOF\ngit push origin HEAD:refs/heads/main # '", "push guard"),
+]
+
+
+@pytest.mark.parametrize("command, which", GAMED_COUNTS)
+def test_no_command_the_guard_reads_makes_up_for_one_a_quote_hides(command, which, on_feature):
+    git_in(on_feature, "config", "alias.ship", "push -u origin HEAD:refs/heads/ana/login")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and f"{which}: refused" in run.stderr and "a second line" in run.stderr, \
+        (command, run.stderr)
+
+
+def test_a_plain_allowed_push_still_runs_on_its_own_line(on_feature):
+    for command in ("git push -u origin HEAD:refs/heads/ana/login", "git push --force-with-lease origin "
+                    "HEAD:refs/heads/ana/login", "git push origin ana/login:refs/heads/ana/login 2>&1"):
+        run = push_guard(command, on_feature)
+        assert (run.returncode, run.stderr) == (0, ""), command
