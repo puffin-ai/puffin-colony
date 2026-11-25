@@ -716,18 +716,26 @@ def test_a_line_outside_an_agent_session_carries_no_note(home, monkeypatch):
 # 20. Notes through the code host, never a path on one computer
 
 
-@pytest.mark.parametrize("sentence", ["the report is in /tmp/report.md", "read ~/notes/plan.md first",
-                                      "see /Users/ana/Desktop/x.txt", r"see C:\Users\ana\x.txt",
-                                      "logs at /private/var/folders/ab/T/run.log"])
-def test_a_line_naming_a_path_on_this_computer_is_refused(home, monkeypatch, sentence):
+@pytest.mark.parametrize("sentence", ["the report is in {here}/report.md", "read ~/notes/plan.md first",
+                                      "see {here}/Desktop/x.txt", "logs at {here}/T/run.log.",
+                                      "the folder {here}/Desktop/ holds it"])
+def test_a_line_naming_a_path_on_this_computer_is_refused(home, monkeypatch, tmp_path, sentence):
+    """A path under ~/, or an absolute path that names a file or folder on this computer, which a session on another
+    computer can't read."""
+    for name in ("report.md", "Desktop/x.txt", "T/run.log"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("x\n")
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
     with pytest.raises(cli.ColonyError, match="where .* doesn't exist: send the file's text with --attach"):
-        wait.post(CONFIG, Namespace(card=41, to="builder-2", sentence=f"answer: {sentence}", urgent=False))
+        wait.post(CONFIG, Namespace(card=41, to="builder-2", sentence=f"answer: {sentence.format(here=tmp_path)}",
+                                    urgent=False))
     assert home == []
 
 
 @pytest.mark.parametrize("sentence", ["fix src/app.ts", "the API is /api/login", "https://example.com/tmp/a.md",
-                                      "merge origin/main into it"])
+                                      "merge origin/main into it",
+                                      "done: the /home/feed page loads on phones",  # a web route, though /home exists
+                                      "the /tmp/no-such-report-here.md route"])
 def test_a_repo_path_or_a_link_is_fine(home, monkeypatch, sentence):
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
     assert wait.post(CONFIG, Namespace(card=41, to="builder-2", sentence=f"answer: {sentence}", urgent=False)) == 0

@@ -63,7 +63,7 @@ Both also:
 - print, on stderr, which thread each comment went to and its link, since the coordination issue moves to a fresh one when it fills;
 - refuse a name no learned, live or registered session has, naming the nearest ones, unless `--allow-unknown`;
 - refuse a named lead's line from a session that doesn't hold the lead's claim on this computer;
-- refuse a sentence that names a path on this computer, such as `/tmp/x.md` or `~/x`, and take `--attach <file>`, or `-` for stdin, to put the file's text under the line on GitHub instead, checked as `colony share` checks a file; on a public repo it needs `--public`, or `say --private`;
+- refuse a sentence that names a path on this computer, such as `/tmp/x.md` when that file is here, or anything under `~/`, but never a path nothing here has, such as a web route like `/home/feed`, and take `--attach <file>`, or `-` for stdin, to put the file's text under the line on GitHub instead, checked as `colony share` checks a file; on a public repo it needs `--public`, or `say --private`;
 - nudge the recipient's cmux workspace with `--nudge`, or as `[messages] nudge` says;
 - add a hidden note naming the sending session, from an agent session; a lead's `start:` line's note asks the helper's wait to acknowledge it, and the lead's wait sends it again when it doesn't.
 

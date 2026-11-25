@@ -42,7 +42,9 @@ REDELIVER_MAX = 20  # the most lines one redelivery shows
 KEEP_DELIVERED = 50
 KEEP_NAMES = 1000
 AGENT_SESSION_ENVS = (cli.CLAUDE_SESSION_ENV, f"{cli.NAME.upper()}_AGENT_SESSION")  # an agent session's own id
-LOCAL_PATH = re.compile(r"(?<![\w.:/~-])(?:~/|/(?:Users|home|private|tmp|var/folders|Volumes|mnt|root)/|[A-Za-z]:\\)\S*")
+# A path a sentence may name on this computer: under the home folder (~/), an absolute path of two folders or more,
+# or a Windows drive's. local_path keeps the ones that are on this computer.
+LOCAL_PATH = re.compile(r"(?<![\w.:/~-])(?:~/|/(?=[^\s/]+/)|[A-Za-z]:\\)\S*")
 
 
 def setting(config: dict, key: str, default):
@@ -231,10 +233,26 @@ def check_paths(config: dict, said: list[str]) -> None:
     if not setting(config, "refuse_local_paths", True):
         return
     for sentence in said:
-        found = LOCAL_PATH.search(sentence)
+        found = local_path(sentence)
         if found:
-            raise cli.ColonyError(f"a line reaches sessions on other computers, where {found[0]} doesn't exist: send "
-                                  f"the file's text with --attach {found[0]}, or name a path in the repo")
+            raise cli.ColonyError(f"a line reaches sessions on other computers, where {found} doesn't exist: send "
+                                  f"the file's text with --attach {found}, or name a path in the repo")
+
+
+def local_path(sentence: str) -> str:
+    """The first path a sentence names on this computer: one under the home folder (~/), or an absolute path that
+    names a file or folder here, so its first folder is here too. "" for none: a web route such as /home/feed, or any
+    path nothing here has, passes, whatever folders this computer happens to have."""
+    for found in LOCAL_PATH.finditer(sentence):
+        path = found[0].rstrip(".,;:!?)]}'\"`")
+        if path.startswith("~/"):
+            return path
+        try:
+            if os.path.exists(path):
+                return path
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def check_lines(config: dict, args, me: str, sender: str, to: str, said: list[str], own_lead: bool = False) -> None:
