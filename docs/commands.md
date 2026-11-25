@@ -27,11 +27,26 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 
 | Command | What it does |
 | --- | --- |
-| `colony wait [--waiting-on N,N]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. |
-| `colony post [<card>] <name> "<sentence>" ["<sentence>" ...] [--urgent]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. A first word that is a number, such as `41` or `#41`, is the card; in Hack it is optional. Several sentences go out as one comment, one line each, so all of them land or none does. Each sentence is at most 300 characters, not counting what Colony adds around it. `--urgent` starts each sentence with `urgent:`. In Hack, the comment goes to the board issue, starting with `[<name>'s <agent>]`. It refuses a builder's line that isn't `done`, `question:`, `blocked:` or `urgent:`, and a lead's line to a builder that isn't `start:`, `answer:`, `stop:` or `urgent:`. |
-| `colony say <lead-name> "<sentence>" [--urgent]` | A lead's line for another lead, such as `sam-lead`, on the `Colony: coordination` issue, or on the board in Hack. It is free text, at most 300 characters a sentence, one or several, and waits for the other lead's digest; `--urgent` starts it with `urgent:`, so it arrives at once. |
+| `colony wait [--waiting-on N,N] [--follow]` | Waits for the lines addressed to `$COLONY_SESSION`, prints them, and exits. The lead's `--waiting-on` names the cards whose `done` lines come at once. `--follow` keeps it running: it prints each line as it comes, flushed, and never exits on its lines, for an agent tool that streams a command's output. A new wait for a session stops the older one, by its exact process id. |
+| `colony post [<card>] <name> "<sentence>" ["<sentence>" ...] [--urgent] [--attach <file> [--public]] [--nudge] [--allow-unknown]` | Posts `for <name>: <sentence> (from <you>)` on a card, through the transport. A first word that is a number, such as `41` or `#41`, is the card; in Hack it is optional. Several sentences go out as one comment, one line each, so all of them land or none does. Each sentence is at most 300 characters, or `[messages] max_line`, not counting what Colony adds around it. `--urgent` starts each sentence with `urgent:`. In Hack, the comment goes to the board issue, starting with `[<name>'s <agent>]`. It refuses a builder's line that isn't `done`, `question:`, `blocked:` or `urgent:`, and a lead's line to a builder that isn't `start:`, `answer:`, `stop:` or `urgent:`. |
+| `colony say <lead-name> "<sentence>" [--urgent] [--attach <file> [--public]] [--nudge] [--allow-unknown]` | A lead's line for another lead, such as `sam-lead`, on the `Colony: coordination` issue, or on the board in Hack. It is free text, at most 300 characters a sentence, or `[messages] max_line`, one or several, and waits for the other lead's digest; `--urgent` starts it with `urgent:`, so it arrives at once. |
+| `colony waits [--stop <pid> ...] [--stop-leftovers]` | Lists this computer's `colony wait`s: which session each waits for, whether it listens or is a leftover a newer wait replaced, and any `colony wait` no list names, such as one from an older Colony. `--stop` stops each named one by its exact process id, after checking it is a `colony wait`, and `--stop-leftovers` stops this project's leftovers. It never stops by a name pattern. On Windows it lists and stops none. |
+| `colony nudge <name> [--card N] [--workspace REF]` | Types one short pointer into the session's cmux workspace on this computer, titled `<name>` or `<project>-<name>`, presses Enter, and reads the screen to confirm it was submitted, pressing Enter again up to three times. Says why when it can't: no cmux, no such workspace, or a draft or question in its prompt. |
+| `colony ack` | Says this session acted on every line shown to it so far, so a compaction or a restart shows only newer ones again. |
+| `colony redeliver` | Prints the lines shown to this session since its last `colony ack`, within `[messages] redeliver_minutes`. The SessionStart hook prints them by itself after a compaction or a restart. |
 
 Both take `@<login>` as the recipient, which reaches that person's lead, and `@all` in the sentence reaches every session. A lead's line for `@<login>` or `@all` is free text. A line is addressed to a session when it starts with `for <name>:`, contains `@<login>` for the session's person, or contains `@all`.
+
+Both also:
+
+- print, on stderr, which thread each comment went to and its link, since the coordination issue moves to a fresh one when it fills;
+- refuse a name no learned, live or registered session has, naming the nearest ones, unless `--allow-unknown`;
+- refuse a named lead's line from a session that doesn't hold the lead's claim on this computer;
+- refuse a sentence that names a path on this computer, such as `/tmp/x.md` or `~/x`, and take `--attach <file>`, or `-` for stdin, to put the file's text under the line on GitHub instead, checked as `colony share` checks a file; on a public repo it needs `--public`, or `say --private`;
+- nudge the recipient's cmux workspace with `--nudge`, or as `[messages] nudge` says;
+- add a hidden note naming the sending session, from an agent session; a lead's `start:` line's note asks the helper's wait to acknowledge it, and the lead's wait sends it again when it doesn't.
+
+See [messages.md](messages.md#getting-every-line-through).
 
 ## The cycle
 
@@ -127,4 +142,4 @@ Your personal profile, the team profile and session settings: see [profiles.md](
 | `--review` | `batch` | In Hack, adds one fresh reviewer to the fast check. With no `--card`, it reviews the demo build, `origin/<base>` as it stands, for the last hour before the demo. |
 | `--version` | `colony` | Prints the version. |
 
-`handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post` and `wait` need `$COLONY_SESSION`.
+`handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post`, `wait`, `ack` and `redeliver` need `$COLONY_SESSION`.

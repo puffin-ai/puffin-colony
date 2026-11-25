@@ -1926,6 +1926,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("names", nargs="*", metavar="tool", help=f"the tools to write: {', '.join(TOOLS)}")
     p.add_argument("--dry-run", action="store_true", help="print what it would write, and run nothing")
     p.set_defaults(run=tools)
+
+    from colony import messages  # the messages workstream: ack, redeliver, waits and nudge
+    messages.register(sub)
     return parser
 
 

@@ -694,9 +694,11 @@ def unread(config: dict, args) -> int:
     which its last poll (`polled_at`, under WAIT_FRESH seconds old) shows, the hook makes no network call. Otherwise it
     reads GitHub itself through wait.poll, with the wait's read time and ETag, at most once per UNREAD_EVERY seconds,
     so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr."""
-    from colony import wait
+    from colony import messages, wait
 
-    event = hook_event()  # the prompt stays in the window; only the standing orders' correction reminder reads it
+    # The prompt stays in the window: only the standing orders' correction reminder reads it (profile.py), and
+    # redelivery reads only the event's name and source (messages.py).
+    event = hook_event()
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         return 0
@@ -727,6 +729,9 @@ def unread(config: dict, args) -> int:
     if entries:
         print(f"Unread lines for {me}, which colony wait won't print again:")
         print("\n".join(wait.unread_text(entry) for entry in entries))
+    # After a compaction or a restart, the lines shown before it that the session hasn't acknowledged (messages.py).
+    messages.redeliver_hook(config, me, {key: event.get(key) for key in ("hook_event_name", "source")},
+                            [wait.unread_text(entry) for entry in entries])
     return 0
 
 

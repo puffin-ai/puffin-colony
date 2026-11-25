@@ -274,5 +274,9 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
 | `.colony/team.toml`, `~/.config/colony/profile.toml` | The team's standing orders, committed, and your own, never committed. See [profiles.md](profiles.md) |
+| `~/.colony/<project>/waits/<pid>.json` | Each running `colony wait`: its session, and whether it follows. `colony waits` reads them |
+| `~/.colony/<project>/names.json` | The session names the waits learned from GitHub, which `colony post` and `colony say` check a recipient against |
+| `~/.colony/<project>/<session>-delivered.json`, `<session>-acked.json` | The lines shown to a session, and its last `colony ack`, for redelivery after a compaction or restart |
+| `~/.colony/<project>/<lead>-starts.json` | The lead's start lines that wait for an acknowledgement |
 
 Every command, with one line each, is in [commands.md](commands.md).
