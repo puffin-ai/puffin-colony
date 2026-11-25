@@ -320,10 +320,22 @@ def carried_prs(text: str) -> list[int]:
     return list(dict.fromkeys(found))
 
 
-def warning(source: str, target: str, theirs: list[dict], me: str, frozen: str = "") -> str:
-    """The @all line: the release, the freeze when there is one, and the other leads' work it carries, with their
-    leads while that fits in one line."""
-    held = f"; {source} is frozen until {frozen}, so only named fixes land" if frozen else ""
+def few(items: list[str]) -> str:
+    """Up to three items in words, such as `#12, #15 and #20`, with how many more after them."""
+    shown = items[:3] + ([f"{len(items) - 3} more"] if len(items) > 3 else [])
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def auto_merge_note(stopped: list[int], failed: list[str]) -> str:
+    """What the freeze did to auto-merge, for its line: the pull requests it turned it off on, and those it couldn't."""
+    note = f"; auto-merge is off on {few([f'#{n}' for n in stopped])} until you turn it back on" if stopped else ""
+    return note + (f"; turn auto-merge off by hand on {few(failed)}" if failed else "")
+
+
+def warning(source: str, target: str, theirs: list[dict], me: str, frozen: str = "", auto: str = "") -> str:
+    """The @all line: the release, the freeze when there is one, with what it did to auto-merge (`auto`,
+    auto_merge_note), and the other leads' work it carries, with their leads while that fits in one line."""
+    held = f"; {source} is frozen until {frozen}, so only named fixes land{auto}" if frozen else ""
     for named in (True, False):
         listed = ", ".join(f"#{pr['number']}" + (f" ({', '.join(pr['leads'])})" if named else "") for pr in theirs)
         carries = f", which carries your work {listed}: tell me at once if one must wait" if theirs else ""
@@ -465,13 +477,15 @@ def open_release(config: dict, root, found: branches.Names, me: str, mine: froze
     if carried["work"]:
         title += " (" + ", ".join(f"#{pr['number']}" for pr in carried["work"]) + ")"
     text = body(config, found, carried, theirs)
-    until = ""
+    until, auto = "", ""
     if settings(config)["freeze"]:
         ends = time.time() + 3600 * freeze.freeze_hours(config)
         freeze.put(root, freeze.hold("release", found.integration, me, f"releasing into {found.release}", ends))
         until = freeze.when(ends)
+        # A pull request queued to merge by itself would merge during the freeze, past the merge guard.
+        auto = auto_merge_note(*freeze.stop_auto_merges(config, freeze.paused(config, found.integration)))
     if theirs or until:
-        warn(config, warning(found.integration, found.release, theirs, me, until))
+        warn(config, warning(found.integration, found.release, theirs, me, until, auto))
     try:
         return wait.gh("pr", "create", "--repo", repo, "--base", found.release, "--head", found.integration, "--title",
                        title, "--body", text).strip()

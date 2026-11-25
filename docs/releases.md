@@ -57,6 +57,8 @@ Before it opens the pull request, `colony release` posts one `@all` line that na
 
 While a release's checks run, a merge into the integration branch would force them to run again. So `colony release` freezes the integration branch first, for every person's leads.
 
+GitHub merges a pull request queued with auto-merge by itself once its checks pass, during a freeze too, and the merge guard checks a merge only when an agent asks for one. So when the release starts its freeze, it turns auto-merge off on every open pull request into the frozen branches, the integration branch and, when it differs, the base, with `gh pr merge <n> --disable-auto`. Its `@all` line names them, such as `auto-merge is off on #12 until you turn it back on`, and names any it couldn't change, to turn off by hand. Auto-merge stays off after the freeze: turn it back on where you still want it.
+
 A freeze is a hold on one branch. The holds live on the code host, in origin's `refs/colony/holds`, so every computer reads the same ones, whoever's leads run there. A change reads the holds and pushes only while the ref is still where it was read, so two computers never lose each other's change.
 
 There are three kinds of hold:

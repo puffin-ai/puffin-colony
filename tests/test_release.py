@@ -29,6 +29,9 @@ elif args[:2] == ["run", "view"]:
     answer("run.json")
 elif args[:2] == ["run", "watch"]:
     pass
+elif args[:2] == ["pr", "merge"] and (here / f"fail-merge-{args[2]}").exists():
+    sys.stderr.write("could not change the pull request\\n")
+    sys.exit(1)
 elif args[:2] == ["pr", "create"] and (here / "fail-create").exists():
     sys.stderr.write("could not create the pull request\\n")
     sys.exit(1)
@@ -439,6 +442,31 @@ def test_release_freezes_the_integration_branch_for_every_lead_and_after_lifts_i
     assert run(config, after=True) == 0
     assert world.holds() == []
     assert any("main is open again after the release" in line for _, line, _ in world.said)
+
+
+def test_a_release_freeze_turns_off_auto_merge_into_the_frozen_branch_and_says_so(world):
+    """Audit (seen but not reported, b): GitHub merges a pull request queued with auto-merge by itself once its checks
+    pass, during a freeze too, past the merge guard, which checks a merge only when an agent asks for one. The
+    release's freeze now turns auto-merge off on the open pull requests into the frozen branch, and its line says so."""
+    world.on_main(commit(world.clone, {"b.txt": "fresh\n"}, "batch 12"))
+    world.answer("prs-open-main.json", [{"number": 12, "autoMergeRequest": {"mergeMethod": "SQUASH"}},
+                                        {"number": 13, "autoMergeRequest": None},
+                                        {"number": 14, "autoMergeRequest": {"mergeMethod": "MERGE"}}])
+    (world.bin / "fail-merge-14").write_text("")
+    assert run(world.config()) == 0
+    merges = [call for call in world.gh_calls() if call[:2] == ["pr", "merge"]]
+    assert merges == [["pr", "merge", "12", "--repo", "acme/demo", "--disable-auto"],
+                      ["pr", "merge", "14", "--repo", "acme/demo", "--disable-auto"]]
+    [(to, line, _)] = world.said
+    assert "so only named fixes land; auto-merge is off on #12 until you turn it back on; turn auto-merge off by hand " \
+           "on #14" in line
+
+
+def test_a_release_with_no_freeze_leaves_auto_merge_be(world):
+    world.on_main(commit(world.clone, {"b.txt": "fresh\n"}, "batch 12"))
+    world.answer("prs-open-main.json", [{"number": 12, "autoMergeRequest": {"mergeMethod": "SQUASH"}}])
+    assert run(world.config(extra=NO_FREEZE)) == 0
+    assert not [call for call in world.gh_calls() if call[:2] == ["pr", "merge"]]
 
 
 def test_release_freeze_hours_and_freeze_off_come_from_the_release_settings(world):

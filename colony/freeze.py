@@ -173,6 +173,39 @@ def reaches(config: dict, branch: str) -> list[str]:
     return list(dict.fromkeys([branch, branches.names(config).integration]))
 
 
+def paused(config: dict, branch: str) -> list[str]:
+    """The branches whose landings a hold on `branch` pauses (reaches): the branch itself, and the base when the
+    branch is the integration branch."""
+    return [name for name in dict.fromkeys([branch, config["project"]["base"]]) if branch in reaches(config, name)]
+
+
+def stop_auto_merges(config: dict, branches: list[str]) -> tuple[list[int], list[str]]:
+    """Turn off auto-merge on each open pull request into the frozen `branches`, with `gh pr merge <n> --disable-auto`:
+    GitHub merges a queued pull request by itself once its checks pass, during a freeze too, and the merge guard
+    checks a merge only when an agent asks for one. Returns the pull requests it turned off, and what it couldn't:
+    `#<n>` for a pull request, or `the pull requests into <branch>` for a branch it couldn't list."""
+    repo = config["project"]["repo"]
+    stopped: list[int] = []
+    failed: list[str] = []
+    for branch in branches:
+        try:
+            listed = json.loads(wait.gh("pr", "list", "--repo", repo, "--base", branch, "--state", "open", "--limit",
+                                        "200", "--json", "number,autoMergeRequest") or "[]")
+        except (cli.ColonyError, ValueError):
+            failed.append(f"the pull requests into {branch}")
+            continue
+        for pr in listed:
+            if not pr.get("autoMergeRequest"):
+                continue
+            try:
+                wait.gh("pr", "merge", str(pr["number"]), "--repo", repo, "--disable-auto")
+            except cli.ColonyError:
+                failed.append(f"#{pr['number']}")
+                continue
+            stopped.append(pr["number"])
+    return stopped, failed
+
+
 def refuse(config: dict, root, branch: str, groups, what: str) -> None:
     """Refuse work that lands on the branch while a hold on it, or on the integration branch (reaches), doesn't name
     it, saying who holds it, why, until when, and how a fix gets through."""
