@@ -239,7 +239,7 @@ What the merge guard lets agents land, and which branches it protects. See [safe
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `merge_into` | `[]` | The branches agents may merge pull requests into, and push into with a plain push, such as `["dev"]`. The guard counts a branch only when both this working copy and the copy on `origin/<base>` name it, so it takes effect once you merge it into the base. A force push or a deletion of the base stays refused. |
+| `merge_into` | `[]` | The branches agents may merge pull requests into, and push into with a plain push, such as `["dev"]`. The guard counts a branch only when both this working copy and the copy on GitHub's default branch name it, read with `gh api`, so it takes effect once you merge it into the default branch. When GitHub can't be read, nothing is allowed. A force push or a deletion of the base stays refused. |
 | `protect` | `[]` | More branches no push may rewrite, and none may update unless `merge_into` names them, such as `["staging", "release/*"]`. The base and the repo's default branch are always protected. |
 
 ## `[recover]`

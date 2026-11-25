@@ -117,7 +117,7 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 
 [safety]                           # what the merge guard lets agents land (docs/safety.md#the-merge-guard)
 merge_into = []                    # branches agents may merge pull requests and push into, such as ["dev"]; empty, they
-                                   # open pull requests for you; counts once merged into the base
+                                   # open pull requests for you; counts once on GitHub's default branch
 protect = []                       # more branches to protect beside the base and the default branch, such as ["staging"]
 
 [recover]                          # what `colony crash-report` and `colony resume` look at (docs/safety.md#recovery)
