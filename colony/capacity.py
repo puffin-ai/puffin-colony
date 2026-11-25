@@ -374,6 +374,10 @@ def open_wave(config: dict, args, count: int, taken: set[str]) -> tuple[int, str
     if room["open_now"] <= 0:
         return 0, room_reason(room)
     opened = 0
+    lead = getattr(args, "lead_name", "") or os.environ.get(wait.LEAD_ENV, "").lower()
+    from colony import boot  # each helper starts with its lead's standing orders, read through profile.py
+
+    orders = boot.helper_brief(config, lead)
     for _ in range(min(count, room["open_now"])):
         found = helper_account(config, args, counts)
         if found is None:
@@ -382,12 +386,11 @@ def open_wave(config: dict, args, count: int, taken: set[str]) -> tuple[int, str
         name = cli.free_helper(config, [*alive, *(presence.Status(t, "helper") for t in taken)])
         taken.add(name)
         counts.setdefault(account, set()).add(name)
-        lead = getattr(args, "lead_name", "") or os.environ.get(wait.LEAD_ENV, "").lower()
         if lead and not args.dry_run:
             wait.expect_status(config["project"]["name"], lead, name)
         opening = argparse.Namespace(**{**vars(args), "name": name, "here": False, "account": account,
                                         "account_why": why})
-        code = cli.launch(config, opening, name, "builder", cli.builder_prompt(name, config))
+        code = cli.launch(config, opening, name, "builder", cli.builder_prompt(name, config, orders))
         if code:
             raise cli.ColonyError(f"{name} did not open: claude ended with {code}")
         opened += 1

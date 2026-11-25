@@ -1249,10 +1249,15 @@ def lead(config: dict, args) -> int:
                                                                                          section(config, "Lead")))
 
 
+def with_orders(prompt: str, orders: str) -> str:
+    """A helper's first prompt with the standing orders its lead passes it (boot.helper_brief) after it."""
+    return f"{prompt}\n\n{orders}" if orders else prompt
+
+
 def builder_prompt(name: str, config: dict, orders: str = "") -> str:
     """A builder's first prompt, with the standing orders its lead passes it (boot.helper_brief) after it."""
     prompt = BUILDER_PROMPT.replace("{dir}", DIR).replace("{section}", section(config, "Builder")).replace("{builder}", name)
-    return f"{prompt}\n\n{orders}" if orders else prompt
+    return with_orders(prompt, orders)
 
 
 def open_builder(config: dict, args) -> int:
@@ -1423,7 +1428,9 @@ def open_brief(config: dict, args, role: str, **values: str) -> int:
                             **values)
     except KeyError as e:
         raise ColonyError(f"{source}: {e.args[0]}") from None
-    return launch(config, args, role, role, prompt)
+    from colony import boot  # a lead's researcher, spec agent or tester is its helper, and starts with its orders
+
+    return launch(config, args, role, role, with_orders(prompt, boot.helper_brief(config)))
 
 
 def research(config: dict, args) -> int:

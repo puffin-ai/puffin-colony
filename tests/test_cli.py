@@ -562,6 +562,21 @@ def test_research_opens_a_researcher_whose_brief_holds_the_question(config, caps
     assert "dry run: demo-researcher on account first" in out
 
 
+def test_a_leads_researcher_starts_with_its_leads_standing_orders(config, capsys, monkeypatch):
+    """The profile and boot join: a researcher, spec agent or tester a lead opens is its helper, and its first prompt
+    carries the lead's standing orders for helpers, read through profile.py (boot.helper_brief)."""
+    from colony import profile
+
+    (profile.config_home() / profile.PERSONAL_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (profile.config_home() / profile.PERSONAL_FILE).write_text('[tests]\nfull_suite = "batch"\n')
+    for key, value in ((cli.SESSION_ENV, "lead"), (cli.PERSON_ENV, "ana"), ("COLONY_LEAD", "ana-main-lead")):
+        monkeypatch.setenv(key, value)
+    assert cli.main(["research", "Which queue fits?", "--dry-run", "--person", "ana"]) == 0
+    command = capsys.readouterr().out.split("command: ", 1)[1].split("\nenv: ", 1)[0]  # the prompt spans lines
+    [prompt] = [arg for arg in shlex.split(command) if "The question: Which queue fits?" in arg]
+    assert "\n\nStanding orders for ana's helper" in prompt and "the full suite once per batch" in prompt
+
+
 def test_tester_opens_a_tester_whose_brief_holds_the_release(config, capsys):
     url = "https://github.com/acme/demo/pull/20"
     assert cli.main(["tester", url, "--dry-run", "--person", "ana"]) == 0

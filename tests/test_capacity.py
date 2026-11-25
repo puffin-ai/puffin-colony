@@ -220,6 +220,28 @@ def test_a_dry_run_of_helpers_prints_the_wave_plan_and_starts_nothing(host, monk
     assert "dry run: 1 more helper open in 1 later wave" in capsys.readouterr().out
 
 
+def test_each_helper_a_wave_opens_starts_with_its_leads_standing_orders(host, monkeypatch):
+    """The profile and boot join: `colony helpers <n> --open` opens each helper with its lead's standing orders for
+    helpers in its first prompt, read through profile.py (boot.helper_brief), as `colony open` and `colony join` do.
+    A wave once opened helpers with the bare builder prompt."""
+    from colony import profile
+
+    config = load()
+    (profile.config_home() / profile.PERSONAL_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (profile.config_home() / profile.PERSONAL_FILE).write_text('[tests]\nfull_suite = "batch"\n')
+    for key, value in ((cli.SESSION_ENV, "lead"), (cli.PERSON_ENV, "ana"), (wait.LEAD_ENV, "ana-main-lead")):
+        monkeypatch.setenv(key, value)
+    wave_world(monkeypatch)
+    prompts = []
+    monkeypatch.setattr(cli, "launch", lambda config, args, name, role, prompt: prompts.append((name, prompt)) or 0)
+    args = argparse.Namespace(person="ana", account=None, dry_run=False)
+    assert capacity.open_wave(config, args, 2, set()) == (2, "")
+    assert [name for name, _ in prompts] == ["builder-1", "builder-2"]
+    for name, prompt in prompts:
+        assert prompt.startswith(f"Read .colony/playbook.md, Builder section. You are {name}. Start the wait.\n\n")
+        assert "Standing orders for ana's helper" in prompt and "the full suite once per batch" in prompt
+
+
 def test_a_wave_opens_no_helper_while_the_computer_is_busy(host, monkeypatch):
     config = load()
     opened = wave_world(monkeypatch)
