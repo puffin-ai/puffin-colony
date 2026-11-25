@@ -383,6 +383,31 @@ check = "pg_isready -h localhost -p 5432"
 restart = "docker compose up -d db"
 ```
 
+## `[watch]`
+
+Optional. How the team watch, the reporting rhythm, the watchdog and the status page behave. Every key has a default. See [watch.md](watch.md).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `idle_minutes` | `20` | A session that has done nothing this long, with no reason given, is idle, and its lead hears of it. |
+| `report_minutes` | `30` | A working helper sends a report at least this often. Its own wait reminds it, and its lead hears when it misses two. |
+| `agent_minutes` | `45` | How long a helper's own helper agent may run. The helper hears past it, and its lead past twice it. |
+| `intent_hours` | `4` | A wait or a hold with no end time is checked after this long. |
+| `late_after` | `1` | A card In progress past this many times its predicted minutes is late, and its lead hears once, and once more at twice that. |
+| `every_minutes` | `2` | How often the lead's wait and the watchdog look at the team. |
+| `page` | `true` | Whether the watchdog keeps the status page, the pinned `Colony: status` issue. |
+| `page_minutes` | `5` | How often the status page may change. |
+| `watchdog` | `true` | Whether the lead's wait starts the watchdog when none runs on its computer. |
+| `escalate_minutes` | `60` | A lead idle with no helper busy and no reason given, this long past `idle_minutes`, has its person mentioned on GitHub. |
+| `quit_hours` | `24` | A watchdog started without `--stay` ends after this long with no session alive on its computer. |
+
+```toml
+[watch]
+idle_minutes = 30
+report_minutes = 45
+page = false
+```
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

@@ -197,15 +197,32 @@ The startup routine, the project summary, modes, request intake, and what a lead
 | `colony approve --list`, `colony approve --revoke <id>` | The approvals in force, which any session may list, or, at the person's terminal, ends one at once. |
 | `colony session-hook start\|compact\|end\|turn\|tool` | The startup, handover and approval hooks. Claude Code runs them. |
 
+## Watch
+
+What each session does and why, reports, progress, the watchdog and the status page. See [watch.md](watch.md).
+
+| Command | What it does |
+| --- | --- |
+| `colony intent [working\|waiting\|holding\|done\|clear] ["<what>"] [--on <session>] [--for MINUTES]` | Says what this session does and why, so the watch flags it only when it is idle without a reason. `waiting` and `holding` need a reason. `--on` names the session you wait on, and `--for` when the wait should end. With no state, it prints the intent. `colony take` sets `working` by itself, and a helper's `done` line sets `waiting` for its next card. |
+| `colony report "<one line of progress>" [--card N]` | A working session's report, at least every `[watch] report_minutes` (30). It goes out in the status comment, sets the intent to `working`, and stamps the card's Last update, for `--card` or the card the intent names. |
+| `colony watch [--json]` | Every lead and helper with what it does and why, its last report and its helper agents; what is worth a look; and the cards' progress. |
+| `colony watch --page` | Writes the status page, the pinned `Colony: status` issue, now, and prints its link. |
+| `colony watch --folded` | Prints the helper lines the lead's digest folded, the newest 100. |
+| `colony progress [--all] [--json]` | Your cards, or every lead's with `--all`, with their minutes against their predictions, and when the work left ends with the helpers working at once. |
+| `colony watchdog [status]` | Whether the watchdog runs for this project on this computer, its last pass, whether the computer starts it at login, its log, and the status page's link. |
+| `colony watchdog start [--stay]`, `colony watchdog stop` | Starts the watchdog in the background, apart from every session, or stops it by its exact process id. The lead's wait starts it by itself when `[watch] watchdog` is on. Without `--stay`, it ends after `[watch] quit_hours` with no session alive here. |
+| `colony watchdog install [--dry-run]`, `colony watchdog uninstall [--dry-run]` | Has the computer run the watchdog at login and again whenever it ends: a launchd agent on macOS, a systemd user unit on Linux. `uninstall` removes it. |
+| `colony watchdog run [--stay] [--once]` | The watchdog itself, in the foreground. `--once` makes one pass and ends. |
+
 ## Flags
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `helpers`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `wake`, `fast-check`, `check run`, `ci`, `resume`, `safety protect` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `helpers`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `wake`, `fast-check`, `check run`, `ci`, `resume`, `safety protect`, `watchdog install`, `watchdog uninstall` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |
 | `--review` | `batch` | In Hack, adds one fresh reviewer to the fast check. With no `--card`, it reviews the demo build, `origin/<base>` as it stands, for the last hour before the demo. |
 | `--version` | `colony` | Prints the version. |
 
-`handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post`, `wait`, `ack` and `redeliver` need `$COLONY_SESSION`.
+`handover` and `say` refuse to run outside the lead's session. `needs` runs from any session and signs its line with `$COLONY_SESSION`. `post`, `wait`, `ack`, `redeliver`, `intent` and `report` need `$COLONY_SESSION`.

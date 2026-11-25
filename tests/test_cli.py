@@ -537,7 +537,7 @@ COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "resear
             "tidy", "idea", "card", "release", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later",
             "crash-report", "resume",
             "boot", "summary", "mode", "plan", "orders", "session-hook", "ask", "decisions", "answer", "never-raise",
-            "spend", "approve", "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge")
+            "spend", "approve", "intent", "report", "watch", "progress", "watchdog", "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):

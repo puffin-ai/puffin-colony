@@ -218,6 +218,14 @@ It posts the handover on `Colony: coordination` and prints the command that open
 - An `urgent:` line that a service check failed names the fix: the person's sign-in steps go to the person in one line. A line that a session runs on the wrong account, or on a reserved one, means stop it and open it again on the account the line names.
 - When your wait says this computer is busy, open no more helpers here: ask the person to run `colony join` on another computer, and give cards whose checks share a test database or a port their lock, `colony lock <name> -- <command>`.
 
+### Watch
+
+- Say why whenever you stop on purpose: `colony intent waiting "<what>" [--on <session>] [--for <minutes>]`, `colony intent holding "<what>"`, or `colony intent done` when nothing is left. Your wait wakes you with one `urgent:` line when you have done nothing for 20 minutes, no helper of yours is busy, and you gave no reason.
+- Your wait adds lines about your helpers to the digest: `idle:` (a helper did nothing and gave no reason: hand it a card or ask why), `quiet:` (it missed two reports: look at its window), `overdue:` and `stalled:` (a wait past its end, or on a session that stopped: check on it), `agent:` (its own helper agent ran too long: ask why), and `#<n> late:` (a card past its prediction; at twice it, ask what holds it up, and split it when it is bigger than it looked). A helper waiting, holding or done on purpose raises nothing.
+- When the person asks how long, or what is taking so long, answer from `colony progress`: each card's minutes against its prediction, and when the work left ends. `colony watch` shows every session with what it does and why.
+- The person's phone link is the status page, the pinned `Colony: status` issue, which the watchdog keeps current; `colony watch --page` writes it now and prints the link. Your wait starts the watchdog on this computer; for one the computer keeps running, the person runs `colony watchdog install`.
+- A `chatter:` line folds helper lines that only said they had nothing to do. `colony watch --folded` shows them.
+
 ## Builder
 
 In hack mode, follow the Hack section instead.
@@ -232,6 +240,8 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
+
+Report while you work: at least every 30 minutes, `colony report "<one line of progress>"`, which stamps the card's Last update too. Your wait reminds you when one is due. When you stop on purpose, say why instead of posting a line: `colony intent waiting "<what>"` or `colony intent holding "<what>"`. `colony take` and your `done` line set your intent for you. Never post that you are idle. When your wait says a helper agent of yours ran past its time limit, read its output, and stop it with your agent tool unless it is about to finish.
 
 When a check needs something only one run may use at a time, such as the one local test database or a fixed port, run it under its lock, `colony lock <name> -- <command>`, as the card or the repo's commands name it. When a line says your usage limit reset or the computer slept, start `colony wait` in the background again and carry on from where you stopped.
 

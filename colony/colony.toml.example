@@ -177,3 +177,17 @@ within_hours = 24                  # how far back both look for sessions that sh
 # [services.db]                    # a local service your work needs: its check, and the command that starts it again
 # check = "pg_isready -h localhost -p 5432"
 # restart = "docker compose up -d db"
+
+# Watch (docs/watch.md): optional, and each key shown holds its default.
+# [watch]
+# idle_minutes = 20                # a session doing nothing this long, with no reason given, is idle
+# report_minutes = 30              # a working helper reports at least this often: `colony report "<progress>"`
+# agent_minutes = 45               # how long a helper's own helper agent may run
+# intent_hours = 4                 # a wait or hold with no end time is checked after this long
+# late_after = 1                   # a card past this many times its prediction is late
+# every_minutes = 2                # how often the lead's wait and the watchdog look at the team
+# page = true                      # the watchdog keeps the status page, the pinned `Colony: status` issue
+# page_minutes = 5                 # how often the status page may change
+# watchdog = true                  # the lead's wait starts the watchdog when none runs on its computer
+# escalate_minutes = 60            # a lead idle this long past idle_minutes has its person mentioned on GitHub
+# quit_hours = 24                  # a watchdog started by a wait ends after this long with no session alive here
