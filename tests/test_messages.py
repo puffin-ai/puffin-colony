@@ -718,7 +718,10 @@ def test_a_line_outside_an_agent_session_carries_no_note(home, monkeypatch):
 
 @pytest.mark.parametrize("sentence", ["the report is in {here}/report.md", "read ~/notes/plan.md first",
                                       "see {here}/Desktop/x.txt", "logs at {here}/T/run.log.",
-                                      "the folder {here}/Desktop/ holds it"])
+                                      "the folder {here}/Desktop/ holds it",
+                                      # A line, a line and column, or an anchor after the path (audit, Job B finding 5)
+                                      "see {here}/report.md:12", "fixed {here}/Desktop/x.txt:167, tests pass",
+                                      "notes in ({here}/report.md#L4)", "at {here}/T/run.log:3:9."])
 def test_a_line_naming_a_path_on_this_computer_is_refused(home, monkeypatch, tmp_path, sentence):
     """A path under ~/, or an absolute path that names a file or folder on this computer, which a session on another
     computer can't read."""
@@ -735,7 +738,9 @@ def test_a_line_naming_a_path_on_this_computer_is_refused(home, monkeypatch, tmp
 @pytest.mark.parametrize("sentence", ["fix src/app.ts", "the API is /api/login", "https://example.com/tmp/a.md",
                                       "merge origin/main into it",
                                       "done: the /home/feed page loads on phones",  # a web route, though /home exists
-                                      "the /tmp/no-such-report-here.md route"])
+                                      "the /tmp/no-such-report-here.md route",
+                                      # A device every computer has (audit, Job B finding 5)
+                                      "done: output now goes to /dev/null", "errors go to /dev/stderr"])
 def test_a_repo_path_or_a_link_is_fine(home, monkeypatch, sentence):
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
     assert wait.post(CONFIG, Namespace(card=41, to="builder-2", sentence=f"answer: {sentence}", urgent=False)) == 0

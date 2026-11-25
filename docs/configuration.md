@@ -189,7 +189,7 @@ How lines travel between sessions. See [messages.md](messages.md).
 | `nudge` | no | `"auto"` | When `colony post` and `colony say` nudge the recipient's cmux workspace on this computer: `"off"`, `"auto"` for a recipient whose wait isn't running here, or `"always"`. `--nudge` nudges once whatever it says. Default `"off"`. |
 | `redeliver_minutes` | no | `60` | After a compaction or a restart, how far back the SessionStart hook shows the lines a session was shown and hasn't acknowledged with `colony ack`. `0` shows none. Default 60. |
 | `check_names` | no | `true` | Refuse a line for a name no learned, live or registered session has. Default true. |
-| `refuse_local_paths` | no | `true` | Refuse a line that names a path on this computer, which a session on another computer can't read: anything under `~/`, or an absolute path that names a file or folder here, such as `/tmp/x.md`. A path nothing here has, such as the web route `/home/feed`, passes. Default true. |
+| `refuse_local_paths` | no | `true` | Refuse a line that names a path on this computer, which a session on another computer can't read: anything under `~/`, or an absolute path that names a file or folder here, such as `/tmp/x.md`, read without a line, column or anchor after it, so `/tmp/x.md:12` and `/tmp/x.md#L4` count. A path nothing here has, such as the web route `/home/feed`, and a device such as `/dev/null` pass. Default true. |
 
 ## `[people]`
 

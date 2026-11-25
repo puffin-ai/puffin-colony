@@ -241,12 +241,17 @@ def check_paths(config: dict, said: list[str]) -> None:
 
 def local_path(sentence: str) -> str:
     """The first path a sentence names on this computer: one under the home folder (~/), or an absolute path that
-    names a file or folder here, so its first folder is here too. "" for none: a web route such as /home/feed, or any
-    path nothing here has, passes, whatever folders this computer happens to have."""
+    names a file or folder here, so its first folder is here too, read without a line, a line and column, or an
+    anchor after it, as in app.py:42, app.py:42:7 or README.md#L4. "" for none: a web route such as /home/feed, any
+    path nothing here has, whatever folders this computer happens to have, and a device such as /dev/null, which
+    every computer has."""
     for found in LOCAL_PATH.finditer(sentence):
         path = found[0].rstrip(".,;:!?)]}'\"`")
+        path = re.sub(r"(?:#[^/]*|(?::\d+){1,2})$", "", path).rstrip(".,;:!?)]}'\"`")
         if path.startswith("~/"):
             return path
+        if path.startswith("/dev/"):
+            continue
         try:
             if os.path.exists(path):
                 return path
