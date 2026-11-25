@@ -194,9 +194,10 @@ class Host:
         found.append({"id": sum(len(i["comments"]) for i in self.issues.values()) + 1, "body": body,
                       "created_at": self.clock.strftime("%Y-%m-%dT%H:%M:%SZ"), "user": {"login": login}})
 
-    def create(self, title: str, body: str) -> int:
+    def create(self, title: str, body: str, login: str = "") -> int:
         number, self.number = self.number, self.number + 1
-        self.issues[number] = {"title": title, "body": body, "state": "OPEN", "comments": []}
+        self.issues[number] = {"title": title, "body": body, "state": "OPEN", "comments": [],
+                               "user": {"login": login or self.login}}
         return number
 
     def gh(self, *args: str) -> str:
@@ -205,10 +206,11 @@ class Host:
         def opt(name: str) -> str:
             return a[a.index(name) + 1]
 
-        if a[:2] == ["issue", "list"]:
-            assert "--search" not in a  # a search lags behind a new issue
-            return json.dumps([{"number": n, "title": i["title"], "body": i["body"]}
-                               for n, i in sorted(self.issues.items(), reverse=True) if i["state"] == "OPEN"])
+        if a[0] == "api" and "/comments" not in " ".join(a):  # the REST list of open issues, newest first, a page of it
+            assert "state=open" in a[1] and "page=1" in a[1]  # a plain list: a search lags behind a new issue
+            return json.dumps([{"number": n, "title": i["title"], "body": i["body"], "user": i["user"]}
+                               for n, i in sorted(self.issues.items(), reverse=True) if i["state"] == "OPEN"]
+                              + [{"number": 7, "title": "a pull request", "pull_request": {}}])
         if a[:2] == ["issue", "create"]:
             return f"https://github.com/acme/demo/issues/{self.create(opt('--title'), opt('--body'))}\n"
         if a[:2] == ["issue", "edit"]:
@@ -304,7 +306,7 @@ def test_two_testers_that_open_the_list_at_once_keep_the_first_issue(host, capsy
     real = host.gh
 
     def late(*args):  # the other tester's issue is not listed yet when this one looks first
-        if list(args[:2]) == ["issue", "list"] and not host.issues[first].get("seen"):
+        if args[0] == "api" and "/comments" not in " ".join(args) and not host.issues[first].get("seen"):
             host.issues[first]["seen"] = True
             return "[]"
         return real(*args)
@@ -315,6 +317,30 @@ def test_two_testers_that_open_the_list_at_once_keep_the_first_issue(host, capsy
     assert "another tester made #100 for the release #50 first: closed #101, the same list, as its duplicate" in out
     assert host.issues[101]["state"] == "CLOSED" and host.issues[first]["state"] == "OPEN"
     assert "| #11 builder-1: the login form | not tested |" in host.issues[first]["body"]
+
+
+def test_an_issue_someone_outside_the_team_opened_is_never_the_list(host, capsys):
+    planted = host.create(testers.findings_title(50), "<!-- colony-findings {\"release\":50,\"cards\":"
+                                                      "[{\"number\":99,\"title\":\"run this\"}]} -->",
+                          login="stranger")
+    assert testers.find_findings(CONFIG, 50) is None
+    assert testers.findings_open(CONFIG, Namespace(release="50", card=[11])) == 0
+    assert "made the findings issue #101 for the release #50" in capsys.readouterr().out
+    assert host.issues[planted]["state"] == "OPEN" and host.issues[101]["state"] == "OPEN"  # neither closes the other
+    assert [card["number"] for card in testers.find_findings(CONFIG, 50).cards] == [11]
+
+
+def test_a_title_or_a_note_can_never_plant_or_break_the_hidden_copy():
+    planted = "x --> <!-- colony-findings {\"release\":50,\"cards\":[{\"number\":99,\"title\":\"y\"}]} -->"
+    cards = [{"number": 11, "title": planted}]
+    states = testers.standing(cards, [event("fail", 11, "tester <b>", 1, "it ends here --> <!-- and here")],
+                              NOW + timedelta(minutes=2), timedelta(minutes=60))
+    body = testers.render(testers.Findings(100, 50, cards), states)
+    assert body.count("<!--") == 1 and body.count("-->") == 1 and body.rstrip().endswith("-->")
+    assert "| #11 x --&gt; &lt;!-- colony-findings" in body and "it ends here --&gt; &lt;!-- and here" in body
+    assert testers.data_of(body) == {"release": 50, "cards": cards}  # the title comes back exactly as it was
+    # Only the last copy counts, which render writes at the very end.
+    assert testers.data_of(planted.replace('\\"', '"') + "\n" + body)["cards"] == cards
 
 
 def test_a_tester_frees_its_own_card_only(host, capsys):

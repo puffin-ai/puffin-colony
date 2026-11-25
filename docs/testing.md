@@ -33,7 +33,7 @@ Each release has one findings issue on the code host, titled `test: findings for
 | Hand a card back, untested | `colony findings free <release> <card>` |
 | Bring the list up to date and print it | `colony findings show <release>` |
 
-**How it stays current.** Each claim and each result is one comment on the issue, such as `findings: fail #12: the button does nothing on a phone (by tester on laptop)`. Every command reads all of them and rewrites the issue's table, its counts, and its sections of failures and blocked cards. So the list is current while any tester works, and no one tester or lead owns it. Only comments from the team count: the logins in `[people] logins`, or, with none, people with access to the repo.
+**How it stays current.** Each claim and each result is one comment on the issue, such as `findings: fail #12: the button does nothing on a phone (by tester on laptop)`. Every command reads all of them and rewrites the issue's table, its counts, and its sections of failures and blocked cards. So the list is current while any tester works, and no one tester or lead owns it. Only the team's issue and the team's comments count: the logins in `[people] logins`, or, with none, people with access to the repo. An issue anyone else opens with the same title is never the list, and a card's title or a note can't change the list's hidden copy of its cards.
 
 **Races.** When two testers claim the same card at once, the earlier comment wins, and `colony findings next` moves the other one on to the next card. When two testers open the list at once and each makes an issue, the one that then sees the older issue closes its own as a duplicate and uses the older one.
 

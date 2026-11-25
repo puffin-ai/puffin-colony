@@ -42,7 +42,7 @@ FIXTURE_QUESTION = re.compile(r"\btest(?:ing)?[\s-]+(?:accounts?|users?|logins?|
                               r"environments?|credentials?)\b|\bfixtures?\b|\bseed(?:ed)?\s+data\b|\bsandbox\b", re.I)
 
 CLAIM_MINUTES = 60
-FINDINGS_READ = 300  # the newest open issues a findings command reads to find the release's findings issue
+FINDINGS_PAGES = 3  # pages of 100 newest open issues a findings command reads to find the release's findings issue
 FINDINGS_MARK = f"{cli.NAME}-findings"
 FINDINGS_DATA = re.compile(rf"<!--\s*{FINDINGS_MARK}\s+(\{{.*?\}})\s*-->", re.S)
 EVENT = re.compile(r"^findings:\s*(claim|free|pass|fail|blocked)\s+#(\d+)(?::\s*(.*?))?\s*\(by ([^()\n]+)\)\s*$",
@@ -309,9 +309,21 @@ def standing(cards: list[dict], events: list[Event], now: datetime, lapse: timed
     return states
 
 
+def safe(text: str) -> str:
+    """Text made safe for the findings issue's body: one line, with `<` and `>` as entities, so a card's title or a
+    note can never open or close an HTML comment, and never plant a hidden copy of its own (data_of)."""
+    return " ".join(str(text).split()).replace("<", "&lt;").replace(">", "&gt;")
+
+
 def cell(text: str) -> str:
     """Text made safe for one Markdown table cell."""
-    return " ".join(str(text).split()).replace("|", "\\|")
+    return safe(text).replace("|", "\\|")
+
+
+def hidden(data: dict) -> str:
+    """The hidden copy as JSON with `<` and `>` escaped, which JSON reads back as they were, so no title in it can
+    end the HTML comment that holds it."""
+    return json.dumps(data, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
 def render(findings: Findings, states: dict[int, CardState]) -> str:
@@ -330,9 +342,9 @@ def render(findings: Findings, states: dict[int, CardState]) -> str:
         rows.append(f"| #{number} {cell(state.title)} | {result} | {cell(who)} | {cell(state.note)} |")
     counts = {kind: sum(1 for s in states.values() if s.result == kind) for kind in RESULTS}
     tested = sum(counts.values())
-    failures = [f"- #{s.number} {s.title}: {s.note or 'no note'} ({s.by})" for s in states.values()
+    failures = [f"- #{s.number} {safe(s.title)}: {safe(s.note or 'no note')} ({safe(s.by)})" for s in states.values()
                 if s.result == "fail"]
-    blocked = [f"- #{s.number} {s.title}: {s.note or 'no note'} ({s.by})" for s in states.values()
+    blocked = [f"- #{s.number} {safe(s.title)}: {safe(s.note or 'no note')} ({safe(s.by)})" for s in states.values()
                if s.result == "blocked"]
     data = {"release": n, "cards": [{"number": number, "title": states[number].title} for number in sorted(states)]}
     parts = [f"Findings for the release #{n}, which every tester keeps through `{cli.NAME} findings`: claim a card "
@@ -345,28 +357,38 @@ def render(findings: Findings, states: dict[int, CardState]) -> str:
         parts += ["", "## Failures", *failures]
     if blocked:
         parts += ["", "## Blocked", *blocked]
-    parts += ["", f"<!-- {FINDINGS_MARK} {json.dumps(data, separators=(',', ':'))} -->"]
+    parts += ["", f"<!-- {FINDINGS_MARK} {hidden(data)} -->"]
     return "\n".join(parts)
 
 
 def data_of(body: str) -> dict:
-    """The hidden copy of the release and its cards in a findings issue's body, or {}."""
-    found = FINDINGS_DATA.search(body or "")
+    """The hidden copy of the release and its cards in a findings issue's body, or {}. Only the last one counts,
+    which render writes at the very end."""
+    found = FINDINGS_DATA.findall(body or "")
     try:
-        data = json.loads(found[1]) if found else {}
+        data = json.loads(found[-1]) if found else {}
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def findings_issues(config: dict, release: int) -> list[dict]:
-    """The release's open findings issues, oldest first, from the newest open issues. A plain listing, not a search:
-    GitHub's search index lags behind a new issue, and a tester on another computer must find it at once."""
-    title = findings_title(release)
-    listed = json.loads(wait.gh("issue", "list", "--repo", config["project"]["repo"], "--state", "open", "--json",
-                                "number,title,body", "--limit", str(FINDINGS_READ)) or "[]")
-    return sorted((issue for issue in listed if isinstance(issue, dict) and issue.get("title") == title),
-                  key=lambda issue: issue["number"])
+    """The release's open findings issues that the team opened, oldest first, from the newest open issues. A plain
+    listing, not a search: GitHub's search index lags behind a new issue, and a tester on another computer must find
+    it at once. It reads the REST list, which names each issue's author, so an issue anyone else opens with the same
+    title is never the list, as only the team's comments count on it (events_of)."""
+    from colony import presence
+
+    title, logins, found = findings_title(release), team_logins(config), []
+    for page in range(1, FINDINGS_PAGES + 1):
+        listed = json.loads(wait.gh("api", f"repos/{config['project']['repo']}/issues?state=open&sort=created&"
+                                           f"direction=desc&per_page=100&page={page}") or "[]")
+        listed = listed if isinstance(listed, list) else []
+        found += [issue for issue in listed if isinstance(issue, dict) and "pull_request" not in issue
+                  and issue.get("title") == title and presence.by_team(issue, logins)]
+        if len(listed) < 100:
+            break
+    return sorted(found, key=lambda issue: issue["number"])
 
 
 def find_findings(config: dict, release: int) -> Findings | None:
