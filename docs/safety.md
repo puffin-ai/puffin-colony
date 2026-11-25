@@ -86,7 +86,12 @@ The guards stop an agent's honest mistakes, and the easy ways around them. They 
 - A program the guard doesn't read, such as a Python or node script, a make target or a build tool, can push, merge or kill.
 - A program an earlier call put on PATH, such as a `git`, `dirname` or `uname` of its own, runs in place of the real one, and the guard reads the line as if it were the real one.
 - An agent that edits the guard, `.claude/settings.json` or `.git/config` by hand can switch the guards off.
-- A shell construct the script check reads differently from the shell. When a review finds another such way around the guards, it goes on this list rather than into more guard code.
+- A shell construct the script check reads differently from the shell. Reviews found these, which the guards don't follow:
+  - the shell's own prefixes before a command that binds a name, such as `builtin export PATH=…`, or zsh's `noglob` or `-`;
+  - quotes in the operands of a binding command other than `export`, `readonly`, `unset` and `env`, such as `read 'X'`, whose names the guard reads from the raw text;
+  - zsh's `${name::=value}`, which always assigns, and parameter flags such as `${(P)name}`, which name a variable through another.
+
+  When a review finds another such way around the guards, it goes on this list rather than into more guard code.
 
 The real lock is on the code host: branch protection, or a ruleset, that refuses a direct push, a force push and a deletion on the base and the other protected branches, and asks for a pull request. When someone else on the team reviews, require their approval too, since GitHub never counts an author's own. `colony safety protect` turns that on for you through `gh api`, and `--dry-run` prints what it would set first. See [Second locks you should add](#second-locks-you-should-add).
 
