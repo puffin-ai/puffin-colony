@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -346,7 +347,8 @@ def github(folder: Path, default: str | None = None, branches: dict[str, str] | 
            aliases: str = "") -> str:
     """A folder with a stub gh that stands in for GitHub, and logs each call: `gh api .../contents/.colony/colony.toml`
     prints `default`, or the copy on `branches[ref]` with ?ref=, and fails when there is none; `gh pr view` prints `pr`,
-    "<base> <url>", and fails when it is empty; `gh alias list` prints `aliases`."""
+    "<base> <url> [<head>]", and fails when it is empty; `gh alias list` prints `aliases`. A stub git beside it
+    reads origin's holds from a repo that has none (holds_git), as GitHub would for a project with no freeze."""
     folder.mkdir(parents=True, exist_ok=True)
     for name, text in {"default": default, **(branches or {})}.items():
         if text is not None:
@@ -372,6 +374,7 @@ if [ "$1 $2" = "alias list" ]; then exec cat "$D/aliases"; fi
 exit 0
 ''')
     gh.chmod(0o755)
+    holds_git(folder, holds_origin(folder, None))
     return str(folder)
 
 
@@ -397,6 +400,85 @@ def test_merge_into_counts_only_what_the_copy_on_the_code_hosts_default_branch_n
     assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "e", default=ALLOW_MAIN, pr=pr)))
     (hosted / ".colony" / "colony.toml").write_text(unnamed)
     assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "f", default=ALLOW_MAIN, pr=pr)))
+
+
+def holds_origin(folder: Path, holds: list[dict] | None) -> Path:
+    """A bare repo standing in for origin's refs/colony/holds: a commit whose message holds `holds` as JSON, as
+    freeze.py writes it, or no such ref for None."""
+    bare = folder / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    if holds is not None:
+        tree = subprocess.run(["git", "-C", str(bare), "hash-object", "-w", "-t", "tree", "/dev/null"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        commit = subprocess.run(["git", "-C", str(bare), "-c", "user.name=C", "-c", "user.email=c@example.test",
+                                 "commit-tree", tree, "-m", "colony holds", "-m", json.dumps(holds)],
+                                capture_output=True, text=True, check=True).stdout.strip()
+        subprocess.run(["git", "-C", str(bare), "update-ref", "refs/colony/holds", commit], check=True)
+    return bare
+
+
+def holds_git(folder: Path, bare: Path) -> None:
+    """A stub git in `folder` that reads origin's holds from `bare`, as the guard's git would from GitHub, and runs
+    the real git for every other call."""
+    real = shutil.which("git")
+    (folder / "git").write_text(f'''#!/bin/sh
+case "$*" in
+  "ls-remote origin refs/colony/holds") exec "{real}" ls-remote "{bare}" refs/colony/holds ;;
+  "fetch -q --no-tags --no-write-fetch-head origin refs/colony/holds")
+    exec "{real}" fetch -q --no-tags --no-write-fetch-head "{bare}" refs/colony/holds ;;
+esac
+exec "{real}" "$@"
+''')
+    (folder / "git").chmod(0o755)
+
+
+ALLOW_DEV_INTEGRATION = '[project]\nbase = "main"\nintegration = "dev"\n\n[safety]\nmerge_into = ["main", "dev"]\n'
+
+
+@pytest.mark.parametrize("holds, pr, allowed", [
+    (None, "dev https://github.com/acme/demo/pull/5 ana/12", True),  # no holds ref: nothing held
+    ([], "dev https://github.com/acme/demo/pull/5 ana/12", True),
+    ([{"branch": "dev", "kind": "release", "by": "ana-lead", "until": 4102444800}],
+     "dev https://github.com/acme/demo/pull/5 ana/12", False),
+    ([{"branch": "dev", "kind": "red", "sha": "a" * 40, "until": 0}],
+     "dev https://github.com/acme/demo/pull/5 ana/12", False),  # a red hold has no end time
+    ([{"branch": "dev", "kind": "freeze", "until": 1000}], "dev https://github.com/acme/demo/pull/5 ana/12", True),
+    ([{"branch": "dev", "kind": "release", "until": 4102444800, "allow": ["ana/12"]}],
+     "dev https://github.com/acme/demo/pull/5 ana/12", True),  # a named fix, by its branch
+    ([{"branch": "dev", "kind": "release", "until": 4102444800, "allow": ["#12"]}],
+     "dev https://github.com/acme/demo/pull/5 ana/12", True),  # a named fix, by its card
+    ([{"branch": "staging", "kind": "release", "until": 4102444800}],
+     "dev https://github.com/acme/demo/pull/5 ana/12", True),  # a hold on another branch
+    ([{"branch": "dev", "kind": "release", "until": 4102444800}],
+     "main https://github.com/acme/demo/pull/5 ana/12", False),  # the integration branch's freeze reaches the base
+])
+def test_a_merge_into_an_allowed_branch_waits_for_its_freeze_and_red_holds(holds, pr, allowed, hosted, tmp_path):
+    """Regression: the merge guard never read the holds, so a lead's `gh pr merge` landed on a branch frozen for a
+    release or held red, though the docs said a freeze pauses every lead's landings. The guard reads origin's
+    refs/colony/holds after it allows a base, as freeze.py does for `colony merge`."""
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV_INTEGRATION)
+    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr=pr)
+    holds_git(Path(stub), holds_origin(tmp_path, holds))
+    run = push_guard("gh pr merge 5", hosted, path=stub)
+    if allowed:
+        assert (run.returncode, run.stderr) == (0, ""), run.stderr
+    else:
+        assert merge_refused(run, "this pull request merges into"), run.stderr
+        assert "is frozen" in run.stderr or "is red" in run.stderr, run.stderr
+        assert "colony freeze allow" in run.stderr
+
+
+def test_a_merge_is_refused_when_origins_holds_cant_be_read(hosted, tmp_path):
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV_INTEGRATION)
+    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr="dev https://github.com/acme/demo/pull/5 ana/12")
+    holds_git(Path(stub), tmp_path / "no-such-origin.git")
+    run = push_guard("gh pr merge 5", hosted, path=stub)
+    assert merge_refused(run, "origin's merge freeze") and "could not be read" in run.stderr, run.stderr
+    tool = {"tool_name": "mcp__github__merge_pull_request", "cwd": str(hosted),
+            "tool_input": {"owner": "acme", "repo": "demo", "pullNumber": 5}}
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(hosted), "PATH": os.pathsep.join([stub, os.environ["PATH"]])}
+    run = subprocess.run([sys.executable, str(GUARD)], input=json.dumps(tool), capture_output=True, text=True, env=env)
+    assert run.returncode == 2 and "could not be read" in run.stderr, run.stderr
 
 
 def test_only_the_copy_on_the_default_branch_counts_never_the_bases(hosted, tmp_path):

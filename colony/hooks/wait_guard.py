@@ -77,6 +77,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
@@ -184,6 +185,8 @@ KILL_REFUSAL = ("kill guard: refused, {reason}. A kill by name or pattern can en
 # The merge guard
 SAFETY = "safety"  # the colony.toml table that holds merge_into and protect
 GH_TIMEOUT = 20  # seconds the guard gives `gh pr view` to say which branch a pull request merges into
+HOLDS_REF = "refs/colony/holds"  # origin's merge freeze and red holds, which `colony freeze` and `colony health` keep
+HOLDS_TIMEOUT = 15  # seconds each git call that reads origin's holds may take
 PR_MERGE_VALUE_OPTIONS = {"-t", "--subject", "-b", "--body", "-F", "--body-file", "--match-head-commit", "-A",
                           "--author-email"}
 GH_API_VALUE_OPTIONS = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q",
@@ -1109,24 +1112,106 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
 # The merge guard
 
 
-def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str]:
-    """The branch a pull request merges into and the URL of the repo it is in, from `gh pr view`, or ("", "") when
-    gh can't say. `target` is its number, URL or branch, "" for the branch checked out, and `repo` the --repo
-    given, if any."""
+def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str, str]:
+    """The branch a pull request merges into, the URL of the repo it is in, and its own branch, from `gh pr view`, or
+    ("", "", "") when gh can't say. `target` is its number, URL or branch, "" for the branch checked out, and `repo`
+    the --repo given, if any."""
     argv = ["gh", "pr", "view", *([target] if target else []), *(["--repo", repo] if repo else []),
-            "--json", "baseRefName,url", "--jq", '.baseRefName + " " + .url']
+            "--json", "baseRefName,url,headRefName", "--jq", '.baseRefName + " " + .url + " " + .headRefName']
     try:
         run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=GH_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
-        return "", ""
-    base, _, url = run.stdout.strip().partition(" ") if run.returncode == 0 else ("", "", "")
+        return "", "", ""
+    words = run.stdout.split() if run.returncode == 0 else []
+    base, url, head = (words + ["", "", ""])[:3]
     found = PR_URL.match(url.strip())
-    return (base, found[1]) if base and found else ("", "")
+    return (base, found[1], head) if base and found else ("", "", "")
 
 
-def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request") -> str:
-    """Why merging a pull request into `base`, in the repo at the URL `home`, isn't allowed, or "". The yes comes
-    from that repo's own default branch, and only when it is origin's repo."""
+def git_quiet(cwd: str, *args: str) -> subprocess.CompletedProcess | None:
+    """One git call that reads origin's holds, within HOLDS_TIMEOUT, or None when it can't run."""
+    try:
+        return subprocess.run(["git", *args], cwd=cwd or None, capture_output=True, text=True, timeout=HOLDS_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def origin_holds(cwd: str) -> list[dict] | None:
+    """Origin's holds as freeze.py keeps them: the JSON in the message of the commit origin's refs/colony/holds
+    points at, read now with `git ls-remote` and, when this clone lacks that commit, `git fetch`. [] when origin has
+    no holds; None when origin can't be reached or the commit can't be read."""
+    listed = git_quiet(cwd, "ls-remote", "origin", HOLDS_REF)
+    if listed is None or listed.returncode:
+        return None
+    words = listed.stdout.split()
+    if not words:
+        return []
+    sha = words[0]
+    if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", sha):
+        return None
+    shown = git_quiet(cwd, "--no-replace-objects", "cat-file", "commit", sha)
+    if shown is None or shown.returncode:
+        fetched = git_quiet(cwd, "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin", HOLDS_REF)
+        if fetched is None or fetched.returncode:
+            return None
+        shown = git_quiet(cwd, "--no-replace-objects", "cat-file", "commit", sha)
+        if shown is None or shown.returncode:
+            return None
+    _, _, message = shown.stdout.partition("\n\n")
+    _, _, body = message.partition("\n\n")
+    try:
+        holds = json.loads(body or "[]")
+    except ValueError:
+        holds = []  # as freeze.read reads it
+    return [hold for hold in holds if isinstance(hold, dict)] if isinstance(holds, list) else []
+
+
+def held_by(base: str, cwd: str) -> list[str]:
+    """The branches whose holds pause a merge into `base`, as freeze.reaches says: the branch itself, and for the
+    base, the integration branch too when it differs, which the working copy or origin's copy of colony.toml names."""
+    text = colony_toml(cwd)
+    committed = committed_toml(cwd, [default_branch(cwd), project_base(text) or "main"]) or ""
+    bases = {project_base(text) or "main", *filter(None, [project_base(committed)])}
+    if base not in bases:
+        return [base]
+    return list(dict.fromkeys([base, *filter(None, (project_value(text, "integration"),
+                                                    project_value(committed, "integration")))]))
+
+
+def hold_words(hold: dict) -> str:
+    """One hold in words, as freeze.describe says it."""
+    branch, kind = str(hold.get("branch", "?")), hold.get("kind")
+    why = f" ({hold['why']})" if hold.get("why") else ""
+    if kind == "red":
+        return f"{branch} is red: it fails its checks{why}"
+    reason = "for the release" if kind == "release" else "by hand"
+    return f"{branch} is frozen {reason}{why}, by {hold.get('by') or 'someone'}"
+
+
+def holds_refusal(base: str, head: str, cwd: str, which: str) -> str:
+    """Why a merge into `base` must wait for a live hold on it, the release freeze or a red hold, or "": a hold whose
+    allow list names the pull request's branch or its card, `#<n>` from a branch such as ana/12, lets it through. When
+    origin's holds can't be read, it waits too."""
+    holds = origin_holds(cwd)
+    if holds is None:
+        return (f"origin's merge freeze, {HOLDS_REF}, could not be read, so the guard can't tell whether {base} is "
+                "frozen or red: merge once origin can be reached")
+    card = re.search(r"(?:^|/)(\d+)$", head)
+    names = {head, f"#{card[1]}" if card else ""} - {""}
+    reach, now = held_by(base, cwd), time.time()
+    for hold in holds:
+        until = hold.get("until") or 0
+        ended = isinstance(until, (int, float)) and not isinstance(until, bool) and 0 < until <= now
+        if not ended and hold.get("branch") in reach and not names & set(map(str, hold.get("allow") or [])):
+            return (f"{which} merges into {base}, and {hold_words(hold)}: merges wait until the hold ends, unless "
+                    "`colony freeze allow` names this pull request's branch or card")
+    return ""
+
+
+def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request", head: str = "") -> str:
+    """Why merging a pull request, from the branch `head`, into `base`, in the repo at the URL `home`, isn't allowed,
+    or "". The yes comes from that repo's own default branch, and only when it is origin's repo; then a live freeze
+    or red hold on the base still makes it wait (holds_refusal)."""
     if not base:
         return f"`gh pr view` could not say which branch and repo {which} merges into"
     there, mine = repo_of(home), origin_repo(cwd)
@@ -1134,7 +1219,7 @@ def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request")
         return (f"{which} is in {there[1] or home}, not in this repo's origin, "
                 f"{mine[1] or 'which the guard cannot name'}")
     if Allowance(cwd, home).permits(base):
-        return ""
+        return holds_refusal(base, head, cwd, which)
     return f"{which} merges into {base}, which [safety] merge_into on the repo's default branch doesn't name"
 
 
@@ -1151,7 +1236,8 @@ def pr_merge(arguments: list[str], repo: str, cwd: str) -> str:
             target = word
     if not Allowance(cwd).named:
         return "`gh pr merge` merges a pull request, and [safety] merge_into allows no branch"
-    return pr_allowed(*pr_target(target, repo, cwd), cwd)
+    base, home, head = pr_target(target, repo, cwd)
+    return pr_allowed(base, home, cwd, head=head)
 
 
 def file_bytes(name: str, cwd: str) -> bytes | None:
@@ -1531,7 +1617,8 @@ def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
         owner, name = tool_input.get("owner"), tool_input.get("repo")
         if not (number and owner and name):
             return [f"`{action}` names no pull request number, owner and repo for the guard to check"]
-        reason = pr_allowed(*pr_target(number, f"{owner}/{name}", cwd), cwd, f"pull request {number}")
+        base, home, head = pr_target(number, f"{owner}/{name}", cwd)
+        reason = pr_allowed(base, home, cwd, f"pull request {number}", head)
         return [reason] if reason else []
     if action in MCP_COMMITS:
         owner, name, branch = tool_input.get("owner"), tool_input.get("repo"), str(tool_input.get("branch") or "")
@@ -1548,8 +1635,10 @@ def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
         if not same_repo(there, mine):
             return [f"`{action}` commits onto {held[0]} in {there[1]}, which is not this repo's origin, {mine[1]}"]
         allowance = Allowance(cwd, f"https://{mine[0]}/{mine[1]}")
-        held = [b for b in held if not allowance.permits(b)]
-        return [f"`{action}` commits straight onto {held[0]}"] if held else []
+        refused = [b for b in held if not allowance.permits(b)]
+        if refused:
+            return [f"`{action}` commits straight onto {refused[0]}"]
+        return [reason for b in held if (reason := holds_refusal(b, "", cwd, f"`{action}`"))][:1]
     return []
 
 
