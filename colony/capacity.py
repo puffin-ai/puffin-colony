@@ -475,12 +475,14 @@ def place(config: dict, args, counts: dict[str, set[str]],
     if tight:
         return None, f"{NO_FIT}: {'; '.join(tight)}"
     now = datetime.now(timezone.utc)
-    if usable and not alone:  # several accounts, each out of room: wait for the soonest reset, never the lead's
+    out = [name for name in usable if judge(config, name, now, pool)[0] == 2]  # known to be out, not just unread
+    if usable and not alone and len(out) == len(usable):  # several accounts, each out: wait for the soonest reset
         listed = f"{', '.join(usable[:-1])} and {usable[-1]} are" if len(usable) > 1 else f"{usable[0]} is"
         until = "their windows reset" if len(usable) > 1 else "its window resets"
         return None, f"{NO_FIT}: {listed} out of room until {until}"
-    # The only account has no room: it is still named, as cli.pick names it when all are out, but never a lead's own
-    # account that is out of room, where a helper would only take the lead's window once it resets.
+    # No account was picked, but not every one is known to be out of room, such as one with no reading, or it is the
+    # only account: the first is still named, as cli.pick names it, but never a lead's own account that is out of
+    # room, where a helper would only take the lead's window once it resets.
     fallback = usable or [name for name in shared if judge(config, name, now, pool)[0] != 2]
     if not fallback:
         if shared:
