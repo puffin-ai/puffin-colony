@@ -1339,18 +1339,21 @@ STDIN_REFUSAL = ("a shell on this line reads its script on standard input from s
 
 def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
     """A line's simple commands as sequence() splits them, each with what a redirection gives its standard input,
-    the file after a `<`, or "<<" for a here-document or here-string, else "", and the operator before it, such as |
-    for a command fed by a pipe."""
+    descriptor 0: the file after a `<`, or "<<" for what the guard can't read as a file, a here-document, a
+    here-string or a copy of another descriptor (`<&`), else ""; and the operator before it, such as | for a command
+    fed by a pipe. A redirection of any other descriptor, such as `3< file` or `2> file`, leaves standard input be."""
     found: list[tuple[list[str], str, str]] = []
     words: list[str] = []
-    given, before, skip = "", "", ""
+    given, before, skip, stdin = "", "", "", False
     for token in line:
         if skip:
-            given, skip = (token if skip == "<" else "<<" if skip.startswith("<<") else given), ""
+            if stdin:
+                given = token if skip == "<" else "<<"
+            skip, stdin = "", False
         elif token in REDIRECTIONS or token.startswith("<<"):
+            descriptor = int(words.pop()) if words and words[-1].isdigit() else None
             skip = token
-            if words and words[-1].isdigit():
-                words.pop()
+            stdin = token.startswith("<") and descriptor in (None, 0)
         elif token and set(token) <= PUNCTUATION:
             if words:
                 found.append((words, given, before))
@@ -1381,19 +1384,21 @@ def script_named(program: list[str]) -> tuple[str, bool]:
     if not program:
         return "", False
     if PurePath(program[0]).name in SHELLS:
-        if SHELL_NO_SCRIPT & set(program[1:]):
+        if program[1:2] and program[1] in SHELL_NO_SCRIPT:  # only first: later, it is the script's own argument
             return "", True
-        skip, operand = False, ""
+        skip, ended = False, False
         for word in program[1:]:
             if skip:
                 skip = False
+            elif ended or not word.startswith(("-", "+")):
+                return ("-" if word in STDIN_NAMES else word), True  # the first operand is the script
+            elif word in ("-", "--"):
+                ended = True  # the options end, and the next word is the script, whatever it looks like
             elif word in SHELL_VALUE_OPTIONS:
                 skip = True
             elif word.startswith("-") and not word.startswith("--") and "s" in word[1:]:
                 return "-", True  # -s: the script is standard input, and the operands only its arguments
-            elif not operand and (not word.startswith(("-", "+")) or word == "-"):
-                operand = word
-        return ("-" if not operand or operand in STDIN_NAMES else operand), True
+        return "-", True
     if program[0] in SCRIPT_SOURCES:
         return (program[1] if len(program) > 1 else ""), True
     return (program[0], False) if "/" in program[0] else ("", False)

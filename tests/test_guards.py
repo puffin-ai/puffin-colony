@@ -745,9 +745,26 @@ def test_a_file_that_only_looks_like_a_program_is_read_as_a_script(content, on_f
     assert run.returncode == 2 and "holds a `git push`" in run.stderr, run.stderr
 
 
+@pytest.mark.parametrize("command", [
+    "bash push.sh --version", "bash push.sh --help",  # an argument of the script, not a question to the shell
+    "cat harmless.sh | bash - push.sh", "bash -- push.sh",  # - and -- end the options; the next word is the script
+    "cat push.sh | sh 3< harmless.sh",  # a file on descriptor 3 is not the shell's standard input
+    "cat harmless.sh | sh <&3", "cat harmless.sh | sh 0<&3",  # standard input copied from a descriptor
+    "cat push.sh | sh 2>/dev/null",
+])
+def test_the_shells_own_reading_of_its_words_and_descriptors_decides_the_script(command, on_feature):
+    """Regression: the guard read `--version` anywhere as no script, took a lone `-` as standard input though it ends
+    the options, and took any `<`, on any descriptor, as the shell's standard input."""
+    (on_feature / "harmless.sh").write_text("echo hi\n")
+    (on_feature / "push.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2, (command, run.stderr)
+
+
 def test_a_shell_that_reads_no_script_runs(on_feature):
     (on_feature / "fine.sh").write_text("npm test\n")
-    for command in ("bash --version", "sh -c 'npm test'", "cat fine.sh | sh", "sh < fine.sh", "bash -s < fine.sh"):
+    for command in ("bash --version", "sh -c 'npm test'", "cat fine.sh | sh", "sh < fine.sh", "bash -s < fine.sh",
+                    "sh 0< fine.sh", "cat fine.sh | sh 2>/dev/null", "bash -- fine.sh"):
         run = push_guard(command, on_feature)
         assert (run.returncode, run.stderr) == (0, ""), command
 
