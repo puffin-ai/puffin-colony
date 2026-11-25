@@ -1257,6 +1257,17 @@ def file_bytes(name: str, cwd: str) -> bytes | None:
     return data if len(data) <= FILE_LIMIT else None
 
 
+def json_strings(value) -> list[str]:
+    """Every string in a JSON value, its keys too, with its escapes decoded."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for key, item in value.items() for text in (str(key), *json_strings(item))]
+    if isinstance(value, list):
+        return [text for item in value for text in json_strings(item)]
+    return []
+
+
 def graphql_source(option: str, value: str) -> str | None:
     """Where a `gh api` field's value comes from: the file a `-F key=@file` or `--input file` names, "-" for standard
     input, or None for a value written on the line. `-f` sends its value as it is, @ or not."""
@@ -1313,7 +1324,14 @@ def api_merge(arguments: list[str], cwd: str = "") -> str:
         if data is None:
             return (f"`gh api graphql` reads its query from {source}, which the guard can't read from this folder, "
                     "so it can't check that the query merges nothing")
-        if GRAPHQL_MERGE.search(data.decode("utf-8", errors="replace")):
+        text = data.decode("utf-8", errors="replace")
+        if given == "--input":  # a JSON body, whose \\u escapes GitHub decodes: read every string as GitHub will
+            try:
+                text = "\n".join(json_strings(json.loads(text)))
+            except ValueError:
+                return (f"`gh api graphql` sends {source} as its body, which the guard can't read as JSON, so it "
+                        "can't check that the query merges nothing")
+        if GRAPHQL_MERGE.search(text):
             return f"{merges}: {source} holds a merge mutation"
     return ""
 

@@ -619,6 +619,19 @@ def test_a_graphql_merge_read_from_a_file_or_stdin_is_refused(command, hosted, t
     assert merge_refused(run, "`gh api graphql`"), (command, run.stderr)
 
 
+@pytest.mark.parametrize("body", [
+    '{"query": "mutation { \\u006dergePullRequest(input: {pullRequestId: \\"X\\"}) { clientMutationId } }"}',
+    '{"query": "mutation($i: MergePullRequestInput!) { x: \\u006d\\u0065rgePullRequest(input: $i) { clientMutationId } }"}',
+    'mutation { mergePullRequest }',  # not JSON: GitHub reads no such body, and the guard can't check it
+])
+def test_a_graphql_input_body_is_read_as_json_with_its_escapes_decoded(body, hosted, tmp_path):
+    """Regression: an --input body is JSON, and GitHub decodes its \\u escapes, so a merge mutation spelled with them
+    passed a search of the file's raw text."""
+    (hosted / "body.json").write_text(body)
+    run = push_guard("gh api graphql --input body.json", hosted, path=github(tmp_path / "gh"))
+    assert merge_refused(run, "`gh api graphql`"), run.stderr
+
+
 def test_a_graphql_query_from_a_file_without_a_merge_runs(hosted, tmp_path):
     (hosted / "issues.graphql").write_text("query { repository(owner: \"acme\", name: \"demo\") { id } }")
     (hosted / "body.json").write_text(json.dumps({"query": "query { viewer { login } }"}))
