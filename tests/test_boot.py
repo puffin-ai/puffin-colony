@@ -570,29 +570,6 @@ def test_a_group_lead_opens_under_its_own_name(repo, capsys, monkeypatch):
     assert not boot.read_plan(CONFIG, "ana-main-lead")["groups"][0].get("started")  # a dry run starts nothing
 
 
-def test_plan_start_places_each_group_lead_by_the_lead_account_rule(repo, capsys, monkeypatch):
-    """Regression (audit, Job B finding 4): an orchestrator's group leads opened on the plain pick; plan start now asks
-    capacity.group_lead_account for each, telling it the group leads it already opened."""
-    from colony import capacity
-
-    seen = []
-
-    def place(config, person, placed):
-        seen.append({name: list(titles) for name, titles in placed.items()})
-        return "main", "~/.claude", "main: shares the orchestrator's account"
-
-    monkeypatch.setattr(capacity, "group_lead_account", place)
-    monkeypatch.setattr(boot, "post_plan", lambda config, held: None)
-    personal('[team]\nshape = "orchestrator"\n')
-    run(capsys, "plan", "new", "Ship it")
-    run(capsys, "plan", "group", "web", "--folders", "web/", "--done", "it loads")
-    run(capsys, "plan", "group", "api", "--folders", "api/", "--done", "it answers")
-    code, out = run(capsys, "plan", "start", "--dry-run")
-    assert code == 0 and "dry run: demo-web-lead on account main" in out
-    assert "dry run: demo-api-lead on account main" in out
-    assert seen == [{}, {"main": ["demo-web-lead"]}]
-
-
 # The instructions
 
 

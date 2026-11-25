@@ -23,7 +23,7 @@ Any provider can be in the pool. A Claude Code account's usage comes from its se
 
 `colony open <name>` and `colony join` follow the same caps for one helper. When every account is at its cap, they refuse and say so. `--account` always opens on the account you name.
 
-A wave never opens a helper on an account where it would run the account out before its reset ([Plan around resets](#plan-around-resets)), and never on a live lead's own account while you have others ([The lead's own account](#the-leads-own-account)). When no account can take one more helper before its reset, or every account is out of room, the wave opens fewer, and the background run starts the rest right after the soonest reset, without counting that wait against its hour of patience.
+A wave never opens a helper on an account where it would run the account out before its reset ([Plan around resets](#plan-around-resets)), and on a live lead's own account only when no other account fits one ([The lead's own account](#the-leads-own-account)). When no account can take one more helper before its reset, or every account is out of room, the wave opens fewer, and the background run starts the rest right after the soonest reset, without counting that wait against its hour of patience.
 
 ## Builders are helpers, never subagents
 
@@ -33,20 +33,20 @@ So a lead or an orchestrator never starts a subagent to build, and a helper star
 
 ## The lead's own account
 
-While you have other accounts, no helper opens on the account a live lead or orchestrator runs on, so the coordinator is never cut off by its own team. When the others are at their caps, a new helper waits for one to finish; when they are out of room, it waits for the soonest reset. When every account you have runs a lead or the orchestrator, no helper opens, and Colony says so and names the two ways out: set `[pool] share_lead_accounts = true`, or add an account with `colony accounts scan`.
+Every account you have is used by its room, the account a live lead or orchestrator runs on included. A new helper goes first to an account no lead runs on, and to a lead's own account only when no other account fits one: when the others are at their caps, out of room, or would run out before they reset. So two accounts at 95% of the week and a lead's account at 5% put the next helper on the lead's account, rather than leaving it waiting days for a reset.
 
-In orchestrator mode, `colony plan start` places the group leads so one account stays free of leads for helpers: a group lead takes an account no lead runs on only while another such account stays free, and otherwise shares an account that already runs a lead, the orchestrator's or another group lead's, with room. With two accounts, the orchestrator and every group lead share the first, and helpers open on the second. With one account, `--account`, or `[pool] share_lead_accounts = true`, group leads take the plain pick. Colony knows those accounts from the lead that runs the command, each lead's heartbeat on this computer, and each live lead's status comment, on any computer, since an account's window is the same wherever it is signed in.
-
-Most people have one AI account, so a lead's account is not closed to helpers for good. When it is your only account, `colony helpers --open`, `colony open` and `colony join` let helpers share it, with two limits that leave the lead room:
+A lead's own account takes helpers with two limits that leave the lead room, so its own team never cuts it off:
 
 - **A lower cap:** at most one fewer helper than the account's cap, and at least one. With the default `max_busy` of 3, two helpers share the lead's account.
 - **The lead's share of each window:** the fit check ([Plan around resets](#plan-around-resets)) counts the lead as one more busy session while no rate is measured, and opens a helper there only while the lead keeps 10% of each window until the window resets. A lead's account that is out of room takes no helper.
 
-When that starts, Colony prints one plain warning, such as `Warning: account main is ana-main-lead's own, and the only account you have, so helpers share it: at most 2 at once, one fewer than its cap, and only while the lead keeps 10% of each window until it resets.` Past the lower cap, a new helper is refused, with why.
+When that starts, Colony prints one plain warning, such as `Warning: account main is ana-main-lead's own, and no other account has room for a helper now, so helpers share it: at most 2 at once, one fewer than its cap, and only while the lead keeps 10% of each window until it resets.` Past the lower cap, a new helper is refused, with why.
 
-`--account <name>` still opens where you say. `[pool] share_lead_accounts = true` treats a lead's account as any other, with its full cap, also while you have others. To keep helpers off an account always, the lead's or any other, put it in `[pool] reserve`, which stays strict. `colony capacity` marks each account kept for a lead.
+In orchestrator mode, `colony plan start` opens each group lead on the account with the most room, as any session opens, and helpers then follow the rule above.
 
-The same rule holds for every session Colony starts beside a lead: a researcher, spec agent or tester opens as a helper does, and `colony helpers <n>` asks you about the account its first helper would open on. A batch's reviewers, fixers and walkers keep off a live lead's own account too, from the leads this computer knows, and a rate-limited one moves only to another account. `colony join --in-session` makes the session that runs it a helper on the account it already runs on, which no session can change: on a live lead's own account, it says so in one line.
+`--account <name>` still opens where you say. `[pool] share_lead_accounts = true` treats a lead's account as any other, with its full cap and no room kept for the lead. To keep helpers off an account always, the lead's or any other, put it in `[pool] reserve`, which stays strict. `colony capacity` marks each account kept for a lead.
+
+The same rule holds for every session Colony starts beside a lead: a researcher, spec agent or tester opens as a helper does, and `colony helpers <n>` asks you about the account its first helper would open on. A batch's reviewers, fixers and walkers take a live lead's own account last too, from the leads this computer knows, and a rate-limited one moves to another account no lead runs on before a lead's own. `colony join --in-session` makes the session that runs it a helper on the account it already runs on, which no session can change: on a live lead's own account, it says so in one line.
 
 ## Fresh readings
 

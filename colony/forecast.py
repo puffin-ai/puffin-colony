@@ -368,15 +368,16 @@ def move_plan(config: dict, name: str, window: str, helpers: int, counts: dict, 
         if rest is None or not rest.short:
             move = count
             break
-    others = [other for other in on_this_computer(config) if other != name and other not in pool.reserve
-              and (pool.share_lead_accounts or other not in kept)]
+    others = [other for other in on_this_computer(config) if other != name and other not in pool.reserve]
+    others.sort(key=lambda other: not pool.share_lead_accounts and other in kept)  # a live lead's own account last
     for other in others:
+        lead = not pool.share_lead_accounts and other in kept  # the lead keeps a helper's place and its room there
         busy_there = len(counts.get(other, ()))
-        if busy_there + move > capacity.cap(config, other, pool):
+        if busy_there + move > (capacity.lead_cap if lead else capacity.cap)(config, other, pool):
             continue
         if capacity.judge(config, other, datetime.fromtimestamp(now, timezone.utc), pool)[0] != 0:
             continue
-        if fits(config, other, busy_there + move, pool, now)[0]:
+        if fits(config, other, busy_there + move, pool, now, lead=lead)[0]:
             return (f"move {plural(move, 'helper')} to {other}, which has room for them: as each finishes its card, "
                     f"stop it with `{cli.NAME} stop <name>`, and open the next one with `{cli.NAME} open <name> "
                     f"--account {other}`")

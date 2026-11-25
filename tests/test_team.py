@@ -1,4 +1,4 @@
-"""Tests for spinning up the team: builders only as helpers, the lead's own account kept for it, the subagent guard,
+"""Tests for spinning up the team: builders only as helpers, the lead's own account used last, the subagent guard,
 live readings before every placement, planning around resets, and finding accounts (plan tasks 80 to 85)."""
 import argparse
 import importlib.util
@@ -194,10 +194,10 @@ def ana(account=None) -> argparse.Namespace:
     return argparse.Namespace(person="ana", account=account)
 
 
-# 81. The lead's own account is kept for it
+# 81. The lead's own account takes helpers last
 
 
-def test_a_helper_never_opens_on_a_live_leads_own_account_unless_the_config_allows_it(host):
+def test_a_helper_opens_on_a_live_leads_own_account_last(host):
     for name in ("main", "team", "spare"):
         reading(host.parent / name, five=10, week=10)
     config = load('[pool]\norder = "listed"\n')
@@ -210,46 +210,18 @@ def test_a_helper_never_opens_on_a_live_leads_own_account_unless_the_config_allo
     assert capacity.helper_account(config, ana("main"), counts, leads)[0] == "main"  # --account still wins
 
 
-def test_when_every_account_runs_a_lead_or_the_orchestrator_the_why_says_so_and_names_the_ways_out(host):
+def test_when_every_account_runs_a_lead_or_the_orchestrator_a_helper_still_opens_where_there_is_room(host):
     """Regression (audit, Job B finding 4): with the orchestrator and its group leads on every account, no helper
-    opened, and the why said every other account was at its cap of busy helpers, so a lead waited for nothing."""
-    for name in ("main", "team", "spare"):
+    opened. A helper shares a lead's own account with room, and the why says whose it is."""
+    reading(host.parent / "main", five=10, week=95)  # out of room for the week
+    for name in ("team", "spare"):
         reading(host.parent / name, five=10, week=10)
     config = load('[pool]\norder = "listed"\n')
     kept = {"main": ["ana-orchestrator"], "team": ["ana-auth-lead"], "spare": ["ana-ui-lead"]}
     found, why = capacity.place(config, ana(), {}, kept)
-    assert found is None and why.startswith(capacity.EVERY_LEAD), why
-    assert "main runs ana-orchestrator; team runs ana-auth-lead; spare runs ana-ui-lead" in why
-    assert "set [pool] share_lead_accounts = true" in why and "`colony accounts scan`" in why
-    assert "at its cap" not in why and "wait for a helper" not in why
-
-
-@pytest.mark.parametrize("extra, took, free", [
-    ("", ["team", "main", "main"], "spare"),  # three accounts: one group lead takes team, the rest share
-    ('reserve = ["spare"]\n', ["main", "main", "main"], "team"),  # two accounts helpers may use
-])
-def test_an_orchestrators_group_leads_share_lead_accounts_before_the_last_one_free_of_leads(host, monkeypatch, extra,
-                                                                                          took, free):
-    """Regression (audit, Job B finding 4): group leads took accounts by the plain pick, so with the orchestrator on
-    one account they could take every other one, and then no helper could open anywhere. They take an account no
-    lead runs on only while another stays free, and otherwise share an account that runs a lead."""
-    for name in ("main", "team", "spare"):
-        reading(host.parent / name, five=10, week=10)
-    config = load(f'[pool]\norder = "listed"\n{extra}')
-    monkeypatch.setenv(cli.SESSION_ENV, "ana-main-lead")  # the orchestrator, a lead, runs plan start on main
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host.parent / "main"))
-    placed, names = {}, []
-    for group in ("auth", "ui", "api"):
-        name, _, why = capacity.group_lead_account(config, "ana", placed)
-        placed.setdefault(name, []).append(f"demo-{group}-lead")
-        names.append(name)
-    assert names == took, names
-    assert "so the last account no lead runs on stays free for helpers" in why
-    leads = {**placed, "main": ["ana-main-lead", *placed.get("main", [])]}
-    found, why = capacity.place(config, ana(), {}, leads)
-    assert found is not None and found[0] == free, why  # a helper still opens on the account left free
-    shared = load(f'[pool]\norder = "listed"\nshare_lead_accounts = true\n{extra}')
-    assert capacity.group_lead_account(shared, "ana", {})[0] == "main"  # sharing allowed: the plain pick
+    assert found is not None and found[0] in ("team", "spare"), why
+    assert found[2].startswith(f"{capacity.SHARED} ana-{'auth' if found[0] == 'team' else 'ui'}-lead"), found[2]
+    assert "helpers 0 of 2" in found[2]  # one fewer than the cap of 3, so the lead keeps room
 
 
 def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch):
@@ -261,41 +233,53 @@ def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch)
     assert capacity.lead_accounts(config, []) == {}
 
 
-def test_a_leads_own_account_is_shared_only_when_it_is_the_persons_only_account(host, monkeypatch, capsys):
-    """Review finding 7, the plan's task 81: helpers never open on a live lead's own account unless the person allows
-    it in config. With several accounts and only the lead's with room, helpers wait; [pool] share_lead_accounts lets
-    them in. With one account, its helpers share it, under a cap one lower, with one warning. (The rule a33bd72 set,
-    sharing whenever no other account had room, no longer holds.)"""
-    config = load("[pool]\nmax_busy = 1\n")
-    here = [running("builder-1", host.parent / "team"), running("builder-2", host.parent / "spare")]
+@pytest.mark.parametrize("alone", [False, True])
+def test_with_no_other_account_free_helpers_share_the_leads_own_under_a_cap_one_lower(host, monkeypatch, capsys,
+                                                                                       alone):
+    """The person's call on review finding 7: every account is used by its room, the lead's own too. With the other
+    accounts at their caps, or with one account, helpers share the lead's, under a cap one lower, with one warning.
+    [pool] share_lead_accounts = true gives it the full cap."""
+    config = load("[pool]\nmax_busy = 2\n")
+    here = [running(f"builder-{n}", host.parent / name) for n, name in enumerate(("team", "team", "spare", "spare"))]
+    if alone:
+        config["people"]["ana"]["accounts"] = ["main"]
     monkeypatch.setattr(presence, "everyone",
                         lambda config: ([presence.Status("ana-main-lead", "lead", account="main")], [], ""))
     monkeypatch.setattr(cli, "running_sessions", lambda config: here)
-    args = argparse.Namespace(name="builder-3", person="ana", account=None, dry_run=True, here=False)
-    with pytest.raises(cli.ColonyError, match="main is kept for ana-main-lead, its own account.*share_lead_accounts"):
-        cli.open_builder(config, args)
-    assert "Warning" not in capsys.readouterr().out
-    shared = load("[pool]\nmax_busy = 1\nshare_lead_accounts = true\n")
-    args.account = None
-    assert cli.open_builder(shared, args) == 0 and args.account == "main"  # the person allowed it
-    alone = load("[pool]\nmax_busy = 1\n")
-    alone["people"]["ana"]["accounts"] = ["main"]
-    args.account = None
-    assert cli.open_builder(alone, args) == 0 and args.account == "main"
+    args = argparse.Namespace(name="builder-5", person="ana", account=None, dry_run=True, here=False)
+    assert cli.open_builder(config, args) == 0 and args.account == "main"
     out = capsys.readouterr().out
-    assert out.count("Warning: account main is ana-main-lead's own, and the only account you have") == 1
-    assert "at most 1 at once" in out and "put this one in [pool] reserve" in out
-    here.append(running("builder-3", host.parent / "main"))  # the lead's account at its lower cap: no more there
+    assert out.count("Warning: account main is ana-main-lead's own, and no other account has room for a helper "
+                     "now, so helpers share it") == 1
+    assert "at most 1 at once" in out and "Put this one in [pool] reserve" in out
+    here.append(running("builder-5", host.parent / "main"))  # the lead's account at its lower cap: no more there
     args.account = None
     with pytest.raises(cli.ColonyError, match="main is ana-main-lead's own and runs 1 helpers, the most it takes"):
-        cli.open_builder(alone, args)
+        cli.open_builder(config, args)
+    shared = load("[pool]\nmax_busy = 2\nshare_lead_accounts = true\n")
+    if alone:
+        shared["people"]["ana"]["accounts"] = ["main"]
+    args.account = None
+    assert cli.open_builder(shared, args) == 0 and args.account == "main"  # the full cap of 2
+    assert "Warning" not in capsys.readouterr().out
 
 
-def test_with_several_accounts_out_of_room_helpers_wait_for_the_soonest_reset_never_the_leads(host):
-    """Review finding 7: with every other account out of room, a helper waits for the soonest reset, as open-later
-    does for NO_FIT, rather than opening on the lead's own account or on an account out of room."""
-    reading(host.parent / "main", five=10, week=10)
+def test_with_the_other_accounts_out_of_room_a_helper_opens_on_the_leads_own_with_room(host):
+    """The person's case: two accounts at 95% of the week and the lead's at 5%. Helpers open on the lead's account,
+    which has the room, rather than waiting days for the others to reset."""
+    reading(host.parent / "main", five=5, week=5)
     for name in ("team", "spare"):
+        reading(host.parent / name, five=10, week=95)
+    config = load('[pool]\norder = "listed"\n')
+    found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
+    assert found is not None and found[0] == "main", why
+    assert found[2].startswith(f"{capacity.SHARED} ana-main-lead"), found[2]
+
+
+def test_with_every_account_out_of_room_helpers_wait_for_the_soonest_reset(host):
+    """With the other accounts out of room and the lead's own out too, a helper waits for the soonest reset, as
+    open-later does for NO_FIT."""
+    for name in ("main", "team", "spare"):
         reading(host.parent / name, five=97, week=10, five_resets_in=timedelta(hours=1))
     config = load('[pool]\norder = "listed"\n')
     found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
@@ -336,9 +320,10 @@ def test_the_helpers_question_names_the_account_a_helper_would_open_on(lead_on_m
     assert "Open them myself on team, or you paste?" in out and "on main" not in out
 
 
-def test_a_batchs_agents_keep_off_a_leads_own_account_and_switch_only_to_others(lead_on_main, monkeypatch):
+def test_a_batchs_agents_take_a_leads_own_account_last(lead_on_main, host, monkeypatch):
     """Task 81's gap: a batch's reviewer, fixer and walker ran on the plain pick, and a rate-limited one moved to any
-    account with room, the lead's own among them. Both now skip a live lead's account, under the same rule."""
+    account with room, the lead's own first among them. Both now take a live lead's account only when no other
+    account has room, under the same rule as helpers."""
     from colony import batch
 
     config = load(lead_on_main)
@@ -351,9 +336,15 @@ def test_a_batchs_agents_keep_off_a_leads_own_account_and_switch_only_to_others(
     b = batch.Batch(config, "b1", {}, "main", Path.cwd(), ("team", str(Path.cwd())), person="ana")
     monkeypatch.setattr(batch.Batch, "save", lambda self: None)
     batch.switch_account(b, "team", "review")
-    assert b.account[0] == "spare"  # main is the lead's own
+    assert b.account[0] == "spare"  # main is the lead's own: last
+    batch.switch_account(b, "spare", "review")
+    assert b.account[0] == "main"  # no other account has room: the lead's own, rather than stopping the batch
     with pytest.raises(batch.Stop, match="no other account of ana's has room"):
-        batch.switch_account(b, "spare", "review")
+        batch.switch_account(b, "main", "review")
+    for name in ("team", "spare"):  # the other accounts out of room for the week
+        reading(host.parent / name, five=10, week=95)
+    name, _, why = capacity.agent_account(config, args)
+    assert name == "main" and "no other account has room, so it shares ana-main-lead's own account" in why
 
 
 def test_joining_in_session_on_a_leads_own_account_warns_in_one_line(lead_on_main, monkeypatch, capsys):
@@ -492,6 +483,24 @@ def test_the_leads_wait_warns_ahead_in_plain_words_and_names_where_to_move_helpe
     assert "move 2 helpers to team, which has room for them" in line and "--account team" in line
     held["at"] -= forecast.OBSERVE_EVERY
     assert forecast.lead_part(config, held) == []  # once a stretch
+
+
+def test_helpers_move_to_a_leads_own_account_last_and_only_where_the_lead_keeps_room(host, monkeypatch):
+    """The person's call on review finding 7: the advice to move helpers names a lead's own account too, after every
+    other account, under its cap one lower and only where the lead keeps its room."""
+    reading(host.parent / "main", five=60, week=10, five_resets_in=timedelta(hours=3))
+    reading(host.parent / "team", five=5, week=10, five_resets_in=timedelta(hours=1))
+    reading(host.parent / "spare", five=5, week=10, five_resets_in=timedelta(hours=1))
+    config = load()
+    history(config, "main", [(40, 40, 3), (0, 60, 3)])  # 30% an hour with 3 helpers: move 2
+    monkeypatch.setattr(cli, "refresh_usage", lambda folders: None)
+    counts, kept, now = {"main": {"builder-1", "builder-2", "builder-3"}}, {"team": ["ana-team-lead"]}, time.time()
+    pool = capacity.policy(config)
+    assert "move 2 helpers to spare" in forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool)
+    reading(host.parent / "spare", five=97, week=10)  # spare out of room: team, the lead's own, takes them
+    assert "move 2 helpers to team" in forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool)
+    counts["team"] = {"builder-4"}  # 1 + 2 is past team's cap one lower, 2
+    assert forecast.move_plan(config, "main", "five_hour", 3, counts, kept, now, pool).startswith("no other account")
 
 
 def test_colony_capacity_shows_each_accounts_forecast_beside_its_resets(host, monkeypatch, capsys):
