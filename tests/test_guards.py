@@ -1098,3 +1098,8 @@ def test_upgrade_refresh_rewrites_the_copied_files_and_the_role_skills_the_repo_
     assert (root / guards.LAUNCHER).read_text() == guards.launcher()
     assert (root / cli.DIR / "hooks" / guards.GUARD).exists() and (root / ".claude" / "settings.json").exists()
     assert skill.read_text() != "old\n" and not (root / ".claude" / "skills" / "colony-builder").exists()
+
+
+def test_a_here_documents_body_on_a_line_whose_quoting_cant_be_read_holds_no_kill_or_merge():
+    unreadable = """echo "$(echo 'a"b')"; cat <<EOF > notes.md\npkill -f x, then gh pr merge 5\nEOF"""
+    assert guard(json.dumps({"tool_input": {"command": unreadable}})).returncode == 0

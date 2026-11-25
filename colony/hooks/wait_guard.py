@@ -895,7 +895,8 @@ def gh_merges(command: str, cwd: str) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        if re.search(r"(?<![\w.-])gh(?![\w-])", command) and "merge" in command.lower():
+        text = without_heredoc_bodies(command)  # a body is text a command reads, such as a commit message
+        if re.search(r"(?<![\w.-])gh(?![\w-])", text) and "merge" in text.lower():
             return ["this line's quoting could not be read and it holds a gh merge, so run the merge as a command of "
                     "its own"]
         return []
@@ -1029,7 +1030,7 @@ def kills(command: str) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        if RAW_KILL.search(command):
+        if RAW_KILL.search(without_heredoc_bodies(command)):
             return ["this line's quoting could not be read and it holds a kill, so run the kill as a command of its "
                     "own"]
         return []

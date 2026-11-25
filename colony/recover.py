@@ -79,6 +79,13 @@ def stamp(text: str) -> float:
         return 0.0
 
 
+def number(value) -> float:
+    """A time from a ledger or task file, or 0.0 when it isn't a finite number."""
+    from colony import presence
+
+    return presence.clean_number(value)
+
+
 def short(value, limit: int = 1000) -> str:
     """A field from a hook's event as text, or "" when it isn't a short string."""
     return value if isinstance(value, str) and len(value) <= limit and "\n" not in value else ""
@@ -88,9 +95,11 @@ def short(value, limit: int = 1000) -> str:
 
 
 def session_name() -> str:
-    """This session's name in the ledger: a named lead's name, else $COLONY_SESSION, or "" outside a Colony session."""
+    """This session's name in the ledger: a named lead's name, else $COLONY_SESSION, or "" outside a Colony session
+    or for a name that isn't a session's, which never becomes a file name."""
     me = os.environ.get(cli.SESSION_ENV, "").lower()
-    return wait.state_name(me) if me else ""
+    name = wait.state_name(me) if me else ""
+    return name if cli.SESSION_NAME.fullmatch(name) else ""
 
 
 def ledger_path(project: str, name: str) -> Path:
@@ -267,7 +276,7 @@ def forget(stopped: list[dict]) -> None:
 
 def restart_line(task: dict) -> str:
     """What a session does about one of its tasks that stopped."""
-    label, started = task.get("label") or f"{cli.NAME} {task.get('command')}", when(float(task.get("started") or 0))
+    label, started = task.get("label") or f"{cli.NAME} {task.get('command')}", when(number(task.get("started")))
     head = f"Your background `{label}`, started {started}, stopped without finishing: something ended its process, " \
            "such as the agent tool, a kill or a crash."
     if task.get("command") == "wait":
@@ -417,8 +426,8 @@ class Seen:
 def last_life(config: dict, entry: dict, facts: dict) -> tuple[float, str]:
     """A session's last sign of life and what showed it: a hook, its transcript, its colony wait, or its heartbeat."""
     project, name = project_of(config), entry["name"]
-    signs = [(float(entry.get("seen") or 0), "a hook"), (float(facts.get("at") or 0), "its transcript"),
-             (float(facts.get("mtime") or 0), "its transcript")]
+    signs = [(number(entry.get("seen")), "a hook"), (number(facts.get("at")), "its transcript"),
+             (number(facts.get("mtime")), "its transcript")]
     with contextlib.suppress(OSError):
         signs.append((wait.state_path(project, name).stat().st_mtime, "its colony wait"))
     if entry.get("session") == cli.LEAD:
@@ -476,9 +485,9 @@ def infer(seens: list[Seen], boot: float | None) -> None:
                 clues.append(error_words(seen.facts["error"]))
             if seen.entry.get("error"):
                 clues.append(f"its last turn ended on an error ({seen.entry['error']}) at "
-                             f"{when(float(seen.entry.get('error_at') or 0))}")
+                             f"{when(number(seen.entry.get('error_at')))}")
             if seen.entry.get("ended"):
-                clues.append(f"Claude Code ended it at {when(float(seen.entry['ended']))} with no exit by its person "
+                clues.append(f"Claude Code ended it at {when(number(seen.entry['ended']))} with no exit by its person "
                              f"({seen.entry.get('reason')}), as a signal or a closed window does")
             if seen.facts.get("calling"):
                 clues.append(f"it stopped during a {seen.facts['calling']} call, which may have ended it")
@@ -511,7 +520,7 @@ def survey(config: dict, hours: float, now: float | None = None) -> list[Seen]:
             seen.state, seen.cause = RUNNING, "it runs"
         elif entry.get("stopped"):
             seen.state = PURPOSE
-            seen.cause = f"`{cli.NAME} stop` by {entry.get('stopped_by')} at {when(float(entry['stopped']))}"
+            seen.cause = f"`{cli.NAME} stop` by {entry.get('stopped_by')} at {when(number(entry['stopped']))}"
         elif entry.get("reason") in ON_PURPOSE:
             seen.state, seen.cause = PURPOSE, ON_PURPOSE[entry["reason"]]
         seens.append(seen)
@@ -571,7 +580,7 @@ def report_lines(config: dict, hours: float, seens: list[Seen], stopped: list[di
     if stopped:
         lines.append(f"Background tasks that stopped without finishing ({len(stopped)}):")
         lines += [f"- {task.get('session') or 'a session'}'s `{task.get('label') or task.get('command')}`, started "
-                  f"{when(float(task.get('started') or 0))}" for task in stopped]
+                  f"{when(number(task.get('started')))}" for task in stopped]
     if down:
         lines.append(f"Services whose check fails ({len(down)}):")
         lines += [f"- {service.name}: `{service.check}` failed; " + (f"`{cli.NAME} resume` runs `{service.restart}`"
@@ -671,12 +680,16 @@ def resume(config: dict, args) -> int:
         chosen = [seen for seen in chosen if seen.state != RUNNING]
     else:
         chosen = [seen for seen in seens if seen.state == UNEXPECTED
-                  and float(seen.entry.get("resumed") or 0) <= seen.last]
+                  and number(seen.entry.get("resumed")) <= seen.last]
+    failed = 0
+    for seen in chosen:
+        if not seen.entry.get("id"):
+            print(f"kept {seen.name}: the ledger holds no Claude Code session id to resume it by", file=sys.stderr)
+            failed += 1
     chosen = sorted((seen for seen in chosen if seen.entry.get("id") and seen.entry.get("id") != me),
                     key=lambda seen: (seen.entry.get("session") != cli.LEAD, seen.name))
-    failed = 0
     stopped = stopped_tasks(config)
-    if not chosen:
+    if not chosen and not failed:
         print(f"No session to reopen: none stopped unexpectedly here in the last {hours:g} hours.")
     for seen in chosen:
         entry = seen.entry

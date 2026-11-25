@@ -420,3 +420,17 @@ def test_register_routes_crash_report_and_resume():
     assert (args.run, args.within, args.json) == (recover.crash_report, 6.0, True)
     args = parser.parse_args(["resume", "builder-2", "--dry-run"])
     assert (args.run, args.names, args.dry_run) == (recover.resume, ["builder-2"], True)
+
+
+def test_a_session_name_that_isnt_one_never_becomes_a_ledger_file(config, monkeypatch):
+    as_session(monkeypatch, "../../elsewhere", "c-1")
+    assert recover.session_name() == ""
+    recover.note_session(config, {"session_id": "c-1"}, "start")
+    assert not recover.folder("demo", recover.LEDGER).exists()
+
+
+def test_resume_keeps_a_session_the_ledger_holds_no_id_for(crashed, config, opened, capsys):
+    ledger("builder-1", crashed + 20, id="")
+    assert recover.resume(config, resume_args()) == 1
+    assert "builder-1" not in {call["session"] for call in opened} and len(opened) == 3
+    assert "kept builder-1: the ledger holds no Claude Code session id" in capsys.readouterr().err
