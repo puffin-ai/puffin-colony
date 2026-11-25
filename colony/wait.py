@@ -585,7 +585,8 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
     lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr.
     `outbox` posts the hooks' lines that failed to post (guards.flush_outbox) at each poll, and never raises. `silent`,
-    the lead's silent_check, gathers its `urgent:` lines at each poll."""
+    the lead's silent_check and every session's standing-orders check (profile.watcher), gathers lines that can't
+    wait at each poll."""
     clock = clock or CLOCK
     path = state_path(project, state_name(me.name))
     state = read_json(path, {})
@@ -783,14 +784,15 @@ def run(config: dict, args, clock=None) -> int:
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
-    from colony import guards, presence
+    from colony import guards, presence, profile
 
     outbox = functools.partial(guards.flush_outbox, config)
+    orders = profile.watcher(config, me)  # a change to the standing orders ends the wait at once (profile.py)
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
         status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
-        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox)
+        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox, silent=orders)
     waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -804,12 +806,12 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
-    silent = None
+    silent = orders
     if named():  # only a named lead's helpers post a status
         from colony import watch
 
         quiet, stuck = silent_check(project, name), watch.stuck_check(name)
-        silent = lambda state: quiet(state) + stuck(state, time.time())  # noqa: E731
+        silent = lambda state: quiet(state) + stuck(state, time.time()) + orders(state)  # noqa: E731
         watch.keep_awake(project, os.environ.get("CLAUDE_PID", ""))
     freeze = None
     if hack(config):

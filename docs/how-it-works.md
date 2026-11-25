@@ -273,5 +273,6 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
+| `.colony/team.toml`, `~/.config/colony/profile.toml` | The team's standing orders, committed, and your own, never committed. See [profiles.md](profiles.md) |
 
 Every command, with one line each, is in [commands.md](commands.md).

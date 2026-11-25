@@ -99,6 +99,23 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
 | `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. A line either hook can't post waits in `~/.colony/<project>/outbox.json` until the next hook or wait posts it. |
 
+## Standing orders
+
+Your personal profile, the team profile and session settings: see [profiles.md](profiles.md). These commands work in any folder, and need a clone only for the team profile. `--team` writes `.colony/team.toml`, which takes effect when its pull request merges, and `--session` writes this session's own file. `--person <name>` picks whose profile, when `$COLONY_PERSON` is not set.
+
+| Command | What it does |
+| --- | --- |
+| `colony profile show [--orders [--role lead\|helper]] [--team-only] [--json]` | Lists every order in force and where it came from: each setting with its source and how a disagreement between the team and you was settled, each rule with its ref, and the files read. `--orders` prints the standing-order text a session starts with. `--team-only` shows the team's orders alone, for work between people. Plain `colony profile` does the same as `show`. |
+| `colony profile keys` | Prints every key a profile may hold, its kind, and what applies when the team's value and yours differ. |
+| `colony profile setup [--set <key>=<value> …] [--defaults] [--again]` | The one-time questions that write your personal profile. In a terminal it asks them; in an agent's session it prints them for the lead to ask in one message, and `--set` or `--defaults` writes the answers. It never asks again unless `--again`. |
+| `colony profile set <key> <value> [--team\|--session]`, `colony profile unset <key> [--team\|--session]` | Sets or removes one key. A list is comma-separated. It refuses an unknown key, a wrong value, a personal-only key in the team profile, and anything that looks like a secret. |
+| `colony profile resolve <key> team\|mine` | Records your answer where the team's value and yours differ and neither is stricter, so you are asked once. It is asked again only when either side changes. |
+| `colony profile import [--from <file>] [--accept <id>,…] [--decline <id>,…]` | Finds preferences in your agent tool's memory and instruction files and offers each one; nothing is added without your yes. A declined one is never offered again. |
+| `colony profile init` | Writes `.colony/team.toml` with every team key commented out, and never overwrites one. Setup runs it. |
+| `colony prefer add "<rule>" [--team\|--session] [--correction]` | Keeps a rule as a standing order, such as a correction you gave a lead. |
+| `colony prefer list [--personal\|--team\|--session]` | Every rule in force, with its ref: `p3` is your third personal rule, `t1` the team's first, `s2` a session's. |
+| `colony prefer remove <ref>` | Drops a rule by its ref. |
+
 ## Flags
 
 | Flag | Where | What it does |

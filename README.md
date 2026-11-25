@@ -50,6 +50,7 @@ cd your-repo && colony
 - [The cycle](docs/cycle.md): tiers, spec, research, the Needs issue, the board, handover, stats and retro
 - [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
 - [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
+- [Profiles](docs/profiles.md): standing orders, yours and your team's, that every session follows from its start
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
 - [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 

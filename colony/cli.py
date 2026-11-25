@@ -1901,6 +1901,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     for module in (cycle, board, vault, guards, presence, tidy, release):
         module.add_commands(sub)
+    from colony import profile  # standing orders: `colony profile` and `colony prefer`
+    profile.register(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")
@@ -1943,6 +1945,8 @@ def main(argv=None) -> int:
         if args.command is None and not config_path().exists():
             return setup(args)
         if args.command in ("tools", "setup", "skill-install", "fix-links"):  # each runs before colony.toml exists
+            return args.run(args)
+        if args.command in ("profile", "prefer"):  # a personal profile works in any folder (profile.py)
             return args.run(args)
         config = load_config()
         feature = FEATURES.get(args.command)
