@@ -278,5 +278,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `~/.colony/<project>/names.json` | The session names the waits learned from GitHub, which `colony post` and `colony say` check a recipient against |
 | `~/.colony/<project>/<session>-delivered.json`, `<session>-acked.json` | The lines shown to a session, and its last `colony ack`, for redelivery after a compaction or restart |
 | `~/.colony/<project>/<lead>-starts.json` | The lead's start lines that wait for an acknowledgement |
+| `~/.colony/<project>/<session>-intent.json`, `<session>-pulse.json` | Each session's intent and last report, and the pulse its wait writes every minute: when its transcript last moved, the call it waits on, and its helper agents. See [watch.md](watch.md) |
+| `~/.colony/<project>/watchdog.json`, `watchdog.log` | The watchdog's heartbeat and log |
+| `~/.colony/<project>/progress.json`, `status-page.json`, `<lead>-folded.json` | The cards' progress as last read, the status page's issue and last writing, and the helper lines the lead's digest folded |
 
 Every command, with one line each, is in [commands.md](commands.md).
