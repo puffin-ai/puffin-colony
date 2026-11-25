@@ -1,11 +1,17 @@
 """How a line travels: as a GitHub issue comment, the record every wait reads within its 15-second poll. `send` is
-the one place that posts a line.
+the one place that posts a line. It returns the issue's number, which also carries the comment's address (Sent).
 
 In hack mode every line goes to the pinned board issue, `[messages] board`, after the poster's prefix,
 `[<Name>'s Claude]`. A long board moves to a fresh pinned issue first (tidy.keep_board).
+
+A comment can carry two hidden parts after its lines, which no wait reads as a line (wait.strip_extras): a file's
+text, attached under the lines in a folded block (attachment), so a long note travels on GitHub instead of as a path
+on one computer; and the sender's note (sender_note), which says which session posted the lines and whether a start
+line asks for an acknowledgement.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -50,9 +56,26 @@ def prefix(config: dict) -> str:
     return f"[{wait.display_name(config, person)}'s {wait.AGENT}]"
 
 
-def send(config: dict, to: str, line: str, card: int | None = None) -> int:
+COMMENT_MAX = 65000  # GitHub keeps a comment of at most 65,536 characters
+COMMENT_URL = re.compile(r"#issuecomment-(\d+)")
+
+
+class Sent(int):
+    """Where a comment went: the issue's number, which is what every caller reads, with the comment's address as gh
+    printed it ("" when it printed none) and the comment's id. Read the two with getattr, since a test's stand-in for
+    `send` returns a plain number."""
+
+    def __new__(cls, number: int, url: str = "", comment: int | None = None):
+        sent = super().__new__(cls, number)
+        sent.url, sent.comment = url, comment
+        return sent
+
+
+def send(config: dict, to: str, line: str, card: int | None = None) -> Sent:
     """Post `line` for `to` (a session, `@<login>` or `@all`) on issue `card`, or on the coordination issue when None,
-    and return the issue. In hack mode the line goes to the board issue instead, after the poster's prefix."""
+    and return where it went. In hack mode the line goes to the board issue instead, after the poster's prefix.
+    `line` may hold several lines, an attachment and the sender's note: it goes out as one comment, whole or not at
+    all."""
     check_transport(config)
     why = holds_secret(line)
     if why:
@@ -65,5 +88,32 @@ def send(config: dict, to: str, line: str, card: int | None = None) -> int:
     else:
         number = int(card) if card is not None else wait.coordination_issue(repo, config["project"]["name"])
         body = line
-    wait.gh("issue", "comment", str(number), "--repo", repo, "--body", body)
-    return number
+    if len(body) > COMMENT_MAX:
+        raise cli.ColonyError(f"a comment holds at most {COMMENT_MAX} characters, and this one has {len(body)}: attach "
+                              "a shorter file, or share it with a link")
+    out = wait.gh("issue", "comment", str(number), "--repo", repo, "--body", body).strip()
+    url = out.splitlines()[-1].strip() if out else ""
+    url = url if url.startswith("http") else ""
+    found = COMMENT_URL.search(url)
+    return Sent(number, url, int(found[1]) if found else None)
+
+
+ATTACH_MAX = 60000  # an attachment's characters, so the comment stays under GitHub's limit
+
+
+def attachment(name: str, text: str) -> str:
+    """A file's text as a comment's folded attachment: between the markers wait.strip_extras takes out, so no line in
+    the file ever reaches a wait as a line, and in a fence longer than any run of tildes in the text."""
+    if len(text) > ATTACH_MAX:
+        raise cli.ColonyError(f"an attachment holds at most {ATTACH_MAX} characters, and {name} has {len(text)}: "
+                              "attach a part of it, or share it with a link")
+    runs = re.findall(r"~{4,}", text)
+    fence = "~" * max([4, *(len(run) + 1 for run in runs)])
+    label = " ".join(name.split())[:80] or "a file"
+    return (f"<!-- {wait.ATTACHED} -->\n<details><summary>attached: {label}</summary>\n\n{fence}text\n{text}\n"
+            f"{fence}\n\n</details>\n<!-- /{wait.ATTACHED} -->")
+
+
+def sender_note(data: dict) -> str:
+    """The sender's hidden note, after a comment's lines: a JSON object wait.note_of reads back."""
+    return f"<!-- {wait.NOTE} {json.dumps(data, separators=(',', ':'))} -->"
