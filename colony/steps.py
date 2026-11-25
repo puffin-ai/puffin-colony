@@ -130,15 +130,26 @@ def who_of(config: dict, who: str) -> tuple[str, str]:
     return logins[0], f"@{logins[0]} ({name})" if name.lower() != logins[0] else f"@{logins[0]}"
 
 
+def team(config: dict) -> frozenset[str]:
+    """The team's logins, `[people] logins`, lowercased, as presence.by_team reads them."""
+    return frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+
+
 def steps_issue(config: dict) -> int:
-    """The issue that holds the person steps: `[steps] issue`, else the open `Colony: person steps`, else a new one."""
+    """The issue that holds the person steps: `[steps] issue`, else the open `Colony: person steps` one of the team's
+    logins opened (with none configured, the login gh runs as here), else a new one. On a public repo anyone can open
+    an issue with that title, and theirs never holds the team's steps."""
+    from colony import merge
+
     number = settings(config)["issue"]
     if number:
         return number
     repo = config["project"]["repo"]
     listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{TITLE}" in:title',
-                                "--json", "number,title", "--limit", "20") or "[]")
-    found = sorted(issue["number"] for issue in listed if issue.get("title") == TITLE)
+                                "--json", "number,title,author", "--limit", "20") or "[]")
+    trusted = team(config) or {merge.terminal_login().lower()}
+    found = sorted(issue["number"] for issue in listed if issue.get("title") == TITLE
+                   and str((issue.get("author") or {}).get("login") or "").lower() in trusted)
     if found:
         return found[0]
     url = wait.gh("issue", "create", "--repo", repo, "--title", TITLE, "--body",
@@ -148,9 +159,9 @@ def steps_issue(config: dict) -> int:
 
 
 def comments(config: dict, number: int) -> list[dict]:
-    """The steps issue's comments, each with its id, body and link."""
+    """The steps issue's comments, each with its id, body, link, author and the author's standing on the repo."""
     out = wait.gh("api", f"repos/{config['project']['repo']}/issues/{number}/comments?per_page=100", "--paginate",
-                  "--jq", ".[] | {id, body, html_url} | @json")
+                  "--jq", ".[] | {id, body, html_url, author_association, user: {login: .user.login}} | @json")
     found = []
     for line in out.splitlines():
         try:
@@ -161,9 +172,14 @@ def comments(config: dict, number: int) -> list[dict]:
 
 
 def read_steps(config: dict, number: int) -> list[dict]:
-    """The steps on the issue, oldest first: each comment's note, with the comment's id, body and link."""
-    found = []
+    """The steps on the issue, oldest first: each note in a comment the team wrote (presence.by_team), with the
+    comment's id, body and link. On a public repo anyone can comment, and their comment is never a step."""
+    from colony import presence
+
+    found, logins = [], team(config)
     for comment in comments(config, number):
+        if not presence.by_team(comment, logins):
+            continue
         notes = list(NOTE_TEXT.finditer(comment.get("body") or ""))
         if not notes:
             continue

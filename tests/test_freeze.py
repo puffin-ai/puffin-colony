@@ -374,3 +374,16 @@ def test_a_batch_is_refused_unless_every_card_is_a_named_fix(world):
     with pytest.raises(cli.ColonyError, match=r"a batch into main is paused: .* `colony freeze allow bob/x ana/fix`"):
         freeze.guard_batch(config, world.clone, "main", {"13": "bob/x", "12": "ana/fix"})
     freeze.guard_batch(config, world.clone, "dev", {"13": "bob/x"})  # another branch is not held
+
+
+def test_a_freeze_on_the_integration_branch_pauses_landings_on_a_base_set_apart(world):
+    config = world.config()
+    config["project"]["integration"] = "dev"
+    freeze.put(world.clone, freeze.hold("release", "dev", "ana-lead", "releasing into prod", time.time() + 3600))
+    with pytest.raises(cli.ColonyError, match=r"landing bob/x on main is paused: dev is frozen for the release"):
+        freeze.guard_merge(config, world.clone, "main", ["bob/x"])
+    with pytest.raises(cli.ColonyError, match=r"a batch into main is paused: dev is frozen for the release"):
+        freeze.guard_batch(config, world.clone, "main", {"13": "bob/x"})
+    freeze.guard_merge(config, world.clone, "qa", ["bob/x"])  # a branch other than the base: only its own holds
+    freeze.put(world.clone, freeze.hold("release", "dev", "ana-lead", "", time.time() + 3600, allow=["bob/x"]))
+    freeze.guard_merge(config, world.clone, "main", ["bob/x"])  # a named fix gets through

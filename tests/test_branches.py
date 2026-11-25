@@ -342,3 +342,13 @@ def test_colony_branches_dry_run_runs_nothing(world, capsys):
     assert "open a pull request from demo/sync-prod-into-main-<time> into main when it lacks prod" in out
     assert "into staging when it lacks prod" in out
     assert world.gh_calls() == [] and world.sync_branches() == []
+
+
+def test_a_forks_pull_request_named_like_a_sync_branch_is_never_reused(world):
+    world.on("prod", {"fix.txt": "a fix\n"}, "hotfix")
+    world.answer("prs-open-main.json", [{"url": "https://github.com/acme/demo/pull/21", "isCrossRepository": True,
+                                         "headRefName": "demo/sync-prod-into-main-1"}])
+    url = branches.sync_pr(world.config(), world.clone, "prod", "main")
+    assert url == "https://github.com/acme/demo/pull/30"
+    [create] = world.created()
+    assert create[create.index("--head") + 1] != "demo/sync-prod-into-main-1"

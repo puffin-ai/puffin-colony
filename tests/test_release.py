@@ -638,3 +638,33 @@ def test_dry_run_prints_each_plan_and_runs_nothing(world, capsys):
     out = capsys.readouterr().out
     assert "cut demo/release-<date> from origin/prod, and copy #12 onto it" in out and "freeze" not in out
     assert world.gh_calls() == [] and world.holds() == []
+
+
+# Only the repo's own pull requests, and no secret in the description
+
+
+def test_a_forks_pull_request_named_after_the_integration_branch_is_never_the_release(world):
+    world.on_main(commit(world.clone, {"b.txt": "fresh\n"}, "batch 12"))
+    world.answer("prs-open-prod.json", [release_pr(18) | {"isCrossRepository": True}])
+    world.answer("prs-merged-prod.json", [release_pr(17) | {"isCrossRepository": True}])
+    with pytest.raises(cli.ColonyError, match="no release pull request into prod is open"):
+        run(world.config(), refresh=True)
+    with pytest.raises(cli.ColonyError, match="no release pull request into prod was merged"):
+        run(world.config(), after=True)
+    assert run(world.config(extra=NO_FREEZE)) == 0
+    assert len(world.created()) == 1 and not [call for call in world.gh_calls() if call[:2] == ["pr", "edit"]]
+
+
+def test_a_check_command_that_holds_a_secret_stays_out_of_the_description(world):
+    head = world.on_main(commit(world.clone, {"b.txt": "fresh\n"}, "batch 12"))
+    config = world.config(extra=NO_FREEZE)
+    token = "ghp_" + "a" * 36
+    ledger = checks.ledger_path(checks.colony_home(config))
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({"k": {"result": "pass", "kind": "full", "commit": head, "tree": "",
+                                        "command": f"GH_TOKEN={token} pytest -q", "line": "12 passed",
+                                        "at": time.time()}}))
+    assert run(config) == 0
+    body = world.body()
+    assert token not in body
+    assert "- On this computer, a check whose command looked like it held a secret, so it stays out, passed" in body

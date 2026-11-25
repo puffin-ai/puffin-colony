@@ -219,7 +219,10 @@ def check_results(config: dict, root, sha: str) -> list[str]:
     for e in sorted(entries, key=lambda e: e.get("at", 0)):
         said = str(e.get("line") or "")
         said = "" if transport.holds_secret(said) else f": {said[:160]}"
-        lines.append(f"- On this computer, `{e.get('command', '?')}` "
+        command = str(e.get("command") or "?")
+        command = ("a check whose command looked like it held a secret, so it stays out,"
+                   if transport.holds_secret(command) else f"`{command}`")
+        lines.append(f"- On this computer, {command} "
                      f"{'passed' if e.get('result') == 'pass' else 'failed'} at {checks.clock(e.get('at', 0))}{said}")
     if not lines:
         lines = [f"- No check has run on `{sha[:9]}` yet. `{cli.NAME} ci {sha[:9]}` starts CI on it, and "
@@ -333,10 +336,11 @@ def release_prs(config: dict, found: branches.Names, state: str) -> list[dict]:
     """The release pull requests into the release branch in a state: from the integration branch, or from a partial
     release's `<project>/release-<date>` branch."""
     listed = json.loads(wait.gh("pr", "list", "--repo", config["project"]["repo"], "--base", found.release, "--state",
-                                state, "--limit", "20", "--json", "number,url,headRefName") or "[]")
+                                state, "--limit", "20", "--json", "number,url,headRefName,isCrossRepository") or "[]")
     partial = f"{config['project']['name']}/release-"
-    return [pr for pr in listed if pr.get("headRefName") == found.integration
-            or str(pr.get("headRefName", "")).startswith(partial)]
+    # A fork's pull request may name its branch after the integration branch: only a branch on the repo itself counts.
+    return [pr for pr in listed if not pr.get("isCrossRepository") and (
+        pr.get("headRefName") == found.integration or str(pr.get("headRefName", "")).startswith(partial))]
 
 
 def picked_on(root, found: branches.Names, head: str) -> set[str] | None:

@@ -100,9 +100,11 @@ def sync_prefix(config: dict, source: str, target: str) -> str:
 def open_sync(config: dict, source: str, target: str) -> dict | None:
     """The open pull request that brings `source` into `target`, or None."""
     found = json.loads(wait.gh("pr", "list", "--repo", config["project"]["repo"], "--base", target, "--state", "open",
-                               "--json", "url,headRefName", "--limit", "100") or "[]")
+                               "--json", "url,headRefName,isCrossRepository", "--limit", "100") or "[]")
     prefix = sync_prefix(config, source, target)
-    return next((pr for pr in found if str(pr.get("headRefName", "")).startswith(prefix)), None)
+    # A fork's pull request may take a sync branch's name: only a branch on the repo itself counts.
+    return next((pr for pr in found if not pr.get("isCrossRepository")
+                 and str(pr.get("headRefName", "")).startswith(prefix)), None)
 
 
 def _merge_in(config: dict, root: Path, wt: Path, source: str, target: str) -> list[str]:

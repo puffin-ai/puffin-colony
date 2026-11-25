@@ -47,6 +47,8 @@ Its description is drafted from the merged work, in these sections:
 
 A pull request's own description adds to the Migrations and Tests sections: the lines under a heading that names migrations, or removed or changed tests, such as a batch's `## Removed tests`. A line that only says "none", or looks like a secret, is left out. When the description would pass the code host's limit, these quoted lines go first, then the end is cut.
 
+Only a pull request from a branch on the repo itself counts as the release, never one from a fork, whatever its branch is called. A check command that looks like it holds a secret stays out of the description.
+
 `colony release --print` prints the description and opens nothing. `colony release --refresh` rewrites the open release pull request's description from the work and the checks as they are now, for example once CI has finished.
 
 Before it opens the pull request, `colony release` posts one `@all` line that names each other lead whose work the release carries, so any of them can say at once that a piece must wait.
@@ -67,7 +69,7 @@ There are three kinds of hold:
 
 While a branch is held, `colony merge` refuses to land on it, and `colony batch` refuses to start a batch into it. The refusal says who holds it, why and until when. A fix still gets through once it is named: `colony freeze allow <branch>`, or a card as its number. Each change to a hold posts one `@all` line, so every lead hears it. `colony freeze check <name>` answers with its exit code, for other tools such as a merge guard.
 
-Holds pause landings on the branch they name. `colony merge` and `colony batch` land on `[project] base`. When you set `[project] integration` to another branch, a release's freeze holds that branch and not the base.
+`colony merge` and `colony batch` land on `[project] base`. Before they land, they read the holds on the base, and on the integration branch when you set it apart, since the team's work reaches it from the base. So a freeze on either one pauses every lead's landings.
 
 When origin's holds can't be read, `colony merge` and `colony batch` go ahead with a note, since each fetches origin next and stops there anyway when origin is down. When the release pull request fails to open, `colony release` lifts the freeze it just put and says so. `[release] freeze = false` turns the release's freeze off.
 
@@ -140,6 +142,8 @@ Some steps only a person can take: a cloud sign-in, applying infrastructure, a p
 3. **It says who does the step:** a person, mentioned by their login so the code host tells them, or `anyone`, or `agent`.
 
 It then prints one plain line to tell the person. `colony step list` prints the open steps, and `--who <person>` one person's. `colony step done <n>` marks one done by editing its comment. A step never holds a secret: text that looks like one is refused.
+
+On a public repo anyone can open an issue or comment, so only the team's own count. A comment is a step only when one of `[people] logins` wrote it, or, with none set, someone GitHub says has access to the repo. The steps issue is the one a team login opened, or, with none set, the login `gh` runs as on this computer. `[steps] issue` names the issue outright.
 
 ## Plain status messages
 

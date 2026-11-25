@@ -149,21 +149,34 @@ def allowed(hold: dict, groups) -> bool:
     return all(names & {str(name) for name in group} for group in groups)
 
 
-def blocking(config: dict, root, branch: str, groups) -> list[dict]:
-    """The holds on the branch that refuse the work (see allowed). Holds that can't be read refuse nothing, with a
-    note on stderr: the merge or batch that asked fetches origin itself next, and stops there when origin is down."""
+def blocking(config: dict, root, branch: str, groups, also=()) -> list[dict]:
+    """The holds on the branch, and on the branches in `also`, that refuse the work (see allowed). Holds that can't
+    be read refuse nothing, with a note on stderr: the merge or batch that asked fetches origin itself next, and stops
+    there when origin is down."""
     try:
-        holds = on(read(root)[1], branch)
+        found = read(root)[1]
     except Unreadable as e:
         print(f"{cli.NAME}: origin's merge freeze could not be read, so nothing is held: {e}", file=sys.stderr)
         return []
+    holds = [hold for name in dict.fromkeys([branch, *also]) for hold in on(found, name)]
     return [hold for hold in holds if not allowed(hold, groups)]
 
 
+def reaches(config: dict, branch: str) -> list[str]:
+    """The branches whose holds pause work that lands on `branch`: the branch itself, and for `[project] base`, the
+    integration branch too when it differs, since the team's work reaches the integration branch from the base. So a
+    freeze on either one, such as the release's freeze on the integration branch, pauses every lead's landing."""
+    from colony import branches
+
+    if branch != config["project"]["base"]:
+        return [branch]
+    return list(dict.fromkeys([branch, branches.names(config).integration]))
+
+
 def refuse(config: dict, root, branch: str, groups, what: str) -> None:
-    """Refuse the work while a hold on the branch doesn't name it, saying who holds it, why, until when, and how a fix
-    gets through."""
-    held = blocking(config, root, branch, groups)
+    """Refuse work that lands on the branch while a hold on it, or on the integration branch (reaches), doesn't name
+    it, saying who holds it, why, until when, and how a fix gets through."""
+    held = blocking(config, root, branch, groups, also=reaches(config, branch))
     if not held:
         return
     first = [str(group[0]) for group in groups][:3]
