@@ -860,15 +860,20 @@ RULESET = f"{cli.DISPLAY}: protected branches"  # the ruleset's name on GitHub, 
 def ruleset(config: dict, reviews: int) -> dict:
     """The GitHub ruleset that locks the branches the merge guard protects: the default branch, the base and
     [safety] protect. It refuses a deletion and a force push, and asks for a pull request for every change, with
-    `reviews` approvals from someone other than its author."""
+    `reviews` approvals from someone other than its author. It never covers what Colony itself pushes for a release:
+    the freeze's holds, `refs/colony/holds`, which no branch ruleset reaches, and the branches of its own a partial
+    release and a branch sync push, `<project>/release-*` and `<project>/sync-*` (release.py, branches.py), which a
+    broad pattern in [safety] protect would otherwise lock."""
     extra = [str(branch) for branch in config.get("safety", {}).get("protect", []) if isinstance(branch, str)]
     include = list(dict.fromkeys(["~DEFAULT_BRANCH", f"refs/heads/{config['project']['base']}",
                                   *(f"refs/heads/{branch}" for branch in extra)]))
+    project = config["project"]["name"]
+    exclude = [f"refs/heads/{project}/release-*", f"refs/heads/{project}/sync-*"]
     review = {"required_approving_review_count": reviews, "dismiss_stale_reviews_on_push": False,
               "require_code_owner_review": False, "require_last_push_approval": False,
               "required_review_thread_resolution": False}
     return {"name": RULESET, "target": "branch", "enforcement": "active",
-            "conditions": {"ref_name": {"include": include, "exclude": []}},
+            "conditions": {"ref_name": {"include": include, "exclude": exclude}},
             "rules": [{"type": "deletion"}, {"type": "non_fast_forward"},
                       {"type": "pull_request", "parameters": review}]}
 

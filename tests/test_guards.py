@@ -1,5 +1,6 @@
 """Tests for the guards: the wait guard, the hooks merge and the lines the hooks post, and the suppressions ledger."""
 import argparse
+import fnmatch
 import importlib.util
 import io
 import json
@@ -1263,6 +1264,21 @@ def test_safety_protect_dry_run_prints_the_ruleset_and_runs_nothing(tmp_path, mo
     assert [rule["type"] for rule in body["rules"]] == ["deletion", "non_fast_forward", "pull_request"]
     assert "the default branch, dev, release/*" in out and "--reviews 1" in out and "Nothing ran." in out
     assert not (stub / "gh.log").exists()
+
+
+def test_the_ruleset_never_locks_what_colony_itself_pushes_for_a_release():
+    """The safety and release join: a partial release and a branch sync push branches of Colony's own, and the freeze
+    keeps its holds on refs/colony/holds. A broad pattern in [safety] protect never locks them."""
+    from colony import branches, freeze
+
+    config = {"project": {"name": "demo", "base": "dev"}, "safety": {"protect": ["*/*"]}}
+    body = guards.ruleset(config, 1)
+    assert body["target"] == "branch" and not freeze.HOLDS_REF.startswith("refs/heads/")  # no branch rule reaches it
+    exclude = body["conditions"]["ref_name"]["exclude"]
+    assert exclude == ["refs/heads/demo/release-*", "refs/heads/demo/sync-*"]
+    own = ["refs/heads/demo/release-2026-11-24-2", f"refs/heads/{branches.sync_prefix(config, 'prod', 'dev')}-0942"]
+    assert all(any(fnmatch.fnmatchcase(ref, pattern) for pattern in exclude) for ref in own)
+    assert not any(fnmatch.fnmatchcase("refs/heads/demo/feature", pattern) for pattern in exclude)
 
 
 def test_safety_protect_makes_the_ruleset_once_then_brings_it_up_to_date(tmp_path, monkeypatch, capsys):

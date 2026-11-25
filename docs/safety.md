@@ -154,7 +154,7 @@ The core and the stop list are instructions, not locks: a model can still get on
 
 ## Second locks you should add
 
-- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused. `colony safety protect` sets a ruleset for the base, the default branch and `[safety] protect`, which refuses direct, forced and deleting pushes; `--reviews 1` also asks for another person's approval. In Hack, that also refuses `colony merge`'s push, so either leave the base open for the event or set `merge_after_fast_check = false`.
+- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused. `colony safety protect` sets a ruleset for the base, the default branch and `[safety] protect`, which refuses direct, forced and deleting pushes; `--reviews 1` also asks for another person's approval. It leaves out the branches Colony itself pushes for a release, `<project>/release-*` and `<project>/sync-*`, whatever `[safety] protect` matches, and the freeze's holds are no branch, so a release still works under it. In Hack, that also refuses `colony merge`'s push, so either leave the base open for the event or set `merge_after_fast_check = false`.
 - **Start `colony` from a shell without `ANTHROPIC_API_KEY`.**
 - **Keep `.env` files and `check_env_file` out of git.**
 - **Run `--dry-run` first,** for setup and for your first batch.
