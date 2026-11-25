@@ -64,6 +64,28 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks ended' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks ended; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks tasks' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks tasks; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
     ]
   }
 }

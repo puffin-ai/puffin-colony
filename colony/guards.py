@@ -1,11 +1,13 @@
 """colony suppressions and colony hooks: the guards a repo keeps on its agents.
 
 `colony suppressions` holds each file's count of lint and type suppressions to `.colony/suppressions.json`, a record
-that only shrinks. `colony hooks install` merges five hooks into `.claude/settings.json`, keeping the hooks already
-there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), two that post a line on the coordination
-issue, `asking` when a builder waits on a permission pop-up and `stopped` when a turn ends on an error, and the prompt
-hook, `unread`, which shows a session the lines addressed to it that it hasn't read, when it starts and before each
-prompt. Every mode installs all five.
+that only shrinks. `colony hooks install` merges Colony's hooks into `.claude/settings.json`, keeping the hooks already
+there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), which also holds the push, merge and kill
+guards; two that post a line on the coordination issue, `asking` when a builder waits on a permission pop-up and
+`stopped` when a turn ends on an error; the prompt hook, `unread`, which shows a session the lines addressed to it
+that it hasn't read, when it starts and before each prompt; `ended`, when a session ends; and `tasks`, at the end of
+each turn, which tells a session when one of its background tasks stopped. The last two, `stopped` and `unread` also
+keep the session ledger that `colony crash-report` and `colony resume` read (recover.py). Every mode installs them all.
 
 A hook's line that can't post, because gh fails, waits in the outbox, ~/.colony/<project>/outbox.json, and the next
 hook run or wait poll on the computer posts it, oldest first (flush_outbox), so it is never lost. The prompt hook also
@@ -249,6 +251,10 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
          "hooks stopped"),
         ("UserPromptSubmit", None, unread_hook, "hooks unread"),
         ("SessionStart", None, dict(unread_hook), "hooks unread"),
+        ("SessionEnd", None, {"type": "command", "command": quiet_command("ended", program), "timeout": HOOK_TIMEOUT},
+         "hooks ended"),
+        ("Stop", None, {"type": "command", "command": quiet_command("tasks", program), "timeout": HOOK_TIMEOUT},
+         "hooks tasks"),
     ]
     if not plugin:
         return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE")]
@@ -624,16 +630,55 @@ def asking(config: dict, args) -> int:
 def stopped(config: dict, args) -> int:
     """`colony hooks stopped`, the StopFailure hook: a line saying the turn ended on an error, for a builder's lead,
     or for the lead's person. It names the error's code word alone, never text that could quote a secret."""
+    from colony import recover
+
     error = str(hook_event().get("error") or "")
     me, person, lead = session_names(config, args)
     if not me:
         return 0
     cause = error if ERROR_CODE.fullmatch(error) else "unknown error"
+    keep_ledger("stopped", lambda: recover.note_error(config, cause.replace(" ", "_")))
     at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if me == cli.LEAD:
         sender = lead if person else cli.LEAD
         return post(config, person or cli.LEAD, f"{sender} stopped on an error ({cause}) at {at}", sender)
     return post(config, lead, f"{me} stopped on an error ({cause}) at {at}", me)
+
+
+def keep_ledger(action: str, record) -> None:
+    """Run one write to the session ledger (recover.py), which never stops a hook: a problem goes to stderr."""
+    try:
+        record()
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME} hooks {action}: the session ledger was not written: {e}", file=sys.stderr)
+
+
+def ended(config: dict, args) -> int:
+    """`colony hooks ended`, the SessionEnd hook: the session ledger notes when this session ended and Claude Code's
+    reason, so `colony crash-report` can tell a person's exit from a signal or a crash."""
+    from colony import recover
+
+    event = hook_event()
+    keep_ledger("ended", lambda: recover.note_end(config, event))
+    return 0
+
+
+def tasks(config: dict, args) -> int:
+    """`colony hooks tasks`, the Stop hook, at the end of each turn: stamp the session ledger, and when one of this
+    session's background tasks, such as its `colony wait`, stopped without finishing, block the stop once with a
+    note that says to start it again, so the session carries on and does."""
+    from colony import recover
+
+    event = hook_event()
+    keep_ledger("tasks", lambda: recover.note_session(config, event, "turn"))
+    try:
+        note = recover.task_note(config, event)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME} hooks tasks: {e}", file=sys.stderr)
+        return 0
+    if note:
+        print(json.dumps({"decision": "block", "reason": note}))
+    return 0
 
 
 def save_state(path: Path, state: dict) -> None:
@@ -707,13 +752,16 @@ def unread(config: dict, args) -> int:
     The cache is `unread` in the state file `colony wait` keeps, ~/.colony/<project>/<session>.json. While a wait runs,
     which its last poll (`polled_at`, under WAIT_FRESH seconds old) shows, the hook makes no network call. Otherwise it
     reads GitHub itself through wait.poll, with the wait's read time and ETag, at most once per UNREAD_EVERY seconds,
-    so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr."""
-    from colony import wait
+    so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr. It
+    also stamps the session ledger (recover.note_session), from the event's ids alone."""
+    from colony import recover, wait
 
-    hook_event()  # read and dropped: the prompt stays in the window
+    event = hook_event()  # its prompt is never kept: the prompt stays in the window
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         return 0
+    kind = "start" if event.get("hook_event_name") == "SessionStart" else "prompt"
+    keep_ledger("unread", lambda: recover.note_session(config, event, kind))
     try:
         note = watchdog_note(config, me)
     except (OSError, ValueError, KeyError) as e:
@@ -769,3 +817,9 @@ def add_commands(sub) -> None:
     p = actions.add_parser("unread", help="the prompt hook: the lines this session hasn't read, when it starts and "
                                           "before each prompt (Claude Code runs it)")
     p.set_defaults(run=unread)
+    p = actions.add_parser("ended", help="the SessionEnd hook: the session ledger notes when and why this session "
+                                         "ended (Claude Code runs it)")
+    p.set_defaults(run=ended)
+    p = actions.add_parser("tasks", help="the Stop hook: a note to start again a background task of this session's "
+                                         "that stopped (Claude Code runs it)")
+    p.set_defaults(run=tasks)

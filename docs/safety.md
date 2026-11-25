@@ -18,7 +18,7 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 
 ## Hooks
 
-`colony hooks install` merges three hooks into `.claude/settings.json`, and keeps every hook and setting already there. Run it again to bring Colony's hooks up to date. `--dry-run` shows what it would write.
+`colony hooks install` merges Colony's hooks into `.claude/settings.json`, and keeps every hook and setting already there. Run it again to bring Colony's hooks up to date. `--dry-run` shows what it would write.
 
 | Hook | When it runs | What it does |
 | --- | --- | --- |
@@ -28,12 +28,14 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 | The kill guard | Before every Bash call, in the background too | Refuses a kill by name or pattern. See [The kill guard](#the-kill-guard). |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
+| `colony hooks ended` | When a session ends | Notes in the session ledger when it ended and Claude Code's reason, so the crash report can tell a person's exit from a signal or a crash. |
+| `colony hooks tasks` | When a turn ends | Stamps the session ledger. When one of this session's background commands, such as its `colony wait`, stopped without finishing, it keeps the session going once with a note to start it again. See [Recovery](#recovery). |
 
 In Hack and Solo, a prompt hook also runs when you send a prompt. It prints the lines `colony wait` saved for this session, then empties that list. It makes no network call while the wait runs, and otherwise one ETag-cached `gh api` call at most every 30 seconds.
 
 A posting hook's line that `gh` can't post waits in `~/.colony/<project>/outbox.json`. The next hook run, or the next poll of any wait on the computer, posts it first, so it is never lost. A line behind others still waiting goes to the end, so the lines keep their order. The prompt hook also prints one line, at most once a day per session, when the session runs without `CLAUDE_CODE_RETRY_WATCHDOG=1`.
 
-The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3` from 3.9 on. The push, merge and kill guards live in the same script, and run in every session in the repo, your own among them. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3` from 3.9 on. The push, merge and kill guards live in the same script, and run in every session in the repo, your own among them. The other hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
 
 ### The merge guard
 
@@ -63,6 +65,27 @@ A kill by name or pattern matches more than anyone means. On macOS, `pkill -f "c
 It lets a kill of one known process run: a number, such as `kill 4242`, a job such as `kill %1`, `$!`, or an id from a file, such as `kill $(cat server.pid)`.
 
 To close a finished Colony session, run `colony stop <name>`, which finds the session by its name in `claude agents` and ends that one process. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
+
+## Recovery
+
+A crash, a kill or a sleeping laptop can stop many sessions at once. Colony keeps enough on the computer to say what stopped, why, and to bring it back.
+
+**The session ledger.** Each Colony session keeps one file, `~/.colony/<project>/sessions/<name>.json`, which its own hooks write: its Claude Code session id, the folder it started in, its transcript's path, its account, person and lead, and when it last showed life. The session's start, each prompt and the end of each turn stamp it. A turn that ends on an error adds the error's code word, the end of the session adds Claude Code's reason, and `colony stop` adds that it stopped the session on purpose. The ledger holds Colony's own fields alone, never a prompt, a command or a token.
+
+**`colony crash-report`** reads the ledger, `claude agents` and the end of each transcript. For each session of the last 24 hours, `[recover] within_hours`, it says whether it runs, stopped on purpose, or stopped unexpectedly, when it last showed life and what showed it: a hook, its transcript, its `colony wait` or its heartbeat. For an unexpected stop it names the likely cause, the strongest first:
+
+- the computer started again after the session's last sign of life;
+- some session ran a kill by name or pattern within two minutes before it;
+- it stopped within 90 seconds of other sessions, so one event stopped them all;
+- its last turn ended on a usage limit, a sign-in failure or another API error;
+- Claude Code ended it with no exit by its person, as a signal or a closed window does;
+- it stopped during a tool call, which may have ended it.
+
+**`colony resume`** reopens each session that stopped unexpectedly, leads first, with `claude --resume <id>`: the same conversation, on the account that holds it, with its role's settings, in the folder it started in, in cmux or the background. Its first line says it was restarted, when, the likely cause, and what to start again. It reopens each session once, and leaves one stopped on purpose unless you name it. `--dry-run` shows each command first.
+
+**Background commands.** A long command a session runs in the background, `colony wait`, `batch`, `fast-check`, `merge` or `retro`, keeps a file, `~/.colony/<project>/tasks/<pid>.json`, while it runs, and removes it when it ends, on an error too. A file whose process is gone means something stopped the command from outside: the agent tool, a kill or a crash. At the end of the owning session's next turn, the Stop hook keeps the session going once, with a note to start the command again, so a session never sits without its `colony wait`. The crash report lists such commands too.
+
+**Services.** List the local services your work needs in `[recover] services`, each with a check and a command that starts it again. The crash report names each one whose check fails, and `colony resume` runs its restart command, then its check again. See [configuration.md](configuration.md#recover).
 
 ## The suppressions ledger
 

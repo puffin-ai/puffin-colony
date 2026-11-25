@@ -60,6 +60,13 @@ No agent does these without the person's yes:
 
 A builder that meets one sends it to the lead as a question. Only the lead asks the person.
 
+## Recovery
+
+- **Merges wait for the person.** Push your own branch and open a pull request. The merge guard refuses `gh pr merge`, and a push into a protected branch, unless `[safety] merge_into` in `.colony/colony.toml` names that branch. When it refuses, ask the person: never work around it.
+- **Close a session by its name.** `colony stop <name>` ends one finished session, and no other. Never kill by name or pattern, such as `pkill` or `killall`: the kill guard refuses it, because one such line can end every Claude Code session on the computer. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
+- **A background task that stopped.** When the end of a turn says your `colony wait`, or another background command of yours, stopped without finishing, start it again at once with run_in_background.
+- **After a crash, look, then reopen.** The lead runs `colony crash-report`, which says which sessions stopped, when each last showed life, and the likely cause, then `colony resume`, which reopens each one that stopped unexpectedly with its conversation, account and settings, and tells it it was restarted. Tell the person the cause in one line.
+
 ## Talking with the person
 
 Only the lead talks with the person, in its chat and on the Needs issue. Every message to the person:
