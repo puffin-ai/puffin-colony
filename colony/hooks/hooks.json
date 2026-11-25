@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__.*__(merge_pull_request|merge_merge_request|merge_pr|push_files|create_or_update_file|delete_file)",
         "hooks": [
           {
             "type": "command",

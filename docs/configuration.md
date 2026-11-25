@@ -233,6 +233,15 @@ The anti-bloat limits that `colony card new` and `colony tidy` keep. See [cycle.
 
 `colony tools` prints this table after it writes the tools you accepted, and setup adds it. It records `mcp`, the MCP servers, and `skills`, the skill folders. The commands don't read it.
 
+## `[safety]`
+
+What the merge guard lets agents land, and which branches it protects. See [safety.md](safety.md#the-merge-guard). Both keys take branch names and patterns, such as `release/*`. A table with neither key, or no table, is the safe default: agents merge nothing and open pull requests.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `merge_into` | `[]` | The branches agents may merge pull requests into, and push into with a plain push, such as `["dev"]`. The guard counts a branch only when both this working copy and the copy on `origin/<base>` name it, so it takes effect once you merge it into the base. A force push or a deletion of the base stays refused. |
+| `protect` | `[]` | More branches no push may rewrite, and none may update unless `merge_into` names them, such as `["staging", "release/*"]`. The base and the repo's default branch are always protected. |
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

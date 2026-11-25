@@ -226,6 +226,12 @@ def path_command() -> str:
             f"printf '{line}' \"$CLAUDE_PROJECT_DIR\" >> \"$CLAUDE_ENV_FILE\"; exit 0")
 
 
+# The tools the guard reads before they run: every Bash call, and the GitHub tools that merge a pull request or commit
+# straight onto a branch, which the merge guard checks (wait_guard.MCP_PR_MERGES and MCP_COMMITS).
+GUARD_MATCHER = ("Bash|mcp__.*__(merge_pull_request|merge_merge_request|merge_pr|push_files|create_or_update_file"
+                 "|delete_file)")
+
+
 def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
     """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The repo's run the
     wait guard `colony hooks install` copies and the repo's launcher, and put the launcher on PATH. The `plugin`'s run
@@ -236,7 +242,7 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
     program = PLUGIN_BIN if plugin else REPO_BIN
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
     entries = [
-        ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
+        ("PreToolUse", GUARD_MATCHER, {"type": "command", "command": python_command(guard, root=root)}, guard),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking", program), "async": True}, "hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped", program), "async": True},
@@ -329,7 +335,8 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
     """Merge Colony's hooks into a Claude Code settings file, keeping every other key and every hook already there,
     and return the events whose hook was added and those whose hook was brought up to date.
 
-    A Colony hook already in the file, found by its marker, is updated in place. A file that is not a JSON object with
+    A Colony hook already in the file, found by its marker, is updated in place, and so is the matcher of a group that
+    holds that hook alone, such as the guard's, which once read Bash calls only. A file that is not a JSON object with
     a `hooks` object of lists is left as it is, with an error that says so.
     """
     data: dict = {}
@@ -345,15 +352,22 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
         groups = data["hooks"].setdefault(event, [])
         if not isinstance(groups, list):
             raise cli.ColonyError(f"{path}: hooks.{event} must be a list: fix it, then run this again")
-        mine = [entry for group in groups if isinstance(group, dict) for entry in group.get("hooks", [])
+        mine = [(group, entry) for group in groups if isinstance(group, dict) for entry in group.get("hooks", [])
                 if isinstance(entry, dict) and marker in str(entry.get("command", ""))]
         if not mine:
             groups.append({**({"matcher": matcher} if matcher else {}), "hooks": [hook]})
             added.append(event)
-        elif any(entry != hook for entry in mine):
-            for entry in mine:
+            continue
+        stale = False
+        for group, entry in mine:
+            if entry != hook:
                 entry.clear()
                 entry.update(hook)
+                stale = True
+            if matcher and group.get("matcher") != matcher and len(group.get("hooks", [])) == 1:
+                group["matcher"] = matcher  # a group that also holds the person's own hooks keeps its matcher
+                stale = True
+        if stale:
             updated.append(event)
     if added or updated:
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,9 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 | Hook | When it runs | What it does |
 | --- | --- | --- |
 | The wait guard | Before every Bash call | Refuses a foreground sleep over 10 seconds, a loop that sleeps, an endless loop, `watch`, `gh run watch` and `gh pr checks --watch`. Its message says to use `run_in_background` or `colony wait`. A command sent to the background passes. |
+| The push guard | Before every Bash call, in the background too | Refuses a push that force-pushes, deletes or mirrors a protected branch: the base, the repo's default branch, and `[safety] protect`. |
+| The merge guard | Before every Bash call, and before a GitHub tool merges a pull request or commits onto a branch | Refuses what lands work on a branch without your yes. See [The merge guard](#the-merge-guard). |
+| The kill guard | Before every Bash call, in the background too | Refuses a kill by name or pattern. See [The kill guard](#the-kill-guard). |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
 
@@ -30,7 +33,36 @@ In Hack and Solo, a prompt hook also runs when you send a prompt. It prints the 
 
 A posting hook's line that `gh` can't post waits in `~/.colony/<project>/outbox.json`. The next hook run, or the next poll of any wait on the computer, posts it first, so it is never lost. A line behind others still waiting goes to the end, so the lines keep their order. The prompt hook also prints one line, at most once a day per session, when the session runs without `CLAUDE_CODE_RETRY_WATCHDOG=1`.
 
-The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3`. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3` from 3.9 on. The push, merge and kill guards live in the same script, and run in every session in the repo, your own among them. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+
+### The merge guard
+
+No agent merges into any branch, or pushes into a protected one, without your yes. By default agents open pull requests, and you merge them. The guard refuses:
+
+- `gh pr merge`, including `--auto`, unless the pull request's base branch is one `[safety] merge_into` names. To check, it asks `gh pr view` for the base. With `merge_into` empty, the default, it refuses every one without asking.
+- A GitHub tool that merges a pull request, such as the GitHub MCP server's `merge_pull_request`, by the same rule.
+- A `gh api` call that merges: a `PUT` to `pulls/<n>/merge`, a `POST` to `merges`, or a GraphQL `mergePullRequest`. Only `gh pr merge` may merge, because the guard can check its base.
+- A plain `git push` that updates a protected branch, such as `git push origin main`, `git push` with `main` checked out, or `git push origin HEAD:main`, unless `merge_into` names that branch. A push of your own branch, a tag or a dry run passes.
+- A GitHub tool that commits straight onto a protected branch of this repo, such as `push_files` or `create_or_update_file` with `branch` set to the base.
+
+The protected branches are the base, the repo's default branch (origin's `HEAD`), and the branches and patterns in `[safety] protect`. That makes the default safe in any repo, whatever its branches are called. A force push, a deletion or a mirror push of a protected branch stays refused even when `merge_into` names it.
+
+To let agents merge into a branch, such as an integration branch `dev`, add it to `[safety] merge_into` in `.colony/colony.toml` and merge that change into the base. The guard reads `merge_into` from two copies: the one on `origin/<base>`, which you merged, and the working copy. It allows a branch only when both name it. So an agent can't allow itself a merge by editing its own copy, and a branch you take out of your copy is refused at once. A clone with no `origin` reads the working copy alone. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
+
+A local `git merge` changes nothing on GitHub until a push, and the guard checks that push, so a lead can still merge cards into its batch worktree.
+
+### The kill guard
+
+A kill by name or pattern matches more than anyone means. On macOS, `pkill -f "colony wait" -U $(id -u) -n` reads each word after the pattern as one more pattern, and in one real run it ended every Claude Code session, the terminal app's helpers and every background task on the computer. The kill guard refuses:
+
+- `pkill`, `killall`, `killall5` and `skill`, in any form, with `sudo`, `timeout` or `xargs` in front, or inside `bash -c` and `eval`;
+- `fuser -k`, `taskkill /IM` or `/FI`, and PowerShell's `Stop-Process -Name` or a pipe into `Stop-Process`;
+- a `kill` whose process ids come from a search of the running processes on the same line, such as `kill $(pgrep -f x)`, `pgrep x | xargs kill`, `kill -9 $(lsof -ti :3000)` or a loop over `ps` output;
+- `kill -1`, `kill 0` and a negative id such as `kill -- -4242`, which signal every process you own or a whole process group.
+
+It lets a kill of one known process run: a number, such as `kill 4242`, a job such as `kill %1`, `$!`, or an id from a file, such as `kill $(cat server.pid)`.
+
+To close a finished Colony session, run `colony stop <name>`, which finds the session by its name in `claude agents` and ends that one process. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
 
 ## The suppressions ledger
 
