@@ -73,8 +73,10 @@ def _git(cwd, *args: str, check: bool = True) -> str:
 
 
 def _exists(root: Path, ref: str) -> bool:
-    """Whether the ref names a commit."""
-    return batch._run(["git", "rev-parse", "--verify", "--quiet", ref], root, check=False).returncode == 0
+    """Whether the ref names a commit this clone has. `^{commit}` makes git read the object: alone, `rev-parse
+    --verify` passes any full 40-character id, even one this clone lacks."""
+    return batch._run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root,
+                      check=False).returncode == 0
 
 
 def _behind(root: Path, ref: str, other: str) -> bool:
