@@ -1097,6 +1097,29 @@ def test_a_script_that_steers_itself_or_is_run_from_a_steering_line_follows_no_v
     assert run.returncode == 2, (command, text, run.stderr)
 
 
+@pytest.mark.parametrize("command, text", [
+    # A quoted name the shell reads as PATH, on the line that runs the script.
+    ('export P"ATH"={evil}/bin; bash launch.sh', 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("env 'PATH={evil}/bin' bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    # A name the guard can't read, which may be any name.
+    ('n=PATH; export "$n={evil}/bin"; bash launch.sh', 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    # zsh's lower-case path is PATH: a script that sets it, or a line that does.
+    ("zsh launch.sh", 'path={evil}/bin\nhere=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("bash launch.sh", 'export P"ATH"={evil}/bin\nhere=$(dirname "$0")\nbash "$here/run.sh"\n'),
+])
+def test_bindings_read_as_the_shell_reads_them_and_zshs_lower_case_path_steer_a_script(command, text, on_feature):
+    """Regression (security review of 2f37c89): the guard read the names a line binds from its raw text, so a quoted
+    name such as export P"ATH"=x went unseen; and zsh's path, cdpath and fpath, tied to PATH, CDPATH and FPATH, didn't
+    count as steering."""
+    evil = on_feature / "evil"
+    executable(evil / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(evil / "bin" / "dirname", f"#!/bin/sh\necho {evil}\n")
+    executable(on_feature / "run.sh", "#!/bin/sh\necho harmless\n")  # the launch folder's own
+    executable(on_feature / "launch.sh", text.format(evil=evil))
+    run = push_guard(command.format(evil=evil), on_feature)
+    assert run.returncode == 2, (command, text, run.stderr)
+
+
 def test_a_harmless_name_on_the_line_leaves_a_scripts_own_folder_followed(on_feature):
     """CI=1 and the like change no shell's reading, so the script's own folder still resolves and its script is read."""
     executable(on_feature / "launch.sh", '#!/bin/sh\nhere=$(dirname "$0")\nbash "$here/run.sh"\n')

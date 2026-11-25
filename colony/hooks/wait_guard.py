@@ -1691,9 +1691,15 @@ STRAY = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
 # words (IFS), its options, the libraries its programs load (LD_, DYLD_), functions passed down in the environment
 # (BASH_FUNC_, export -f), and env with options, such as env -u PATH. A text that holds any of them follows no value
 # of its own, and nor does a script it runs (within).
-STEERS = re.compile(r"\b(?:PATH|BASH_ENV|ENV|ZDOTDIR|HOME|XDG_CONFIG_HOME|IFS|SHELLOPTS|BASHOPTS|CDPATH|LD_\w+"
-                    r"|DYLD_\w+)\+?=|BASH_FUNC_|\bexport\b[^;\n|&]*\s-f\b|\benv\s+-")
+STEERS = re.compile(r"\b(?:BASH_ENV|ENV|ZDOTDIR|HOME|XDG_CONFIG_HOME|IFS|SHELLOPTS|BASHOPTS|LD_\w+|DYLD_\w+)\+?="
+                    r"|(?i:\b(?:path|cdpath|fpath|module_path|manpath)\+?=)|BASH_FUNC_|\bexport\b[^;\n|&]*\s-f\b"
+                    r"|\benv\s+-")
 STEERING = {"PATH", "BASH_ENV", "ENV", "ZDOTDIR", "HOME", "XDG_CONFIG_HOME", "IFS", "SHELLOPTS", "BASHOPTS", "CDPATH"}
+# The names that hold where programs and functions are found, in any case: zsh ties path, cdpath, fpath and
+# module_path to PATH, CDPATH, FPATH and MODULE_PATH.
+SEARCH_PATHS = {"PATH", "CDPATH", "FPATH", "MODULE_PATH", "MANPATH"}
+# The commands whose operands bind the names they hold, after the shell takes their quotes off (named_bindings).
+EXPORTERS = {"export", "readonly", "unset", "env"}
 # Names a line may set before it runs a script and still let the script follow its own values: they change no
 # shell's reading. Any other name the line binds may reach the script, so the script follows none (within).
 HARMLESS = {"CI", "NODE_ENV", "DEBUG", "VERBOSE", "FORCE_COLOR", "NO_COLOR", "TZ", "RUST_BACKTRACE",
@@ -1702,7 +1708,30 @@ HARMLESS = {"CI", "NODE_ENV", "DEBUG", "VERBOSE", "FORCE_COLOR", "NO_COLOR", "TZ
 
 def steering(name: str) -> bool:
     """Whether binding `name` can change how a script reads its own lines (STEERS)."""
-    return name in STEERING or name.startswith(("LD_", "DYLD_", "BASH_FUNC_"))
+    return name in STEERING or name.upper() in SEARCH_PATHS or name.startswith(("LD_", "DYLD_", "BASH_FUNC_"))
+
+
+def named_bindings(text: str) -> set[str] | None:
+    """The names a text binds, read as the shell reads its words, quotes taken off, so `export P"ATH"=x` binds PATH:
+    each assignment before a command, env's among them, and each operand of export, readonly, unset or env. None when
+    the guard can't read the text as words, or an operand binds a name it can't read, such as `export "$n=x"`."""
+    try:
+        line = tokens(text)
+    except ValueError:
+        return None
+    found: set[str] = set()
+    for words in simple_commands(line):
+        head, program = command_parts(words)
+        found |= {word.partition("=")[0] for word in head if ASSIGNMENT.match(word)}
+        if program and PurePath(program[0]).name in EXPORTERS:
+            for word in program[1:]:
+                name = word.partition("=")[0]
+                if word.startswith("-") and "=" not in word:
+                    continue
+                if not NAME_WORD.fullmatch(name):
+                    return None
+                found.add(name)
+    return found
 
 
 def only_read(name: str, text: str) -> bool:
@@ -1731,7 +1760,10 @@ def script_variables(text: str, path: str | None) -> Variables:
                 counts[name] = counts.get(name, 0) + 2  # never a single plain binding
     for match in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\b", text):
         counts[match[1]] = counts.get(match[1], 0) + 2
-    opaque = bool(REBINDS.search(text) or STRAY.search(text))
+    named = named_bindings(text)
+    for name in named or ():
+        counts.setdefault(name, 2)  # bound where only the shell's reading sees it, such as export P"ATH"=x
+    opaque = bool(REBINDS.search(text) or STRAY.search(text)) or named is None
     steers = bool(STEERS.search(text)) or any(steering(name) for name in counts)
     lines = [line for line in text.split("\n") if not line.lstrip(" \t").startswith("#")]  # as the shell splits it
     body, values = "\n".join(lines), {}
