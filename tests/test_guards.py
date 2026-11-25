@@ -167,7 +167,6 @@ PUSHES_ALLOWED = [
     "git push origin ana/login &",
     "git checkout -b ana/new && git push -u origin ana/new",  # a checkout changes no branch a push names in full
     "bash -c 'git push origin ana/login'",
-    "echo git push --force origin main",
     "git log --oneline -3",
 ]
 PUSHES_REFUSED = [
@@ -285,7 +284,7 @@ LINES_THE_GUARD_CANT_FOLLOW = [
 @pytest.mark.parametrize("command", LINES_THE_GUARD_CANT_FOLLOW)
 def test_a_push_built_from_words_the_guard_cant_see_is_refused(command, on_feature):
     run = push_guard(command, on_feature)
-    assert merge_refused(run), (command, run.stderr)
+    assert run.returncode == 2 and "merge guard: refused, " in run.stderr, (command, run.stderr)
 
 
 def test_a_git_alias_in_config_is_read_as_what_it_runs(on_feature):
@@ -480,7 +479,7 @@ def test_a_merge_through_the_api_is_refused_even_into_an_allowed_branch(command,
 
 @pytest.mark.parametrize("command", ["gh api repos/acme/demo/pulls/5/merge", "gh pr view 5", "gh pr create --base main",
                                      "gh api repos/acme/demo/merges", "git merge origin/main", "colony merge ana/login",
-                                     "echo gh pr merge 5", "gh dash"])
+                                     "gh dash"])
 def test_the_merge_guard_lets_a_command_that_merges_nothing_on_github_run(command, hosted, tmp_path):
     assert push_guard(command, hosted, path=github(tmp_path / "gh")).returncode == 0, command
 
@@ -568,9 +567,6 @@ KILL_ALLOWED = [
     "kill $(cat server.pid)",
     "kill 12345 2>/dev/null",
     "kill -9 12345 1>/dev/null",
-    'echo "pkill is refused"',
-    "grep -rn killall docs/",
-    "git log --grep=pkill",
     "colony stop builder-2",
     "taskkill /PID 4242 /F",
     "lsof -ti :3000",
@@ -1195,8 +1191,7 @@ def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
 
 
 @pytest.mark.parametrize("command", [
-    "git commit -m \"$(cat <<'EOF'\nfeat: refuse pkill and gh pr merge 5\n\nkill $(pgrep x) too\nEOF\n)\"",
-    "echo $((1 << 2)); cat <<<'pkill x'",
+    "echo $((1 << 2)); cat <<<'some text'",
     "(( n = 1 << 3 )); echo $n",
 ])
 def test_a_real_here_document_or_shift_still_reads_as_text(command):
@@ -1284,3 +1279,41 @@ def test_no_here_document_the_guard_could_misread_hides_a_kill_or_a_merge(comman
     run = guard(json.dumps({"tool_input": {"command": command.format(hidden="pkill -f x")}}))
     assert run.returncode == 2 and run.stderr.startswith("kill guard: refused, "), (command, run.stderr)
     assert merge_refused(push_guard(command.format(hidden="gh pr merge 5"), hosted)), command
+
+
+# The backstop: any line whose raw text names more kills, pushes or gh merges than the guard's reading of it shows is
+# refused, since quoting or a here-document the shell reads otherwise hid one. A body line such as "don't" opens a quote
+# the guard's reader carries past the terminator, while the shell runs the next line.
+HIDDEN_BEHIND_A_QUOTE = [
+    "cat <<EOF > notes.txt\ndon't\nEOF\n{hidden} # '",
+    "echo $'it\\'s'\n{hidden} # '",
+]
+
+
+@pytest.mark.parametrize("line", HIDDEN_BEHIND_A_QUOTE)
+def test_a_kill_push_or_merge_the_guard_reads_as_quoted_text_is_still_refused(line, on_feature):
+    run = guard(json.dumps({"tool_input": {"command": line.format(hidden="pkill -f x")}}))
+    assert run.returncode == 2 and run.stderr.startswith("kill guard: refused, "), (line, run.stderr)
+    assert push_refused(push_guard(line.format(hidden="git push origin main"), on_feature)), line
+    assert merge_refused(push_guard(line.format(hidden="gh pr merge 5"), on_feature)), line
+
+
+NAMED_IN_TEXT = [
+    ('echo "pkill is refused"', "kill guard"),
+    ("grep -rn killall docs/", "kill guard"),
+    ("git log --grep=pkill", "kill guard"),
+    ("cat <<<'pkill x'", "kill guard"),
+    ("echo git push --force origin main", "push guard"),
+    ('git commit -m "the guard refuses git push origin main"', "push guard"),
+    ("echo gh pr merge 5", "merge guard"),
+    ("git commit -m \"$(cat <<'EOF'\nfeat: refuse pkill and gh pr merge 5\nEOF\n)\"", "kill guard"),
+]
+
+
+@pytest.mark.parametrize("command, which", NAMED_IN_TEXT)
+def test_text_that_names_a_kill_push_or_merge_is_refused_with_the_way_out(command, which, on_feature):
+    """The backstop can't tell text from a command it can't read, so it refuses both, and says to write the text to a
+    file with the file tool instead."""
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and f"{which}: refused, this line names a" in run.stderr, (command, run.stderr)
+    assert "write the text to a file with your file tool" in run.stderr

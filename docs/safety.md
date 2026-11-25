@@ -91,7 +91,7 @@ A kill by name or pattern matches more than anyone means. On macOS, `pkill -f "c
 
 It lets a kill of one known process run: a number, such as `kill 4242`, a job such as `kill %1`, `$!`, or an id from a file, such as `kill $(cat server.pid)`.
 
-The kill, push and merge guards read every line of a command, a here-document's body too, so no shell quirk the guard reads differently from the shell can hide a kill, a push or a merge. A body whose line starts with `pkill` or `gh pr merge` is refused even when it is only text: write such text to a file with your file tool, and pass the file. Only the wait guard skips here-document bodies, which hide nothing it guards.
+The kill, push and merge guards read every line of a command, a here-document's body too. As a backstop, they also scan the line's raw text, and refuse it when the text names more kills, `git push`es or `gh` merges than their own reading of the line shows: quoting, or a here-document, that the shell reads otherwise can hide one, as a body line such as `don't` can. So text that only names one is refused too, such as `grep -rn pkill`, `echo gh pr merge 5`, or a commit message that names `git push`. Write such text to a file with your file tool and pass the file, and search with your search tool; the refusal says so. Only the wait guard skips here-document bodies, which hide nothing it guards.
 
 To close a finished Colony session, run `colony stop <name>`, which finds the session by its name in `claude agents` and ends that one process. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
 
