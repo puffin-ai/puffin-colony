@@ -152,6 +152,13 @@ When your conversation nears automatic compaction, hand over before it compacts:
 
 It posts the handover on `Colony: coordination` and prints the command that opens a fresh lead with your name and person. Run that command, tell the person in one line, and end. Put anything longer than a few lines in a committed file, and link it.
 
+### Capacity
+
+- Before you open helpers, run `colony capacity`: it says how many more helpers this computer takes now, and each account's room and helpers against its cap. `colony helpers <n> --open` opens them in waves, each on an account under its cap, and leaves the rest to a background run; let it, and hand each one a card as its `joined:` line arrives.
+- A helper whose usage limit reset, or whose wait stopped after the computer slept, is woken for you, and your wait prints one line saying how. When a line says a helper's window closed, open it again with `colony open <name>`.
+- An `urgent:` line that a service check failed names the fix: the person's sign-in steps go to the person in one line. A line that a session runs on the wrong account, or on a reserved one, means stop it and open it again on the account the line names.
+- When your wait says this computer is busy, open no more helpers here: ask the person to run `colony join` on another computer, and give cards whose checks share a test database or a port their lock, `colony lock <name> -- <command>`.
+
 ## Builder
 
 In hack mode, follow the Hack section instead.
@@ -166,6 +173,8 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
+
+When a check needs something only one run may use at a time, such as the one local test database or a fixed port, run it under its lock, `colony lock <name> -- <command>`, as the card or the repo's commands name it. When a line says your usage limit reset or the computer slept, start `colony wait` in the background again and carry on from where you stopped.
 
 Ask no person anything. When you are unsure, send the lead a question with your own default, `colony post <n> lead "question: <question>? I'm going with <default>"`, and keep building on that default. Only when you can't go on, post `colony post <n> lead "blocked: <why>"`. When the lead's `answer:` differs from your default, change it. Never push to `{base}`, and never do anything on the stop list.
 

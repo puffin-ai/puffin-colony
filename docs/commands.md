@@ -13,9 +13,9 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | `colony setup [--print]` | Runs setup in this terminal, as `colony` does the first time. `--print` prints the setup prompt instead, for a session already open to follow. |
 | `colony skill-install [--config-dir <dir>]` | Copies the `colony-setup` skill into a Claude settings folder, `$CLAUDE_CONFIG_DIR` or `~/.claude` by default, so a session in any repo can set Colony up. |
 | `colony join [<lead>]` | Lends this computer to one of your leads, as a helper under the next free builder name, after saying what it lacks: a clone, the `claude` login, or `gh auth`. With one live lead it joins that one; with several it asks once, or `colony join engine` names it. Inside a Claude Code session, as when you type "join" in the app, that session becomes the helper. |
-| `colony helpers <n> [--open \| --paste]` | The lead needs `n` helpers. Alone, it prints the question the lead asks you every time, "Open them myself, or you paste?", with your last answer as the default, kept in the git-ignored `.colony/local.toml`. `--open` opens them on this computer: cmux windows when the lead runs in a terminal or cmux, else background sessions. Before a background session opens, it checks that this account has answered Claude Code's one-time question about the repo's `.mcp.json` servers, which a background session would wait on unseen; when it hasn't, it stops and names the step for you, and changes no setting. `--paste` prints one `colony join <lead>` per helper for any computer. |
+| `colony helpers <n> [--open \| --paste]` | The lead needs `n` helpers. Alone, it prints the question the lead asks you every time, "Open them myself, or you paste?", with your last answer as the default, kept in the git-ignored `.colony/local.toml`. `--open` opens them on this computer: cmux windows when the lead runs in a terminal or cmux, else background sessions. Before a background session opens, it checks that this account has answered Claude Code's one-time question about the repo's `.mcp.json` servers, which a background session would wait on unseen; when it hasn't, it stops and names the step for you, and changes no setting. `--paste` prints one `colony join <lead>` per helper for any computer. `--open` opens them in waves of `[pool] wave` (3), each on an account under its cap of busy helpers, `[pool] max_busy` (3), and only while this computer has room; the rest open in the background, one wave every `[pool] wave_seconds`. See [capacity.md](capacity.md#helpers-in-waves). |
 | `colony view` | Opens a cmux workspace for every running Colony session on this computer, attached on its own account, so background sessions show in cmux. Run it in a cmux terminal. |
-| `colony open <name>` | Opens a helper for the lead that runs it, in cmux or as a background session. |
+| `colony open <name>` | Opens a helper for the lead that runs it, in cmux or as a background session, on an account under its cap of busy helpers. It refuses when every account is at its cap, unless `--account` names one. |
 | `colony image <n> <file>` | The lead saves an image the person pasted for card `n` under `.colony/images/<n>/` on the card's branch, `card/<n>`, pushes it, and says so on the card, so helpers on other computers see it. It works in a throwaway worktree. |
 | `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders, and prints the `git worktree add` command that makes the card's worktree, `<worktrees>/<project>-<helper>-<n>` on the branch `<helper>/<n>`, from the card's image branch when it has one. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
@@ -99,11 +99,25 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
 | `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. A line either hook can't post waits in `~/.colony/<project>/outbox.json` until the next hook or wait posts it. |
 
+## Capacity
+
+Accounts, usage limits, services, this computer, locks, and sleep. See [capacity.md](capacity.md).
+
+| Command | What it does |
+| --- | --- |
+| `colony capacity [--json]` | This computer's cores, load, memory and free disk; how many helpers, test runs and builds it runs at once, and how many more helpers may open now; each of your accounts' room and helpers against its cap, with `[pool] reserve` accounts marked; the sessions waiting for a usage limit to reset; and the locks held. `--json` prints one object for a script. |
+| `colony services [--json]` | Runs every service check now: each account on this computer (signed in, with room), `gh auth status`, and each `[services.<name>]`. Prints `pass:` or `fail:` with why and how to fix it, never a command's output, and ends with 1 when one fails. |
+| `colony lock <name> [--slots N] [--wait MINUTES] -- <command>` | Runs the command while holding the named lock on this computer, such as `test-db` for one shared test database. Another run waits for it, saying who holds it, up to `--wait` minutes (30). The command gets its slot in `$COLONY_LOCK_SLOT`. Slots come from `--slots`, `[locks.<name>] slots`, or for `tests` and `builds`, this computer's runs at once; else 1. It ends with the command's exit code. |
+| `colony lock --list` | Names each held lock, who holds it, its command and for how long. |
+| `colony wake [--after-sleep] [--dry-run]` | Wakes the sessions on this computer whose usage limit has reset, and the idle helpers whose wait stopped. `--after-sleep` also continues, under their own ids, the background helpers that ran before the computer slept and no longer run. `--dry-run` says what it would do. |
+| `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. A wait starts it by itself when a limit is noted; one runs per project on each computer. |
+| `colony open-later <n>` | The later waves of `colony helpers <n> --open`, which it starts in the background. You don't run it yourself. |
+
 ## Flags
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `helpers`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `wake` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |

@@ -114,3 +114,29 @@ open_cards_per_lead = 10           # `colony card new` refuses a lead past this 
 stale_days = 7                     # `colony tidy` closes, or moves to future-work, a card with no update this long
 issue_comments = 200               # the coordination and Needs issues rotate at this many comments
 archive_days = 7                   # `colony tidy` archives a board item Done this long
+
+# Capacity (docs/capacity.md): every table below is optional, and each key shown holds its default.
+# [pool]                           # the team's rules for its pool of accounts
+# order = "reset"                  # "reset": the soonest weekly reset first; "listed": the person's own order
+# out_at = 95                      # a window at or past this percent has no room: a new session switches account
+# near_at = 80                     # a 5-hour window this full, with its reset over near_hours off, is skipped too
+# near_hours = 1
+# reserve = []                     # accounts kept free: used only when named with --account
+# max_busy = 3                     # helpers one account runs at once; an account's own max_busy overrides it
+# wave = 3                         # helpers `colony helpers <n> --open` opens at once; the rest in later waves
+# wave_seconds = 60                # the pause between waves
+#
+# [machine]                        # what one helper, test run and build needs here; Colony reads the rest itself
+# helper_gb = 1                    # memory one helper session needs
+# test_gb = 2                      # memory one test run needs; build_gb the same for a build
+# test_cores = 2                   # cores one test run keeps busy; build_cores the same for a build
+# keep_free_gb = 2                 # memory left for you and the system
+# keep_free_disk_gb = 10           # below this much free disk, the computer counts as busy
+# busy_load = 1                    # at or past this load per core, it is busy: no new helper opens here
+#
+# [services.aws]                   # a check for a service the team relies on; accounts and gh are checked already
+# command = "aws sts get-caller-identity"
+# fix = "aws sso login"            # what you do when it fails; expect, at_least, at_most and exit set the pass
+#
+# [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`
+# slots = 1
