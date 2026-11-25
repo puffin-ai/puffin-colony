@@ -786,11 +786,14 @@ def run(config: dict, args, clock=None) -> int:
     from colony import guards, presence
 
     outbox = functools.partial(guards.flush_outbox, config)
+    from colony import capacity  # a usage limit that reset, the account it runs on, sleep, services, the computer
+
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
         status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
-        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox)
+        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox,
+                    silent=capacity.helper_check(config, me, lead_name(config, args) if named() else cli.LEAD))
     waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -804,12 +807,12 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
-    silent = None
+    silent = lookout = capacity.lead_check(config, name)
     if named():  # only a named lead's helpers post a status
         from colony import watch
 
         quiet, stuck = silent_check(project, name), watch.stuck_check(name)
-        silent = lambda state: quiet(state) + stuck(state, time.time())  # noqa: E731
+        silent = lambda state: quiet(state) + stuck(state, time.time()) + lookout(state)  # noqa: E731
         watch.keep_awake(project, os.environ.get("CLAUDE_PID", ""))
     freeze = None
     if hack(config):
