@@ -166,3 +166,8 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 #
 # [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`
 # slots = 1
+
+# Housekeeping (docs/cycle.md#the-leads-queue): optional, and each key shown holds its default.
+# [cards]                          # the lead's queue of To do cards
+# auto_start = "waits"             # the lead's wait starts a card whose wait just ended; "all": any ready card; "off"
+# remind_minutes = 60              # how long before the same queued card is named to the lead again

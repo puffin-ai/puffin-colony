@@ -358,6 +358,21 @@ Optional. Each `[locks.<name>]` table sets one named lock's `slots`, how many ru
 slots = 1
 ```
 
+## `[cards]`
+
+Optional. How the lead's wait treats the lead's queue of To do cards. See [cycle.md](cycle.md#the-leads-queue).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `auto_start` | `"waits"` | Which ready cards the lead's wait starts by itself, for the helper the card's title names, when that helper is live and free: `"waits"`, a card whose `Waits for:` cards just landed; `"all"`, any ready card; `"off"`, none, so the lead hands out each one. |
+| `remind_minutes` | `60` | How long before the lead's wait names the same queued card again, while the queue and the free helpers stay the same. |
+
+```toml
+[cards]
+auto_start = "waits"
+remind_minutes = 60
+```
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

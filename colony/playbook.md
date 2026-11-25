@@ -176,6 +176,15 @@ It posts the handover on `Colony: coordination` and prints the command that open
 - An `urgent:` line that a service check failed names the fix: the person's sign-in steps go to the person in one line. A line that a session runs on the wrong account, or on a reserved one, means stop it and open it again on the account the line names.
 - When your wait says this computer is busy, open no more helpers here: ask the person to run `colony join` on another computer, and give cards whose checks share a test database or a port their lock, `colony lock <name> -- <command>`.
 
+### Cards and the queue
+
+- When you know a card's files, name them on a `Files:` line beside its `Folders:` line. When `colony card new` prints an `overlap:` line, give both cards to one helper, or make one wait for the other with `colony card waits <n> <other>`. A card that needs another card's work first gets `--waits-for <n>` when you make it: it starts once that card lands, whatever branch it merged into. `colony card overlaps` lists every overlapping pair.
+- Hand the next card out with `colony card next --start`: it takes the first ready card in your queue, posts its `start: this card` line, and sets its Status and Helper. `colony card next` shows the queue.
+- Your wait starts a card whose wait just ended, for the helper its title names when that helper is free, and gives you one line saying so. A `queued:` line means a card is ready while a helper is free, or while none of your cards is in progress: run `colony card next --start` at once, without asking the person. When it says no helper is free, open one (see Capacity).
+- A line that a card waits for one that closed without landing: change its wait with `colony card waits <n> <cards>`, or close the card.
+- A `done` line carries the files the branch changed, which Colony reads from its diff. Use that list, never one typed in a line, and look at any file it names outside the card's paths before you merge the branch.
+- `colony tidy` closes the cards a merged pull request finished on any branch, such as an integration branch, so you never close them by hand.
+
 ## Builder
 
 In hack mode, follow the Hack section instead.
@@ -190,6 +199,8 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
+
+Your `done` line carries the list of files your branch changed, which Colony reads from its diff, so never type that list yourself. `colony take` refuses a card that waits for others still open: take the next card instead.
 
 When a check needs something only one run may use at a time, such as the one local test database or a fixed port, run it under its lock, `colony lock <name> -- <command>`, as the card or the repo's commands name it. When a line says your usage limit reset or the computer slept, start `colony wait` in the background again and carry on from where you stopped.
 

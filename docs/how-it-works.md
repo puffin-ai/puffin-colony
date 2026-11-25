@@ -114,7 +114,7 @@ colony card new "builder-2: dark mode switch in settings" \
   --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S
 ```
 
-That opens the issue and puts it on the board as To do, with the lead and the size. A card is an issue only when its work starts this week: an idea for later is one line, `colony idea "<the idea>"`, in the future-work register. `colony card new` refuses past 10 open cards per lead, and refuses a duplicate of an open card. Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them, because finding code is a large part of a small change.
+That opens the issue and puts it on the board as To do, with the lead and the size. A card is an issue only when its work starts this week: an idea for later is one line, `colony idea "<the idea>"`, in the future-work register. `colony card new` refuses past 10 open cards per lead, and refuses a duplicate of an open card. Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them on a `Files:` line, because finding code is a large part of a small change. `colony card new` names each open card that plans to touch the same folders or files, and a card can wait for others with `--waits-for`, so it starts once they land ([cycle.md](cycle.md#cards-that-wait-for-others)).
 
 ## 6. Builders build
 

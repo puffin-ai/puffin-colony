@@ -17,7 +17,7 @@ You open a session and say hi, and run `colony join` on a computer you lend. The
 | `colony view` | Opens a cmux workspace for every running Colony session on this computer, attached on its own account, so background sessions show in cmux. Run it in a cmux terminal. |
 | `colony open <name>` | Opens a helper for the lead that runs it, in cmux or as a background session, on an account under its cap of busy helpers. It refuses when every account is at its cap, unless `--account` names one. |
 | `colony image <n> <file>` | The lead saves an image the person pasted for card `n` under `.colony/images/<n>/` on the card's branch, `card/<n>`, pushes it, and says so on the card, so helpers on other computers see it. It works in a throwaway worktree. |
-| `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders, and prints the `git worktree add` command that makes the card's worktree, `<worktrees>/<project>-<helper>-<n>` on the branch `<helper>/<n>`, from the card's image branch when it has one. |
+| `colony take <n>` | A helper takes card `n`, marking it In progress with itself as Helper. It refuses a card outside its lead's folders, and prints the `git worktree add` command that makes the card's worktree, `<worktrees>/<project>-<helper>-<n>` on the branch `<helper>/<n>`, from the card's image branch when it has one. It refuses a card whose `Waits for:` cards haven't landed, and names them. |
 | `colony research "<question>"` | Opens a researcher on one question, with `.colony/prompts/researcher.md` as its first prompt. The lead runs it. |
 | `colony spec "<feature>"` | Opens the spec agent on a FEATURE, with `.colony/prompts/spec.md` as its first prompt. The lead runs it. |
 | `colony fix-links [--dry-run]` | Windows only. Turns on git's `core.symlinks`, and turns every symbolic link git wrote as a one-line text file back into a link, in the repo and all its worktrees. It replaces only an untouched stub, whose text is still the link's target, keeps and names an edited one, and prints the counts. It needs Developer Mode, and changes nothing without it. `colony` and `colony join` say in one line when a repo needs it. On macOS and Linux it does nothing. |
@@ -54,11 +54,11 @@ See [messages.md](messages.md#getting-every-line-through).
 | --- | --- |
 | `colony tier [--base B] [--head H] [--feature] [--why]` | Prints TINY, SMALL or FEATURE for a branch's diff, then its risk list. `--why` prints each reason, and `--feature` forces FEATURE. |
 | `colony needs "<question>" --default "<x>" [--person p]` | The lead posts a decision, with its default, on the person's `Needs <Person>` issue. |
-| `colony card new "<title>" --body … --size S\|M\|L [--lead <name>]` | Makes a card and puts it on the board as To do, with its Lead and Size. It refuses at the lead's `[limits] open_cards_per_lead` open cards (10), and on a duplicate of an open card, naming its number. |
+| `colony card new "<title>" --body … --size S\|M\|L [--lead <name>] [--waits-for N,N]` | Makes a card and puts it on the board as To do, with its Lead and Size. It refuses at the lead's `[limits] open_cards_per_lead` open cards (10), and on a duplicate of an open card, naming its number. It prints an `overlap:` line for each open card that plans to touch the same folders or files, and `--waits-for` writes the card's `Waits for:` line, so it starts once those cards land. See [cycle.md](cycle.md#cards-that-touch-the-same-files). |
 | `colony idea "<one line>"` | Appends a dated line to the future-work register, `<vault>/future-work.md`, or `.colony/future-work.md` with no vault. An idea is never an issue. |
 | `colony board init` | Makes the GitHub Project for the cards, with its five fields, Status, Lead, Helper, Size and Last update, or finds it and adds any of them it lacks. |
 | `colony board set <card> Field=value …` | Adds the card to the board and sets its fields. It stamps Last update, an empty value clears a field, and it refuses a field outside the five. |
-| `colony tidy [--dry-run]` | Closes or moves to future-work each card with no update for 7 days, rotates the coordination and Needs issues at 200 comments, archives items Done for 7 days, turns on delete-branch-on-merge, and removes the clean worktrees of closed or merged cards and of ended batches, merges and retros, with the space freed. Prints the counts before and after. `--dry-run` prints the plan and the other worktrees' sizes and last commit dates, and changes nothing. Every `colony batch` ends with it. |
+| `colony tidy [--dry-run]` | Closes each finished card GitHub left open, as completed: one a merged pull request finishes on whatever branch it merged into, or whose Status is Done. Closes or moves to future-work each card with no update for 7 days, rotates the coordination and Needs issues at 200 comments, archives items Done for 7 days, turns on delete-branch-on-merge, and removes the clean worktrees of closed or merged cards and of ended batches, merges and retros, with the space freed. Prints the counts before and after. `--dry-run` prints the plan and the other worktrees' sizes and last commit dates, and changes nothing. Every `colony batch` ends with it. |
 | `colony handover --decisions … --open … --next …` | The lead posts its handover on the coordination issue, and prints the command for a fresh lead. |
 | `colony handover --read` | Prints this lead's last handover. |
 | `colony batch --name <n> --card N=BRANCH …` | Takes the cards through the gate loop to one PR, whose body says `Closes #N` for each card, then runs `colony tidy`. Each round checks only the areas and walks only the screens its change touched. After at most 3 rounds, each finding still open becomes a card the PR lists; failing checks stop it. A step whose account hits its rate limit runs again on the person's next account with room. `--from <branch>` builds on another branch than `origin/<base>`. |
@@ -158,6 +158,17 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 | `colony wake [--after-sleep] [--dry-run]` | Wakes the sessions on this computer whose usage limit has reset, and the idle helpers whose wait stopped. `--after-sleep` also continues, under their own ids, the background helpers that ran before the computer slept and no longer run. `--dry-run` says what it would do. |
 | `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. The StopFailure hook, or a wait, starts it by itself when a limit is noted; one runs per project on each computer. |
 | `colony open-later <n>` | The later waves of `colony helpers <n> --open`, which it starts in the background. You don't run it yourself. |
+
+## Housekeeping
+
+Cards that overlap or wait for others, the lead's queue, and the files a branch changed. See [cycle.md](cycle.md#cards-that-touch-the-same-files).
+
+| Command | What it does |
+| --- | --- |
+| `colony card overlaps` | Lists every pair of open cards that plan to touch the same paths, by their `Folders:` and `Files:` lines, and what each pair shares. A pair where one card waits for the other is left out. |
+| `colony card waits <n> <cards>` | Sets the cards card `n` waits for, such as `12,13`, on its `Waits for:` line; `""` clears it. The card starts once they land, on whatever branch they merged into. |
+| `colony card next [--start] [--helper <name>] [--lead <name>]` | The lead's queue: its To do cards whose wait is over, oldest first, then the ones that still wait and what for. `--start` hands the first ready card to a free helper, the one its title names when it is free, else the first free one, or `--helper`: it posts `start: this card` and sets Status and Helper. |
+| `colony card files [<n>] [--branch <branch>] [--base <branch>]` | A branch's changed files, from `git diff` against where it left `origin/<base>`: HEAD's by default, with the files not committed and the commits not pushed. With a card, it also names the changed files outside the card's `Folders:` and `Files:` lines. A helper's `done` line carries the same list. |
 
 ## Flags
 

@@ -1587,7 +1587,8 @@ def image(config: dict, args) -> int:
 
 def take(config: dict, args) -> int:
     """`colony take <n>`: a helper takes card n, which must sit in its lead's folders, and marks it In progress with
-    itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'."""
+    itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'. A
+    card whose `Waits for:` cards haven't landed is refused (cards.refuse_waiting)."""
     from colony import board, presence, wait
 
     me = os.environ.get(SESSION_ENV, "").lower()
@@ -1611,6 +1612,9 @@ def take(config: dict, args) -> int:
         if held:
             raise ColonyError(f"card #{args.card} touches {held[0][0]}, which {held[0][2]} holds: post `question:` to "
                               f"{lead}, and take no card in another lead's folders")
+    from colony import cards  # a card whose `Waits for:` cards haven't landed waits
+
+    cards.refuse_waiting(config, args.card, card.get("body") or "")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
     start = f"origin/{config['project']['base']}"

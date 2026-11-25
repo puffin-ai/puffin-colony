@@ -11,7 +11,9 @@ stale-card lines for the lead's wait.
   and `colony card new` prints that median beside a new card's prediction.
 - `colony retro` runs one agent on a batch's reports that writes each lesson as a rule line and a check, or a
   decision, into a pull request.
-- `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update.
+- `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update, and
+  the lead's queue check (cards.lead_lines): a card whose wait is over starts, and a lead with cards queued hears
+  which to hand out next.
 
 `needs` and `handover` check their issue's comment count before they post, and rotate a full one (tidy.keep_short).
 
@@ -32,6 +34,7 @@ import re
 import shlex
 import statistics
 import subprocess
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -947,6 +950,10 @@ def stale_lines(config: dict, now) -> list[str]:
     `now` is an aware datetime, or a Unix time. Each card is reported once until its Last update changes, through
     a state file in ~/.colony/<project>/. Call it at most every STALE_CHECK_MINUTES. It returns [] when the repo has
     no board, and raises cli.ColonyError when the board can't be read, which the caller prints and goes on.
+
+    The same read of the board serves the lead's queue (cards.lead_lines), whose lines follow the stale ones: a card
+    whose `Waits for:` cards landed starts for its free helper, and queued cards name the next one to hand out. A
+    queue check that fails says so on stderr, and the stale lines go out anyway.
     """
     now = now if isinstance(now, datetime) else datetime.fromtimestamp(now, timezone.utc)
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
@@ -958,7 +965,8 @@ def stale_lines(config: dict, now) -> list[str]:
     reported = wait.read_json(path, {})
     reported = reported if isinstance(reported, dict) else {}
     lines, stale = [], []
-    for item in board.items(found):
+    items = board.items(found)
+    for item in items:
         last = board.field_value(item, board.LAST_UPDATE)
         if board.squash(board.field_value(item, "Status")) != board.squash("In progress"):
             continue
@@ -980,6 +988,13 @@ def stale_lines(config: dict, now) -> list[str]:
             lines.append(f"#{number} stale: {helper or 'its helper'} shows no update since {last}; check its session")
     reported = {key: at for key, at in reported.items() if now - moment(at) <= KEEP_REPORTED}
     wait.write_json(path, reported)
+    from colony import cards
+
+    try:
+        lines += cards.lead_lines(config, items, now)
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        print(f"{cli.NAME} wait: the queue check failed, and runs again with the next stale check: {e}",
+              file=sys.stderr)
     return lines
 
 

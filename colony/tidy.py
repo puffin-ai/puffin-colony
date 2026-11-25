@@ -5,7 +5,9 @@
 - `colony card new "<title>" --body … --size S|M|L [--lead <name>]` makes a card, which is an issue only when its work
   starts this week. It refuses a body with no `Folders:` line, when the lead already has `[limits]
   open_cards_per_lead` open cards, counted by the board's Lead field, and when an open issue's title says the same
-  thing. It puts the card on the board as To do.
+  thing. It puts the card on the board as To do, names each open card that plans to touch the same paths
+  (cards.overlaps), and with `--waits-for` writes the card's `Waits for:` line. `colony card overlaps`, `waits`,
+  `next` and `files` live in cards.py.
 - `check_kind` is the rule for a card line: a helper sends its lead only done, question, blocked and urgent lines, and
   a lead sends its helpers start, answer and urgent lines. Lead-to-lead lines are free text. `colony post` applies it.
 - The coordination issue and each Needs issue rotate at `[limits] issue_comments` comments (`rotate`): the old one
@@ -13,8 +15,9 @@
   links back to it. `keep_short` makes the same check from the comment count before a post. In hack mode the board
   moves the same way at `[limits] board_comments` comments before a post (`keep_board`), and the fresh board is
   pinned in its place.
-- `colony tidy [--dry-run]` closes a card with no update in `[limits] stale_days`, or moves it to future-work when its
-  work never started; rotates the long issues; archives Done items after `[limits] archive_days`; turns on the repo's
+- `colony tidy [--dry-run]` closes each finished card GitHub left open, one a merged pull request finished on
+  whatever branch it merged into, or whose Status is Done (finished_steps); closes a card with no update in
+  `[limits] stale_days`, or moves it to future-work when its work never started; rotates the long issues; archives Done items after `[limits] archive_days`; turns on the repo's
   `delete_branch_on_merge`; and removes each finished worktree that is clean (`finished`), keeping and naming a dirty
   one, with the space it freed. `--dry-run` also lists the worktrees it leaves, with each one's size and last commit
   date. It prints the counts before and after. `colony batch` runs it at its end.
@@ -173,10 +176,10 @@ def duplicate(title: str, issues: list[dict]) -> dict | None:
     return None
 
 
-def open_issues(repo: str) -> list[dict]:
-    """The repo's open issues, each as {number, title}."""
-    return json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--json", "number,title", "--limit",
-                              "1000") or "[]")
+def open_issues(repo: str, bodies: bool = False) -> list[dict]:
+    """The repo's open issues, each as {number, title}, and its body too with `bodies`."""
+    return json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--json",
+                              "number,title,body" if bodies else "number,title", "--limit", "1000") or "[]")
 
 
 def is_tracking(title: str) -> bool:
@@ -198,10 +201,12 @@ class Duplicate(cli.ColonyError):
         self.number = number
 
 
-def make_card(config: dict, title: str, body: str, size: str, lead: str, capped: bool = True) -> int:
+def make_card(config: dict, title: str, body: str, size: str, lead: str, capped: bool = True,
+              issues: list[dict] | None = None) -> int:
     """Make a card, an issue on the board as To do with its Lead and Size, and return its number. It refuses in hack
     mode, at the lead's `[limits] open_cards_per_lead` when `capped`, and on a duplicate of an open issue (Duplicate).
-    `colony batch` makes the findings its last round leaves open uncapped, since they come from finished work."""
+    `colony batch` makes the findings its last round leaves open uncapped, since they come from finished work.
+    `issues` are the repo's open issues when the caller read them already."""
     if wait.hack(config):
         raise cli.ColonyError("hack mode has no cards: hand a task out with a `start:` line on the board")
     repo, lead = config["project"]["repo"], lead.lower()
@@ -209,7 +214,7 @@ def make_card(config: dict, title: str, body: str, size: str, lead: str, capped:
         raise cli.ColonyError("a card needs a title and a --body")
     limit = limits(config)["open_cards_per_lead"]
     on_board = bool(config.get("features", {}).get("board", True))
-    issues = open_issues(repo)
+    issues = open_issues(repo) if issues is None else issues
     found = board.need_board(config) if on_board else None
     count = len(lead_cards(board.items(found), lead)) if found else \
         len([issue for issue in issues if not is_tracking(issue.get("title", ""))])
@@ -229,15 +234,28 @@ def make_card(config: dict, title: str, body: str, size: str, lead: str, capped:
 
 
 def card_new(config: dict, args) -> int:
-    """`colony card new "<title>" --body … --size S|M|L [--lead <name>]`: make a card and put it on the board as To
-    do, with its Lead and Size. It refuses a body with no `Folders:` line, since `colony take` refuses such a card
-    later, at the lead's open-card limit, and on a duplicate of an open issue."""
+    """`colony card new "<title>" --body … --size S|M|L [--lead <name>] [--waits-for N,N]`: make a card and put it on
+    the board as To do, with its Lead and Size. It refuses a body with no `Folders:` line, since `colony take` refuses
+    such a card later, at the lead's open-card limit, and on a duplicate of an open issue. It names each open card
+    that plans to touch the same folders or files, and with --waits-for writes the card's `Waits for:` line, so the
+    card starts once those land."""
+    from colony import cards
+
     if not wait.hack(config) and not cli.card_folders(args.body or ""):  # hack mode refuses every card, in make_card
         raise cli.ColonyError("a card's --body names the folders it touches on a `Folders:` line, such as "
                               "`Folders: apps/web/, tests/`: `colony take` refuses a card without one")
     title, lead = " ".join(args.title.split()), (args.lead or wait.lead_name(config, args)).lower()
-    number = make_card(config, title, args.body, args.size, lead)
+    waits = getattr(args, "waits_for", None) or []
+    body = cards.with_waits(args.body, waits) if waits else args.body
+    issues = None if wait.hack(config) else open_issues(config["project"]["repo"], bodies=True)
+    number = make_card(config, title, body, args.size, lead, issues=issues)
     print(f"#{number} {title} (Status=To do, Lead={lead}, Size={args.size})")
+    if waits:
+        open_numbers = {issue.get("number") for issue in issues or []}
+        print(f"#{number} waits for {cards.refs(waits)}, and starts once {'it lands' if len(waits) == 1 else 'they land'}"
+              + "".join(f"; #{n} is not open, so it may have landed already" for n in waits if n not in open_numbers))
+    for line in cards.overlap_lines(number, cards.overlaps(body, issues or [], skip=number)):
+        print(line)
     from colony import cycle
     calibrated = cycle.calibration_line(config, args.size, cycle.prediction_of(args.body))
     if calibrated:
@@ -485,6 +503,7 @@ class Tally:
     comments: dict[str, int] = field(default_factory=dict)
     closed: int = 0
     moved: int = 0
+    finished: int = 0
     rotated: int = 0
     archived: int = 0
     removed: int = 0
@@ -503,14 +522,16 @@ class Step:
     effect: Callable[[Tally], None]
 
 
-def card_steps(config: dict, root: Path, items: list[dict], now: datetime, after: Tally) -> tuple[list[Step], set]:
+def card_steps(config: dict, root: Path, items: list[dict], now: datetime, after: Tally,
+               skip: set | frozenset = frozenset()) -> tuple[list[Step], set]:
     """Close each open card with no update in [limits] stale_days, or move it to future-work when it is still To do,
-    with one line on the card that says why; return the steps and the cards they close."""
+    with one line on the card that says why; return the steps and the cards they close. The cards in `skip` close as
+    finished instead (finished_steps)."""
     repo, days = config["project"]["repo"], limits(config)["stale_days"]
     steps, closing = [], set()
     for item in items:
         touched = board.last_touched(item)
-        if not board.is_open_card(item) or item.get("number") is None or touched is None:
+        if not board.is_open_card(item) or item.get("number") is None or touched is None or item["number"] in skip:
             continue
         if now - touched < timedelta(days=days):
             continue
@@ -533,9 +554,43 @@ def card_steps(config: dict, root: Path, items: list[dict], now: datetime, after
     return steps, closing
 
 
-def close_card(repo: str, number: int, why: str) -> None:
-    """Close a card as not planned, with one line that says why."""
-    wait.gh("issue", "close", str(number), "--repo", repo, "--reason", "not planned", "--comment", f"tidy: {why}")
+def close_card(repo: str, number: int, why: str, reason: str = "not planned") -> None:
+    """Close a card as not planned, or as completed, with one line that says why."""
+    wait.gh("issue", "close", str(number), "--repo", repo, "--reason", reason, "--comment", f"tidy: {why}")
+
+
+def finished_steps(config: dict, items: list[dict], pulls: Callable[[], list[dict]]) -> tuple[list[Step], set]:
+    """Close each card GitHub left open though its work is finished, as completed, with one line that says why: one
+    whose board Status is Done, or one a merged pull request finishes, on whatever branch it merged into
+    (cards.finishing). GitHub closes a card by itself only when a pull request that says `Closes #<n>` merges into
+    the repo's default branch, so the cards of an integration branch stayed open. Return the steps and the cards."""
+    from colony import cards
+
+    repo, steps, closing = config["project"]["repo"], [], set()
+    still = [item for item in items if item.get("number") is not None and item.get("state") in ("", "OPEN")]
+    if not still:
+        return [], set()
+    helpers = {item["number"]: cards.title_helper(item.get("title", "")) or board.field_value(item, "Helper").lower()
+               for item in still}
+    merged = cards.finishing(pulls(), helpers)
+    for item in still:
+        number, lead = item["number"], board.field_value(item, "Lead") or "(no lead)"
+        pull = merged.get(number)
+        if pull:
+            why = (f"closed: #{pull['number']} merged into {pull.get('baseRefName') or 'its base'}, which finishes it; "
+                   "GitHub closes a card by itself only when a pull request merges into the default branch")
+        elif board.squash(board.field_value(item, "Status")) == board.squash(board.DONE):
+            why = "closed: its Status on the board is Done"
+        else:
+            continue
+        closing.add(number)
+        # A Done card is off the lead's open count already, and with no board there is no count.
+        counted = board.is_open_card(item) and item.get("on_board", True)
+        steps.append(Step(f"#{number}: {why}",
+                          lambda number=number, why=why: close_card(repo, number, why, reason="completed"),
+                          lambda t, lead=lead, counted=counted: count_off(t, lead, "finished") if counted
+                          else setattr(t, "finished", t.finished + 1)))
+    return steps, closing
 
 
 def count_off(tally: Tally, lead: str, how: str) -> None:
@@ -608,18 +663,30 @@ def setting_steps(config: dict, before: Tally) -> list[Step]:
                  lambda t: setattr(t, "setting", "turned on"))]
 
 
-def pull_states(repo: str) -> dict[str, set[str]]:
-    """Each branch's pull request states, OPEN, CLOSED or MERGED, from one `gh pr list`; {} when gh can't read them."""
+def pull_requests(repo: str, bodies: bool = False) -> list[dict]:
+    """The repo's newest pull requests, open, closed and merged, from one `gh pr list`, each with its head branch and
+    state, and with `bodies` its number, base branch and body too; [] when gh can't read them."""
+    fields = "headRefName,state" + (",number,baseRefName,body,mergedAt" if bodies else "")
     try:
         listed = json.loads(wait.gh("pr", "list", "--repo", repo, "--state", "all", "--limit", "1000", "--json",
-                                    "headRefName,state") or "[]")
+                                    fields) or "[]")
     except (cli.ColonyError, ValueError):
-        return {}
+        return []
+    return [pull for pull in listed if isinstance(pull, dict)] if isinstance(listed, list) else []
+
+
+def states_of(pulls: list[dict]) -> dict[str, set[str]]:
+    """Each branch's pull request states, OPEN, CLOSED or MERGED."""
     states: dict[str, set[str]] = {}
-    for pull in listed if isinstance(listed, list) else []:
-        if isinstance(pull, dict) and pull.get("headRefName"):
+    for pull in pulls:
+        if pull.get("headRefName"):
             states.setdefault(pull["headRefName"], set()).add(str(pull.get("state", "")).upper())
     return states
+
+
+def pull_states(repo: str) -> dict[str, set[str]]:
+    """Each branch's pull request states, OPEN, CLOSED or MERGED, from one `gh pr list`; {} when gh can't read them."""
+    return states_of(pull_requests(repo))
 
 
 def ended(states: set[str]) -> bool:
@@ -733,16 +800,17 @@ def last_commit(path: str) -> str:
     return run.stdout.strip() if not run.returncode and run.stdout.strip() else "no commit"
 
 
-def worktree_steps(config: dict, root: Path, issues: list[dict], closing: set, before: Tally) -> list[Step]:
+def worktree_steps(config: dict, root: Path, issues: list[dict], closing: set, before: Tally,
+                   pull_list: Callable[[], list[dict]] | None = None) -> list[Step]:
     """Remove each finished worktree (finished) when it is clean, and keep and name a dirty or locked one; each step
     notes the space it frees. The worktrees it leaves go in before.others, for the dry run's list. The main checkout is
-    never removed."""
+    never removed. `pull_list` reads the pull requests once for the whole tidy, as plan shares it."""
     repo, steps, cache, leaving = config["project"]["repo"], [], {}, []
     open_numbers = {issue["number"] for issue in issues}
 
     def pulls() -> dict:
         if "states" not in cache:
-            cache["states"] = pull_states(repo)
+            cache["states"] = states_of(pull_list()) if pull_list else pull_states(repo)
         return cache["states"]
 
     for tree in worktrees(root):
@@ -787,18 +855,38 @@ def plan(config: dict, root: Path, now: datetime) -> tuple[Tally, list[Step]]:
     """Read everything tidy needs, changing nothing, and return the counts before and the steps."""
     before, steps, closing = Tally(), [], set()
     steps += setting_steps(config, before)
-    issues = open_issues(config["project"]["repo"])
+    repo = config["project"]["repo"]
+    issues = open_issues(repo)
     found = board.find_board(config) if config.get("features", {}).get("board", True) else None
     items = board.items(found) if found else []
     for item in items:
         if board.is_open_card(item):
             lead = board.field_value(item, "Lead") or "(no lead)"
             before.cards[lead] = before.cards.get(lead, 0) + 1
+    cache: dict[str, list[dict]] = {}
+    if not found and not wait.hack(config):  # with no board, an open issue titled `<helper>: <what>` is a card
+        from colony import cards
+
+        candidates = [{"number": issue["number"], "title": issue.get("title", ""), "state": "OPEN", "fields": {},
+                       "on_board": False} for issue in issues
+                      if cards.title_helper(issue.get("title", "")) and not is_tracking(issue.get("title", ""))]
+    else:
+        candidates = items
+    with_bodies = any(item.get("state") in ("", "OPEN") for item in candidates)
+
+    def pulls() -> list[dict]:  # one `gh pr list` for the whole tidy, with bodies when a card is open
+        if "pulls" not in cache:
+            cache["pulls"] = pull_requests(repo, bodies=with_bodies)
+        return cache["pulls"]
+
+    done, closing = finished_steps(config, candidates, pulls) if not wait.hack(config) else ([], set())
+    steps += done
     if found:
-        cards, closing = card_steps(config, root, items, now, before)
-        steps += cards + archive_steps(config, found, items, now)
+        stale, closed = card_steps(config, root, items, now, before, skip=closing)
+        closing |= closed
+        steps += stale + archive_steps(config, found, items, now)
     steps += rotation_steps(config, issues, before)
-    steps += worktree_steps(config, root, issues, closing, before)
+    steps += worktree_steps(config, root, issues, closing, before, pulls)
     return before, steps
 
 
@@ -807,6 +895,7 @@ def report(before: Tally, after: Tally, dry: bool) -> list[str]:
     leads = sorted(set(before.cards) | set(after.cards))
     lines = ["open cards per lead: " + (", ".join(f"{lead} {before.cards.get(lead, 0)} → {after.cards.get(lead, 0)}"
                                                   for lead in leads) or "none"),
+             f"finished cards closed: {after.finished}",
              f"stale cards: {after.closed} closed, {after.moved} moved to future-work",
              "comments: " + (", ".join(f"{label} {count} → {after.comments.get(label, count)}"
                                        for label, count in before.comments.items()) or "no coordination or Needs issue"),
@@ -889,5 +978,10 @@ def add_commands(sub) -> None:
     q.add_argument("--lead", help="the lead whose card it is, by its claimed name such as ana-main-lead, "
                                    "you by default")
     q.add_argument("--person", help="whose lead you are, when colony.toml names several people")
+    q.add_argument("--waits-for", type=wait.card_numbers, metavar="N,N",
+                   help="the cards this one waits for, such as 12,13: it starts once they land")
     q.set_defaults(run=card_new)
+    from colony import cards
+
+    cards.add_card_commands(card_sub)
     relax_batch(sub)

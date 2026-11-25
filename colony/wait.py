@@ -1142,7 +1142,8 @@ def post(config: dict, args) -> int:
 
     A line has a kind (tidy.check_kind): a helper sends done, question:, blocked: or urgent:, and the lead sends its
     helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text. A helper's `done`
-    also moves its card to In review on the board (in_review)."""
+    also moves its card to In review on the board (in_review), and carries the branch's changed files, from its diff
+    against the base (cards.done_files)."""
     from colony import tidy, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
@@ -1178,7 +1179,12 @@ def post(config: dict, args) -> int:
     if getattr(args, "dry_run", False):
         return dry_post(lines, f"#{board_number(config) if on_board else card}")
     starts = me == cli.LEAD and not to.startswith("@") and any(START.match(sentence) for sentence in said)
-    body = messages.body(config, args, "\n".join(lines), sender, starts=starts)
+    text = "\n".join(lines)
+    if me != cli.LEAD and card is not None and not on_board and any(DONE.match(sentence) for sentence in said):
+        from colony import cards  # a helper's done line carries its branch's changed files, read from its diff
+
+        text = cards.done_files(config, card, text)
+    body = messages.body(config, args, text, sender, starts=starts)
     # One comment: every line goes out, or none does.
     number = transport.send(config, to, body, card=None if on_board else card)
     for line in lines:
