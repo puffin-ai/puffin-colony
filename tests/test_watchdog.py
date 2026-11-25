@@ -1,14 +1,16 @@
 """Tests for the watchdog, which watches the team when every session has stopped, and for the status page it keeps."""
+import os
 import plistlib
+import subprocess
 import sys
 import time
 import types
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
-import colony
-from colony import capacity, cli, guards, portable, presence, progress, statuspage, wait, watch, watchdog
+from colony import capacity, cli, guards, portable, presence, progress, recover, statuspage, wait, watch, watchdog
 
 CONFIG = {"project": {"name": "demo", "repo": "acme/demo"}, "accounts": {}, "people": {"logins": ["ana"]}}
 S = watch.Settings(page=False)
@@ -63,24 +65,44 @@ def test_a_stopped_wait_is_started_again_once_unless_its_session_said_it_is_done
     assert watchdog.tick(CONFIG, S, held) == [] and len(woken) == 1  # once per stretch
 
 
-def test_a_background_task_stopped_from_outside_is_named_to_its_session(woken, posted, monkeypatch):
-    stopped = [{"pid": 7, "command": "batch", "label": "colony batch --name b1", "session": "builder-3",
-                "claude": "id-builder-3", "path": "/x/7.json"},
-               {"pid": 8, "command": "wait", "label": "colony wait", "session": "builder-4", "claude": "id-builder-4"}]
-    forgotten = []
-    fake = types.SimpleNamespace(stopped_tasks=lambda config: stopped, restart_line=lambda task: f"start {task['label']}",
-                                 forget=forgotten.extend)
-    monkeypatch.setitem(sys.modules, "colony.recover", fake)
-    monkeypatch.setattr(colony, "recover", fake, raising=False)
+def dead_pid() -> int:
+    """The id of a process that has ended."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def task_file(pid: int, command: str, session: str, label: str) -> Path:
+    """A background task's file as recover.tracked writes it while a colony command runs."""
+    path = recover.folder("demo", recover.TASKS) / f"{pid}.json"
+    wait.write_json(path, {"pid": pid, "command": command, "label": label, "session": session,
+                           "claude": f"id-{session}", "started": time.time() - 600})
+    return path
+
+
+def test_a_background_task_stopped_from_outside_is_named_to_its_session(woken, posted):
+    """The safety and watch join: the watchdog reads the task files recover keeps (recover.stopped_tasks), tells the
+    idle session the line its own Stop hook would give it (recover.restart_line), and drops the file (recover.forget),
+    so that hook doesn't tell it again."""
+    batch = task_file(dead_pid(), "batch", "builder-3", "colony batch --name b1")
+    stopped_wait = task_file(dead_pid(), "wait", "builder-4", "colony wait")
+    running = task_file(os.getpid(), "fast-check", "builder-2", "colony fast-check")
     lines = watchdog.tick(CONFIG, S, {})
-    assert woken == [("builder-3", "start colony batch --name b1")]  # a stopped wait is the pulse's to find
-    assert forgotten == [stopped[0]] and lines[0].startswith("builder-3: its background colony batch --name b1")
+    [(name, prompt)] = woken  # a stopped wait is the pulse's to find, and a running task is no one's
+    assert name == "builder-3" and prompt.startswith("Your background `colony batch --name b1`, started ")
+    assert prompt.endswith("Run `colony status --name b1` to see where it stopped, then start it again.")
+    assert lines[0].startswith("builder-3: its background colony batch --name b1 had stopped; started again")
+    assert not batch.exists() and stopped_wait.exists() and running.exists()
 
 
-def test_without_the_recover_module_there_are_no_stopped_tasks(home, monkeypatch):
-    monkeypatch.setitem(sys.modules, "colony.recover", None)
-    monkeypatch.delattr(colony, "recover", raising=False)
+def test_a_failure_reading_the_stopped_tasks_never_stops_the_watchdog(woken, posted, monkeypatch, capsys):
+    def unreadable(config):
+        raise OSError("the tasks folder can't be read")
+
+    monkeypatch.setattr(recover, "stopped_tasks", unreadable)
     assert watchdog.stopped_tasks(CONFIG) == []
+    assert watchdog.tick(CONFIG, S, {}) == [] and woken == []
+    assert "watchdog: the stopped tasks were not read: the tasks folder can't be read" in capsys.readouterr().err
 
 
 def test_a_lead_idle_too_long_has_its_person_mentioned_once(woken, posted):

@@ -74,7 +74,7 @@ The watchdog is one process per project on each computer. It keeps watching when
 Each pass, every `every_minutes`, it:
 
 1. starts again a wait that stopped: a session on this computer whose wait stopped while the session sits idle is woken with a prompt to start its wait again, unless it said it is done or waits for its usage limit;
-2. tells an idle session about a background task of its that something stopped from outside, such as the agent tool or a crash, with what to start again;
+2. tells an idle session about a background task of its that something stopped from outside, such as the agent tool or a crash, with what to start again. It reads the task files recovery keeps, and says what the session's own Stop hook would say at the end of its next turn, so the session hears it once ([safety.md](safety.md#recovery));
 3. when no lead's wait runs on this computer, does that wait's part: wakes the sessions whose usage limit reset, and after a sleep starts again what stopped ([capacity.md](capacity.md#sleep-and-wake));
 4. mentions a lead's person on GitHub, so their phone hears it, when the lead has sat idle with no helper busy, on any computer, and no reason given, for `escalate_minutes` (60) past `idle_minutes`;
 5. keeps the status page current.

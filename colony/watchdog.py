@@ -11,8 +11,8 @@ Each pass, every `[watch] every_minutes`, it:
 1. starts again the waits that stopped: a session on this computer whose pulse (watch.write_pulse) went stale while
    the session sits idle is woken with a prompt to start its wait again (capacity.wake), unless it said it is done or
    waits for its usage limit;
-2. names each background task something stopped from outside (recover.stopped_tasks, from the safety workstream's
-   module when it is there) to its idle session, with what to start again;
+2. names each background task something stopped from outside (recover.stopped_tasks, the task files recover.tracked
+   keeps) to its idle session, with the line its own Stop hook would give it (recover.restart_line);
 3. when no lead's wait runs on this computer, does that wait's part: wakes the sessions whose usage limit reset
    (capacity.wake_due), and after a sleep starts again what stopped (capacity.restart);
 4. mentions a lead's person on GitHub, whose phone hears it, when the lead has sat idle, with no helper busy and no
@@ -42,8 +42,6 @@ from colony import cli, portable, wait
 SLEEP = time.sleep  # tests pass a fake
 RUN = subprocess.run  # what install and uninstall run launchctl and systemctl with; tests pass a fake
 ENSURE_EVERY = 5 * 60  # the lead's wait tries to start a watchdog at most this often
-TASK_PROMPT = ("Your background `{label}` stopped without finishing: something ended its process, such as the agent "
-               "tool, a kill or a crash. Start it again if it should still run.")
 
 
 def path(project: str, name: str = "watchdog") -> Path:
@@ -127,45 +125,32 @@ def ensure(config: dict, s) -> None:
 
 
 def stopped_tasks(config: dict) -> list[dict]:
-    """The background tasks something stopped from outside, from the safety workstream's recover module
-    (recover.stopped_tasks), or [] while that module is not part of this Colony."""
+    """The background tasks something stopped from outside (recover.stopped_tasks): each task file on this computer,
+    ~/.colony/<project>/tasks/<pid>.json, whose process is gone. A failure to read them never stops the watchdog: it
+    goes to stderr, and the pass finds none."""
+    from colony import recover
+
     try:
-        from colony import recover
-    except ImportError:
-        return []
-    find = getattr(recover, "stopped_tasks", None)
-    if find is None:
-        return []
-    try:
-        return [task for task in find(config) if isinstance(task, dict)]
-    except Exception as e:  # the other module's failure never stops the watchdog
+        return recover.stopped_tasks(config)
+    except Exception as e:  # recover's failure never stops the watchdog
         print(f"{cli.NAME} watchdog: the stopped tasks were not read: {e}", file=sys.stderr)
         return []
 
 
 def task_prompt(task: dict) -> str:
-    """What a session is told about a background task of its that stopped: recover.restart_line when it is there."""
-    try:
-        from colony import recover
+    """What a session is told about a background task of its that stopped: the line its own Stop hook would give it
+    (recover.restart_line)."""
+    from colony import recover
 
-        line = getattr(recover, "restart_line", None)
-        if line is not None:
-            return str(line(task))
-    except ImportError:
-        pass
-    return TASK_PROMPT.format(label=task.get("label") or f"{cli.NAME} {task.get('command', '')}".strip())
+    return recover.restart_line(task)
 
 
 def forget_tasks(tasks: list[dict]) -> None:
-    """Drop tasks the watchdog told their sessions about, so the Stop hook doesn't tell them again."""
-    try:
-        from colony import recover
+    """Drop the task files of tasks the watchdog told their sessions about (recover.forget), so the Stop hook doesn't
+    tell them again."""
+    from colony import recover
 
-        forget = getattr(recover, "forget", None)
-    except ImportError:
-        forget = None
-    if forget is not None:
-        forget(tasks)
+    recover.forget(tasks)
 
 
 def acted(how: str) -> bool:
