@@ -261,6 +261,77 @@ def test_with_several_accounts_out_of_room_helpers_wait_for_the_soonest_reset_ne
     assert "team and spare are out of room until their windows reset" in why
 
 
+@pytest.fixture
+def lead_on_main(host, monkeypatch):
+    """Three accounts with room, listed main first, and a live lead, ana-main-lead, on main."""
+    for name in ("main", "team", "spare"):
+        reading(host.parent / name, five=10, week=10)
+    monkeypatch.setattr(presence, "everyone",
+                        lambda config: ([presence.Status("ana-main-lead", "lead", account="main")], [], ""))
+    monkeypatch.setattr(presence, "local", lambda config, now=None: [presence.Status("ana-main-lead", "lead",
+                                                                                      account="main")])
+    monkeypatch.setattr(cli, "running_sessions", lambda config: [])
+    return '[pool]\norder = "listed"\n'
+
+
+def test_researchers_spec_agents_and_testers_keep_off_a_leads_own_account(lead_on_main, capsys):
+    """Task 81's gap: a lead's researcher, spec agent or tester took the plain pick, main, the lead's own account.
+    It now opens as any helper does (capacity.place), and on the lead's account only under the rule finding 7 set."""
+    load(lead_on_main)
+    assert cli.main(["research", "Which queue fits?", "--dry-run", "--person", "ana"]) == 0
+    assert "dry run: demo-researcher on account team" in capsys.readouterr().out
+    load(lead_on_main + "share_lead_accounts = true\n")
+    assert cli.main(["research", "Which queue fits?", "--dry-run", "--person", "ana"]) == 0
+    assert "dry run: demo-researcher on account main" in capsys.readouterr().out
+
+
+def test_the_helpers_question_names_the_account_a_helper_would_open_on(lead_on_main, capsys):
+    """Task 81's gap: `colony helpers <n>` without --open named the plain pick's account, the lead's own."""
+    config = load(lead_on_main)
+    args = argparse.Namespace(count=2, open=False, paste=False, person="ana", account=None, dry_run=False)
+    assert cli.helpers(config, args) == 0
+    out = capsys.readouterr().out
+    assert "Open them myself on team, or you paste?" in out and "on main" not in out
+
+
+def test_a_batchs_agents_keep_off_a_leads_own_account_and_switch_only_to_others(lead_on_main, monkeypatch):
+    """Task 81's gap: a batch's reviewer, fixer and walker ran on the plain pick, and a rate-limited one moved to any
+    account with room, the lead's own among them. Both now skip a live lead's account, under the same rule."""
+    from colony import batch
+
+    config = load(lead_on_main)
+    args = argparse.Namespace(person="ana", account=None)
+    assert batch._account(config, args)[0] == "team"
+    assert capacity.agent_account(load(lead_on_main + "share_lead_accounts = true\n"), args)[0] == "main"
+    alone = load(lead_on_main)
+    alone["people"]["ana"]["accounts"] = ["main"]
+    assert capacity.agent_account(alone, args)[0] == "main"  # the person's only account
+    b = batch.Batch(config, "b1", {}, "main", Path.cwd(), ("team", str(Path.cwd())), person="ana")
+    monkeypatch.setattr(batch.Batch, "save", lambda self: None)
+    batch.switch_account(b, "team", "review")
+    assert b.account[0] == "spare"  # main is the lead's own
+    with pytest.raises(batch.Stop, match="no other account of ana's has room"):
+        batch.switch_account(b, "spare", "review")
+
+
+def test_joining_in_session_on_a_leads_own_account_warns_in_one_line(lead_on_main, monkeypatch, capsys):
+    """Task 81's gap: `colony join --in-session` makes the session a helper on whatever account it runs on, and a
+    session can't change its account; on a live lead's own account it now says so, once, in plain words."""
+    from colony import boot
+
+    config = load(lead_on_main)
+    monkeypatch.setattr(cli, "tell_lead_joined", lambda config, lead, name: None)
+    monkeypatch.setattr(boot, "helper_brief", lambda config, lead="", fetch=False: "")
+    monkeypatch.setattr(presence, "mine", lambda *args: (_ for _ in ()).throw(cli.ColonyError("offline")))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(Path(config["accounts"]["main"]["config_dir"]).expanduser()))
+    args = argparse.Namespace(lead=None, person="ana", in_session=True, dry_run=False, account=None)
+    assert cli.join(config, args) == 0
+    out = capsys.readouterr().out
+    assert out.count("Warning: this session runs on account main, ana-main-lead's own") == 1
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(Path(config["accounts"]["team"]["config_dir"]).expanduser()))
+    assert cli.join(config, args) == 0 and "Warning" not in capsys.readouterr().out
+
+
 def test_colony_capacity_marks_the_account_kept_for_a_lead(host, monkeypatch, capsys):
     config = load()
     reading(host.parent / "main", five=10, week=10)

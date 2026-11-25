@@ -773,12 +773,15 @@ def check_settings(config: dict) -> None:
 
 
 def _account(config: dict, args) -> tuple[str, str]:
-    """Pick the agents' account as (name, config_dir), as cli.choose_account does: --account, else the person's
-    accounts with room, the soonest weekly reset first, then their last-resort accounts.
+    """Pick the agents' account as (name, config_dir) (capacity.agent_account): --account, else the person's
+    accounts with room, the soonest weekly reset first, then their last-resort accounts, never a live lead's own
+    unless it is the person's only account or [pool] share_lead_accounts allows it.
 
     The person is --person, else the session's COLONY_PERSON, else cli.default_person.
     """
-    return cli.choose_account(config, args)
+    from colony import capacity
+
+    return capacity.agent_account(config, args)[:2]
 
 
 # Prompts
@@ -910,7 +913,10 @@ def switch_account(b: Batch, name: str, step: str) -> None:
         b.limited.add(name)
         if b.account[0] != name:  # another step moved the batch already
             return
-        found = cli.pick_with_room(b.config, b.person, skip=b.limited)
+        from colony import capacity  # never onto a live lead's own account, by the rule placement follows
+
+        found = cli.pick_with_room(b.config, b.person, skip=b.limited | set(capacity.kept_for_leads(b.config,
+                                                                                                   b.person)))
         if found is None:
             raise Stop(f"{step} hit the rate limit on the account {name}, and no other account of {b.person}'s has "
                        f"room: run it again once {name} resets, or add an account")

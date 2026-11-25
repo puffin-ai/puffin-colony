@@ -400,6 +400,40 @@ def lead_accounts(config: dict, alive: list | None = None) -> dict[str, list[str
     return found
 
 
+def kept_for_leads(config: dict, person: str, alive: list | None = None) -> dict[str, list[str]]:
+    """The live leads' own accounts a new session keeps off, by the rule place() follows: none with [pool]
+    share_lead_accounts, none when the person has one account, else each live lead's (lead_accounts)."""
+    order, last = cli.person_accounts(config, person)
+    if policy(config).share_lead_accounts or len(dict.fromkeys(order + last)) <= 1:
+        return {}
+    return lead_accounts(config, alive)
+
+
+def agent_account(config: dict, args) -> tuple[str, str, str]:
+    """The account a headless agent Colony runs for its own work, such as a batch's reviewer, fixer or walker, runs
+    on, as (name, config_dir, why): --account when given, else the person's pick with room (cli.pick_with_room),
+    leaving out a live lead's own account by place()'s rule (kept_for_leads, from this computer's heartbeats and this
+    session's own). An agent counts toward no helper's cap. When none of the rest has room, the first of them, as
+    cli.pick names one; when every account left is a lead's own, a refusal that says how to allow it."""
+    if getattr(args, "account", None):
+        return cli.choose_account_why(config, args)
+    person = cli.person_of(config, args)
+    kept = kept_for_leads(config, person)
+    found = cli.pick_with_room(config, person, skip=kept)
+    if found:
+        return found
+    order, last = cli.person_accounts(config, person)
+    rest = [name for name in dict.fromkeys(order + last) if name not in policy(config).reserve and name not in kept]
+    if rest:
+        return (rest[0], config["accounts"][rest[0]]["config_dir"],
+                f"every account no live lead runs on is out of room, so {rest[0]}, the first")
+    if kept:
+        owners = "; ".join(f"{name} is {' and '.join(leads)}'s own" for name, leads in kept.items())
+        raise cli.ColonyError(f"every account of {person}'s with room is a live lead's own ({owners}): wait for room "
+                              "elsewhere, name one with --account, or set [pool] share_lead_accounts = true")
+    return cli.pick(config, person)
+
+
 def lead_cap(config: dict, name: str, pool: Policy) -> int:
     """The most helpers a lead's own account takes when they share it: one fewer than its cap, at least one, so the
     lead keeps room."""

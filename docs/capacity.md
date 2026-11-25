@@ -44,6 +44,8 @@ When that starts, Colony prints one plain warning, such as `Warning: account mai
 
 `--account <name>` still opens where you say. `[pool] share_lead_accounts = true` treats a lead's account as any other, with its full cap, also while you have others. To keep helpers off an account always, the lead's or any other, put it in `[pool] reserve`, which stays strict. `colony capacity` marks each account kept for a lead.
 
+The same rule holds for every session Colony starts beside a lead: a researcher, spec agent or tester opens as a helper does, and `colony helpers <n>` asks you about the account its first helper would open on. A batch's reviewers, fixers and walkers keep off a live lead's own account too, from the leads this computer knows, and a rate-limited one moves only to another account. `colony join --in-session` makes the session that runs it a helper on the account it already runs on, which no session can change: on a live lead's own account, it says so in one line.
+
 ## Fresh readings
 
 A usage reading is a copy saved when it was fetched, and an old copy looks just like a new one. So Colony fetches a live reading before it places a session, and every room line says how old its reading is, such as `main: 5h 40% (resets 23:50 UTC), week 63% (resets Sat 10:00 UTC), read 3 min ago`. That line shows in `colony who`, in every status comment, in the briefing, in `colony capacity`, in `colony watch` and on the status page.

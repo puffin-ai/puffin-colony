@@ -1310,14 +1310,26 @@ def helpers(config: dict, args) -> int:
     this computer: cmux windows when the lead runs in a terminal or cmux, else background sessions, with `colony view`
     to see them in cmux. `--paste` prints one `colony join <lead>` per helper, for any computer. Either answer becomes
     the next default, in .colony/local.toml. `--open` opens them in waves, each on an account under its cap of busy
-    helpers, while this computer has room (capacity.open_helpers)."""
+    helpers, while this computer has room (capacity.open_helpers). The question names the account the first would
+    open on now (capacity.place), never a live lead's own unless the rule for it allows."""
     from colony import wait
 
     lead = wait.lead_name(config, args)
     last = read_local().get("helpers_answer", OPEN)
     answer = OPEN if args.open else PASTE if args.paste else None
     if answer is None:
-        account, _, why = choose_account_why(config, args)
+        from colony import capacity, presence  # the account a helper would open on now, as `--open` places it
+
+        if getattr(args, "account", None):
+            account, _, why = choose_account_why(config, args)
+        else:
+            try:
+                alive = presence.everyone(config)[0]
+            except (ColonyError, OSError, ValueError, KeyError):
+                alive = []
+            found, refused = capacity.place(config, args, capacity.busy(config, alive),
+                                            capacity.lead_accounts(config, alive))
+            account, why = (found[0], found[2]) if found else ("no account now", refused)
         first, second = ("Open them", "I'll paste") if last == OPEN else ("I'll paste", "Open them")
         print(f"Ask the person, with [{first}] as the default: \"I need {args.count} helper"
               f"{'s' if args.count != 1 else ''}. Open them myself on {account}, or you paste?\" "
@@ -1429,8 +1441,9 @@ def open_brief(config: dict, args, role: str, **values: str) -> int:
                             **values)
     except KeyError as e:
         raise ColonyError(f"{source}: {e.args[0]}") from None
-    from colony import boot  # a lead's researcher, spec agent or tester is its helper, and starts with its orders
+    from colony import boot, capacity  # a lead's researcher, spec agent or tester is its helper: placed as one,
 
+    capacity.choose_helper_account(config, args)  # off a live lead's own account, and started with its orders
     return launch(config, args, role, role, with_orders(prompt, boot.helper_brief(config)))
 
 
@@ -1545,7 +1558,15 @@ def join(config: dict, args) -> int:
             print(f"{NAME}: the status comment waits for the first `{NAME} wait`: {e}", file=sys.stderr)
         how = identity_note((SESSION_ENV, name), (wait.LEAD_ENV, args.lead_name), (PERSON_ENV, person_of(config, args)))
         tell_lead_joined(config, args.lead_name, name)
-        print(f"This session is {name}, a helper of {args.lead_name}, on account {current_account(config)}.")
+        account = current_account(config)
+        print(f"This session is {name}, a helper of {args.lead_name}, on account {account}.")
+        from colony import capacity  # a session can't change its account: say so on a live lead's own
+
+        kept = capacity.kept_for_leads(config, person_of(config, args), alive)
+        if account in kept:
+            print(f"Warning: this session runs on account {account}, {' and '.join(kept[account])}'s own, and a "
+                  f"session can't change its account, so it takes from the lead's room. To place a helper on another "
+                  f"account, open one with `{NAME} open <name>` instead.")
         print(rename_line(name))
         print(f"Next: {how}; start `{NAME} wait` in the background now, which tells "
               f"{args.lead_name} you are here, load the colony-builder skill, and read {DIR}/playbook.md, "
