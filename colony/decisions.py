@@ -567,9 +567,11 @@ def approvals_path(config: dict) -> Path:
     return wait.state_path(config["project"]["name"], "approvals")
 
 
-def live_marker() -> Path:
-    """A file that exists while any approval is live on this computer, so the tool hook costs nothing otherwise."""
-    return Path.home() / f".{cli.NAME}" / "approvals.live"
+def live_marker(config: dict) -> Path:
+    """A file that exists while one of this project's approvals is live, ~/.colony/<project>/approvals.live, so the
+    tool hook costs nothing while no project has one (boot.APPROVALS_LIVE). Each project keeps its own: one with no
+    live approval never touches another's."""
+    return approvals_path(config).with_name("approvals.live")
 
 
 def read_approvals(config: dict) -> list[dict]:
@@ -584,11 +586,11 @@ def write_approvals(config: dict, items: list[dict]) -> None:
     with os.fdopen(os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
         json.dump(items, handle, ensure_ascii=False)
     os.replace(part, path)
-    mark(any(is_live(item) for item in items))
+    mark(config, any(is_live(item) for item in items))
 
 
-def mark(live: bool) -> None:
-    marker = live_marker()
+def mark(config: dict, live: bool) -> None:
+    marker = live_marker(config)
     if live:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
@@ -740,7 +742,7 @@ def tool_decision(config: dict, session: str, payload: dict) -> dict | None:
         return None
     items = read_approvals(config)
     if not any(is_live(item) for item in items):
-        mark(False)
+        mark(config, False)
         return None
     for item in items:
         if not applies(item, session, person, lead):

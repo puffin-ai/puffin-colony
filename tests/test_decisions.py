@@ -254,7 +254,7 @@ def test_the_person_approves_at_their_own_terminal_and_their_sessions_here_honor
     assert code == 0 and "This lets every lead and helper of ana's here run, without a permission question, for 4 " \
                          "hours:\n  Bash(make migrate-staging:*)" in out and "Approved A1: Bash(make migrate-staging:*)" \
                                                                        ", until " in out
-    assert decisions.live_marker().exists()
+    assert decisions.live_marker(CONFIG).exists()
     item = decisions.read_approvals(CONFIG)[0]
     assert item["person"] == "ana" and item["until"] <= time.time() + 4 * 3600
     for session in ("lead", "builder-1"):
@@ -303,8 +303,24 @@ def test_an_approval_for_one_session_expires_and_can_be_revoked(terminal, capsys
     assert decisions.tool_decision(CONFIG, "builder-3", fetch) is None
     later = time.time() + 2 * 3600
     monkeypatch.setattr(time, "time", lambda: later)
-    assert decisions.tool_decision(CONFIG, "builder-2", fetch) is None and not decisions.live_marker().exists()
+    assert decisions.tool_decision(CONFIG, "builder-2", fetch) is None and not decisions.live_marker(CONFIG).exists()
     monkeypatch.undo()
+
+
+def test_a_project_with_no_live_approval_leaves_another_projects_approvals_working(lead, monkeypatch):
+    """Regression: one marker for the whole computer told the tool hook an approval was live, and any project with
+    none deleted it, so a live approval in another project stopped working. Each project keeps its own marker."""
+    alpha, beta = {**CONFIG, "project": {**CONFIG["project"], "name": "alpha"}}, \
+        {**CONFIG, "project": {**CONFIG["project"], "name": "beta"}}
+    decisions.write_approvals(alpha, [{"id": "A1", "rules": ["Bash(npm test:*)"], "person": "ana",
+                                       "until": time.time() + 600}])
+    test = {"tool_name": "Bash", "tool_input": {"command": "npm test"}}
+    as_session(monkeypatch, "builder-2")
+    assert decisions.tool_decision(alpha, "builder-2", test) is not None
+    assert decisions.tool_decision(beta, "builder-2", test) is None  # beta has none, and leaves alpha's marker be
+    decisions.write_approvals(beta, [])
+    assert decisions.live_marker(alpha).exists() and not decisions.live_marker(beta).exists()
+    assert decisions.tool_decision(alpha, "builder-2", test) is not None
 
 
 def test_a_revoked_approval_lets_nothing_through_and_only_the_person_revokes(terminal, capsys, monkeypatch):

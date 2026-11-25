@@ -285,7 +285,7 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `~/.colony/<project>/summary.json`, `<session>-seen.json` | The project summary, and the commit each session last started on. See [boot.md](boot.md) |
 | `~/.colony/<project>/<session>-handover.json` | Each session's automatic handover, readable by you alone |
 | `~/.colony/<project>/plan-<lead>.json`, `<lead>-helper-orders.json` | A lead's plan for its request, and the orders it passes its helpers |
-| `~/.colony/<project>/decisions.json`, `spend.json`, `approvals.json` | The decisions asked, answered and taken alone, today's spending, and what you approved for the helpers. See [decisions.md](decisions.md) |
+| `~/.colony/<project>/decisions.json`, `spend.json`, `approvals.json`, `approvals.live` | The decisions asked, answered and taken alone, today's spending, what you approved for the helpers, and a marker that exists while one of this project's approvals is live, so the approvals hook runs only then. See [decisions.md](decisions.md) |
 | `<user config folder>/modes/<name>.toml`, `.colony/modes/<name>.toml` | Your own modes, and the team's |
 | `~/.colony/<project>/<session>-intent.json`, `<session>-pulse.json` | Each session's intent and last report, and the pulse its wait writes every minute: when its transcript last moved, the call it waits on, and its helper agents. See [watch.md](watch.md) |
 | `~/.colony/<project>/watchdog.json`, `watchdog.log` | The watchdog's heartbeat and log |

@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook tool' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; [ -f \"$HOME/.colony/approvals.live\" ] || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook tool; exit 0",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook tool' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; set -- \"$HOME/.colony\"/*/approvals.live; [ -f \"$1\" ] || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook tool; exit 0",
             "timeout": 10
           }
         ]

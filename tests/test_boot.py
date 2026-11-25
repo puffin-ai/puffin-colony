@@ -3,6 +3,7 @@ automatic handover, the startup routine's briefing, request intake, and the orde
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -270,7 +271,19 @@ def test_the_hooks_are_installed_with_colonys_other_hooks():
                         ("Stop", "turn"), ("PreToolUse", "tool")):
         assert (event, f"session-hook {name}") in events
     tool = next(hook for event, _, hook, marker in guards.hook_entries() if marker == "session-hook tool")
-    assert '[ -f "$HOME/.colony/approvals.live" ] || exit 0;' in tool["command"]  # free while nothing is approved
+    # Free while nothing is approved in any project: the gate ends the hook before Colony runs, and lets it run
+    # once some project's marker exists, for that project's own approvals to decide.
+    gate = tool["command"].split("cd \"$CLAUDE_PROJECT_DIR\"", 1)[0].split("|| exit 0; ", 1)[1]
+    home = Path(os.environ.get("TMPDIR", "/tmp")) / f"gate-{os.getpid()}"
+    shutil.rmtree(home, ignore_errors=True)
+    (home / ".colony" / "beta").mkdir(parents=True)
+    run = lambda: subprocess.run(["sh", "-c", gate + "echo ran"], capture_output=True, text=True,
+                                 env={"HOME": str(home), "PATH": os.environ["PATH"]}).stdout  # noqa: E731
+    assert run() == ""
+    (home / ".colony" / "alpha").mkdir()
+    (home / ".colony" / "alpha" / "approvals.live").write_text("")
+    assert run() == "ran\n"
+    shutil.rmtree(home)
     turn = next(hook for event, _, hook, marker in guards.hook_entries() if marker == "session-hook turn")
     assert turn["async"] is True and turn["command"].endswith("session-hook turn; exit 0")
 

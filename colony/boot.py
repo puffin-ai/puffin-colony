@@ -1324,7 +1324,10 @@ def after_claim(config: dict, args) -> None:
 
 
 HOOK_EVENTS = ("start", "compact", "end", "turn", "tool")
-APPROVALS_LIVE = f"$HOME/.{cli.NAME}/approvals.live"  # exists while any approval is live, so the tool hook is free
+# Each project's marker, ~/.colony/<project>/approvals.live, exists while one of its approvals is live
+# (decisions.live_marker). The tool hook's gate runs Colony only while some project has one, so it costs nothing
+# otherwise; the project's own approvals then decide.
+APPROVALS_LIVE = f'"$HOME/.{cli.NAME}"/*/approvals.live'
 
 
 def session_hook(config: dict, args) -> int:
@@ -1381,7 +1384,7 @@ def hook_entries(program: str) -> list[tuple[str, str | None, dict, str]]:
     from colony import guards
 
     def hook(event: str, **more) -> dict:
-        gate = f'[ -f "{APPROVALS_LIVE}" ] || exit 0; ' if event == "tool" else ""
+        gate = f'set -- {APPROVALS_LIVE}; [ -f "$1" ] || exit 0; ' if event == "tool" else ""
         return {"type": "command", "command": hook_command(event, program, gate), **more}
 
     return [("SessionStart", None, hook("start", timeout=guards.HOOK_TIMEOUT), "session-hook start"),
