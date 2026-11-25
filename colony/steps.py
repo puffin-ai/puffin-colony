@@ -147,7 +147,9 @@ def steps_issue(config: dict) -> int:
     repo = config["project"]["repo"]
     listed = json.loads(wait.gh("issue", "list", "--repo", repo, "--state", "open", "--search", f'"{TITLE}" in:title',
                                 "--json", "number,title,author", "--limit", "20") or "[]")
-    trusted = team(config) or {merge.terminal_login().lower()}
+    me = merge.terminal_login().lower()
+    # "someone" is terminal_login's word for a login gh couldn't tell: it trusts no issue, so a new one opens.
+    trusted = team(config) or ({me} if me != "someone" else set())
     found = sorted(issue["number"] for issue in listed if issue.get("title") == TITLE
                    and str((issue.get("author") or {}).get("login") or "").lower() in trusted)
     if found:

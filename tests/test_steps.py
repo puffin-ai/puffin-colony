@@ -450,3 +450,13 @@ def test_with_no_team_logins_the_steps_issue_is_the_one_this_login_opened(config
     github.issue(3, "Colony: person steps", author="mallory")
     github.issue(4, "Colony: person steps", author="ana-gh")
     assert steps.steps_issue(config) == 4
+
+
+def test_with_no_team_logins_and_no_known_login_no_existing_issue_is_trusted(config, github, monkeypatch):
+    from colony import merge
+
+    config["people"]["logins"] = []
+    monkeypatch.setattr(merge, "terminal_login", lambda: "someone")  # gh couldn't say who runs here
+    github.issue(3, "Colony: person steps", author="someone")
+    assert steps.steps_issue(config) == 8
+    assert [issue["number"] for issue in github.issues] == [3, 8]
