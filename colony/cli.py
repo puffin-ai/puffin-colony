@@ -1914,6 +1914,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     from colony import messages  # the messages workstream: ack, redeliver, waits and nudge
     messages.register(sub)
+    from colony import testers  # the test accounts and fixtures registry, and the shared findings list
+    testers.register(sub)
     return parser
 
 

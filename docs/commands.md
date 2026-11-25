@@ -53,7 +53,7 @@ See [messages.md](messages.md#getting-every-line-through).
 | Command | What it does |
 | --- | --- |
 | `colony tier [--base B] [--head H] [--feature] [--why]` | Prints TINY, SMALL or FEATURE for a branch's diff, then its risk list. `--why` prints each reason, and `--feature` forces FEATURE. |
-| `colony needs "<question>" --default "<x>" [--person p]` | The lead posts a decision, with its default, on the person's `Needs <Person>` issue. |
+| `colony needs "<question>" --default "<x>" [--person p] [--new-fixture]` | The lead posts a decision, with its default, on the person's `Needs <Person>` issue. It refuses a question about test accounts or test data while `.colony/fixtures.toml` holds some the person prepared, and names them; `--new-fixture` asks anyway, when none of them fits. |
 | `colony card new "<title>" --body … --size S\|M\|L [--lead <name>] [--waits-for N,N]` | Makes a card and puts it on the board as To do, with its Lead and Size. It refuses at the lead's `[limits] open_cards_per_lead` open cards (10), and on a duplicate of an open card, naming its number. It prints an `overlap:` line for each open card that plans to touch the same folders or files, and `--waits-for` writes the card's `Waits for:` line, so it starts once those cards land. See [cycle.md](cycle.md#cards-that-touch-the-same-files). |
 | `colony idea "<one line>"` | Appends a dated line to the future-work register, `<vault>/future-work.md`, or `.colony/future-work.md` with no vault. An idea is never an issue. |
 | `colony board init` | Makes the GitHub Project for the cards, with its five fields, Status, Lead, Helper, Size and Last update, or finds it and adds any of them it lacks. |
@@ -161,7 +161,7 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 
 ## Housekeeping
 
-Cards that overlap or wait for others, the lead's queue, and the files a branch changed. See [cycle.md](cycle.md#cards-that-touch-the-same-files).
+Cards that overlap or wait for others, the lead's queue, and the files a branch changed, see [cycle.md](cycle.md#cards-that-touch-the-same-files); and the test accounts, fixtures and findings list that testers share, see [testing.md](testing.md).
 
 | Command | What it does |
 | --- | --- |
@@ -169,6 +169,12 @@ Cards that overlap or wait for others, the lead's queue, and the files a branch 
 | `colony card waits <n> <cards>` | Sets the cards card `n` waits for, such as `12,13`, on its `Waits for:` line; `""` clears it. The card starts once they land, on whatever branch they merged into. |
 | `colony card next [--start] [--helper <name>] [--lead <name>]` | The lead's queue: its To do cards whose wait is over, oldest first, then the ones that still wait and what for. `--start` hands the first ready card to a free helper, the one its title names when it is free, else the first free one, or `--helper`: it posts `start: this card` and sets Status and Helper. |
 | `colony card files [<n>] [--branch <branch>] [--base <branch>]` | A branch's changed files, from `git diff` against where it left `origin/<base>`: HEAD's by default, with the files not committed and the commits not pushed. With a card, it also names the changed files outside the card's `Folders:` and `Files:` lines. A helper's `done` line carries the same list. |
+| `colony fixtures [--json]`, `colony fixtures add account\|fixture <name> --what "…" [--where …] [--login …] [--secret-at …] [--how …] [--note …]`, `colony fixtures remove <name>` | Lists, records or drops the test accounts and fixtures the person prepared, in `.colony/fixtures.toml`, by reference only: what each one is, where it lives, its login name, and where its secret is kept. It refuses a value that looks like a secret. See [testing.md](testing.md#test-accounts-and-fixtures). |
+| `colony findings open <release> [--card N …]` | Finds the release's findings issue, which every tester on every computer shares, or makes it with the cards the release's batches close. It prints the cards and the prepared test accounts and fixtures. See [testing.md](testing.md#the-findings-list). |
+| `colony findings next <release> [--as <name>]` | Claims the next card that no tester holds and none has tested, and prints it. When two testers claim one card at once, the earlier claim wins and it tries the next. |
+| `colony findings claim <release> <card> [--as <name>]`, `colony findings free <release> <card> [--as <name>]` | Claims one card by its number, or renews your own claim; or hands a card you hold back, untested. A claim with no result lapses after `[testers] claim_minutes` (60). |
+| `colony findings report <release> <card> pass\|fail\|blocked "<what you saw>" [--as <name>]` | Records a card's result. A fail or a block needs what you saw. When every card has a result, it prints the `done` line for the lead. |
+| `colony findings show <release>` | Brings the findings list up to date from every tester's comments, and prints it. |
 
 ## Flags
 

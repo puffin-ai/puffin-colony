@@ -233,6 +233,8 @@ The tester checks a release on the deployed app, the way a person would use it, 
 2. It reads the release's batches and their cards, and tests each card's done-when results on the deployed app. It changes no code.
 3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
 4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
+5. Testers use the test accounts and fixtures the person prepared, which `colony fixtures` lists from `.colony/fixtures.toml`. When the person tells you about one, record it with `colony fixtures add`, by reference only, never its secret, and commit the file. Read the registry before you ask the person for a test account or test data: `colony needs` refuses such a question while the registry holds any, and `--new-fixture` asks anyway, when you say what it lacks.
+6. For a large release, testers on several computers share one findings list: the person runs `colony tester "<the release pull request's link>"` on another computer, and each tester claims its own cards with `colony findings next`. `colony findings show <release>` shows where testing stands.
 
 ## Checks
 

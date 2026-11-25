@@ -373,6 +373,16 @@ auto_start = "waits"
 remind_minutes = 60
 ```
 
+## `[testers]`
+
+Optional. How testers share a release's findings list. See [testing.md](testing.md#the-findings-list).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `claim_minutes` | `60` | How long a tester's claim on a card holds with no result. After it, the card is free for another tester, so a tester that stopped never keeps one. |
+
+The test accounts and fixtures the person prepared live in `.colony/fixtures.toml`, which `colony fixtures add` writes. See [testing.md](testing.md#test-accounts-and-fixtures).
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

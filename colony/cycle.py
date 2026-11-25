@@ -494,10 +494,16 @@ def needs_line(lead: str, person: str, question: str, default: str, sender: str 
 def needs(config: dict, args) -> int:
     """`colony needs "<question>" --default "<x>" [--person p]`: post a decision on the person's Needs issue, for
     their lead. Any session may post one, such as the spec agent's approval question, and signs it with
-    $COLONY_SESSION; the lead signs as `<person>-lead`, so its own wait skips the line."""
+    $COLONY_SESSION; the lead signs as `<person>-lead`, so its own wait skips the line. A question about test accounts
+    or test data is refused while the registry holds some the person prepared, unless --new-fixture
+    (testers.check_question)."""
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name: needs signs its line with it")
+    if not getattr(args, "new_fixture", False):
+        from colony import testers
+
+        testers.check_question(args.question)
     person = (args.needs_person or cli.person_of(config, args)).lower()
     lead, repo = wait.lead_name(config, args), config["project"]["repo"]
     line = needs_line(lead, person, args.question, args.default, lead if me == cli.LEAD else me)
@@ -1011,6 +1017,8 @@ def add_commands(sub) -> None:
     p.add_argument("question", help="the question, one sentence")
     p.add_argument("--default", required=True, help="what you do until the person answers")
     p.add_argument("--person", dest="needs_person", metavar="PERSON", help="whose decision it is, you by default")
+    p.add_argument("--new-fixture", action="store_true",
+                   help="ask for a new test account or test data although the registry holds some: none of them fits")
     p.set_defaults(run=needs)
 
     p = sub.add_parser("handover", help="the lead: post the handover before compaction, or --read the last one")

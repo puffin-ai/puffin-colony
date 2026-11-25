@@ -171,3 +171,6 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 # [cards]                          # the lead's queue of To do cards
 # auto_start = "waits"             # the lead's wait starts a card whose wait just ended; "all": any ready card; "off"
 # remind_minutes = 60              # how long before the same queued card is named to the lead again
+#
+# [testers]                        # testers that share a release's findings list (docs/testing.md)
+# claim_minutes = 60               # a claim on a card with no result lapses after this, freeing the card
