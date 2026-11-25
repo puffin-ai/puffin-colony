@@ -1624,13 +1624,15 @@ def writer(words: list[str]) -> bool:
 
 class Variables(NamedTuple):
     """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`),
-    whether it holds something that may bind any name unseen (`opaque`, REBINDS), and whether a name it never binds
-    may take this computer's value (`environment`), which a line that ran it may have bound unseen."""
+    whether it holds something that may bind any name unseen (`opaque`, REBINDS), whether a name it never binds
+    may take this computer's value (`environment`), which a line that ran it may have bound unseen, and whether it
+    may change how a script it runs reads its own lines (`steers`, STEERS)."""
 
     values: dict
     bound: frozenset
     opaque: bool = False
     environment: bool = True
+    steers: bool = False
 
 
 NO_VARIABLES = Variables({}, frozenset())
@@ -1659,12 +1661,22 @@ SHELL_SET = {"PWD", "OLDPWD", "REPLY", "OPTARG", "OPTIND", "MAPFILE", "READLINE_
              "BASH_COMMAND", "BASH_SUBSHELL", "BASHPID", "FUNCNAME", "PIPESTATUS", "COPROC", "DIRSTACK",
              "EPOCHREALTIME", "EPOCHSECONDS", "HISTCMD", "SHLVL", "PPID", "UID", "EUID", "GROUPS", "MATCH"}
 ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+# Characters the shell reads as part of a word but Python's splitlines() and strip() read as a line break or a space,
+# such as a form feed or a Unicode line separator: a text that holds one resolves no variable.
+STRAY = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
+# What on a line can change how a script it runs reads its own lines: the programs its commands find (PATH), a file
+# bash or sh reads first (BASH_ENV, ENV, zsh's ZDOTDIR), how it splits words (IFS), its options, and functions
+# passed down in the environment (BASH_FUNC_, export -f). A script run from such a line follows no value of its own.
+STEERS = re.compile(r"\b(?:PATH|BASH_ENV|ENV|ZDOTDIR|IFS|SHELLOPTS|BASHOPTS|CDPATH)\+?=|BASH_FUNC_"
+                    r"|\bexport\b[^;\n|&]*\s-f\b")
+STEERING = {"PATH", "BASH_ENV", "ENV", "ZDOTDIR", "IFS", "SHELLOPTS", "BASHOPTS", "CDPATH"}
 
 
 def only_read(name: str, text: str) -> bool:
     """Whether `text` names `name` in its one assignment and otherwise only as $name or ${name}: any other mention,
-    such as read name, printf -v name, {name}> or ${name:=x}, may bind it."""
-    mentions = len(re.findall(rf"(?<!\w){name}(?!\w)", text))
+    such as read name, printf -v name, {name}> or ${name:=x}, may bind it, and so may one glued to an option, such as
+    read -aname, so the end of any longer word that ends in the name counts as a mention too."""
+    mentions = len(re.findall(rf"{name}(?!\w)", text))
     reads = len(re.findall(rf"\${name}(?!\w)|\$\{{{name}\}}", text))
     return mentions == reads + 1
 
@@ -1686,11 +1698,11 @@ def script_variables(text: str, path: str | None) -> Variables:
                 counts[name] = counts.get(name, 0) + 2  # never a single plain binding
     for match in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\b", text):
         counts[match[1]] = counts.get(match[1], 0) + 2
-    opaque = bool(REBINDS.search(text))
-    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    opaque = bool(REBINDS.search(text) or STRAY.search(text))
+    lines = [line for line in text.split("\n") if not line.lstrip(" \t").startswith("#")]  # as the shell splits it
     body, values = "\n".join(lines), {}
     for line in [] if opaque else lines:
-        line = line.strip()
+        line = line.strip(" \t")
         named = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
         if not line or SET_OPTIONS.fullmatch(line):
             continue
@@ -1703,14 +1715,17 @@ def script_variables(text: str, path: str | None) -> Variables:
             values[name] = value.strip("'\"")
         elif path is not None:
             values[name] = os.path.dirname(path) or "."
-    return Variables(values, frozenset(counts), opaque)
+    return Variables(values, frozenset(counts), opaque, steers=bool(STEERS.search(text)))
 
 
 def within(outer: Variables, inner: Variables) -> Variables:
-    """The variables a script run from a line sees: its own values, and none from this computer for a name the line
+    """The variables a script run from a line sees: its own values, unless the line may steer how the script reads
+    its lines (STEERS, or a line that may bind any name unseen), and none from this computer for a name the line
     binds or exports, nor for any name when the line may bind one unseen."""
-    return inner._replace(bound=inner.bound | outer.bound,
-                          environment=inner.environment and outer.environment and not outer.opaque)
+    steered = outer.opaque or outer.steers or bool(outer.bound & STEERING)
+    return inner._replace(values={} if steered else inner.values, bound=inner.bound | outer.bound,
+                          environment=inner.environment and outer.environment and not outer.opaque,
+                          steers=inner.steers or steered)
 
 
 def inner_variables(outer: Variables, text: str) -> Variables:
@@ -1718,7 +1733,8 @@ def inner_variables(outer: Variables, text: str) -> Variables:
     reach a new shell and the text's own bindings come in an order the guard doesn't follow; this computer's own
     for a name neither text binds."""
     inner = script_variables(text, None)
-    return Variables({}, outer.bound | inner.bound, outer.opaque or inner.opaque, outer.environment)
+    return Variables({}, outer.bound | inner.bound, outer.opaque or inner.opaque, outer.environment,
+                     outer.steers or inner.steers)
 
 
 def expand(word: str, variables: Variables) -> str:
@@ -1832,8 +1848,10 @@ def node_launcher(text: str) -> str:
     "". The launcher runs "$basedir/<interpreter>" from its own folder when that file is there, and the interpreter
     on PATH when it isn't."""
     named, folder = set(), False
-    for line in text.splitlines():
-        line = line.strip()
+    if STRAY.search(text):
+        return ""
+    for line in text.split("\n"):  # as the shell splits it
+        line = line.strip(" \t")
         if line == SHIM_FOLDER:
             folder = True
         elif line and not SHIM_LINES.fullmatch(line):
@@ -1871,7 +1889,7 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
             if pattern.search(text)]
     if held:
         return held
-    text = "\n".join(line for line in text.splitlines() if line.strip() != UV_INSTALL)  # Colony's own installer
+    text = "\n".join(line for line in text.split("\n") if line.strip(" \t") != UV_INSTALL)  # Colony's own installer
     parsed = parsed_findings(text, cwd)  # what the guards' own reading finds, past quotes the raw patterns miss
     if parsed:
         return parsed

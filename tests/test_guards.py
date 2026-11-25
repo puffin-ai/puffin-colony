@@ -1047,6 +1047,43 @@ def test_a_variable_resolves_only_when_set_once_up_front_and_never_bound_elsewhe
     assert run.returncode == 2, (command, text, run.stderr)
 
 
+@pytest.mark.parametrize("command, text", [
+    # A form feed or a Unicode line separator: the guard read a line of its own where the shell reads one word.
+    ("export X={evil}; bash launch.sh", '\fX={safe}\nbash "$X/run.sh"\n'),
+    ("export X={evil}; bash launch.sh", 'Y=1 X={safe}\nbash "$X/run.sh"\n'),
+    # A name glued to an option binds it: read -a fills X from where.txt.
+    ("bash launch.sh", 'X={safe}\nread -raX < where.txt\nbash "$X/run.sh"\n'),
+    # A line that steers how the script reads its own lines: a file bash reads first, a dirname of its own on PATH,
+    # or a function passed down in the environment.
+    ("BASH_ENV={evil}/env.sh bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("PATH={evil}/bin:$PATH bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("env 'BASH_FUNC_dirname%%=() {{ echo {evil}; }}' bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+])
+def test_a_variable_follows_the_shells_lines_glued_names_and_lines_that_steer_a_script(command, text, on_feature):
+    """Regression (security review of 03292d1): Python split lines and stripped spaces where the shell doesn't, so
+    an assignment the shell never runs resolved; a name glued to an option, such as read -aX, bound it unseen; and a
+    script's own folder resolved though the line that ran it set BASH_ENV, PATH or a function the script then used."""
+    safe, evil = on_feature / "safe", on_feature / "evil"
+    executable(safe / "run.sh", "#!/bin/sh\necho harmless\n")
+    executable(evil / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "run.sh", "#!/bin/sh\necho harmless\n")  # the launch folder's own
+    (evil / "env.sh").write_text(f"dirname() {{ echo {evil}; }}\n")
+    executable(evil / "bin" / "dirname", f"#!/bin/sh\necho {evil}\n")
+    (on_feature / "where.txt").write_text(f"{evil}\n")
+    executable(on_feature / "launch.sh", text.format(safe=safe, evil=evil))
+    run = push_guard(command.format(evil=evil), on_feature)
+    assert run.returncode == 2, (command, text, run.stderr)
+
+
+def test_a_launcher_is_npms_or_pnpms_only_as_the_shell_splits_its_lines():
+    """Regression (security review of 03292d1): node_launcher split lines as Python does, where a form feed or a
+    Unicode line separator ends a line, though the shell reads it as part of a word."""
+    guard = guard_module()
+    assert guard.node_launcher(PNPM_LAUNCHER) == "node"
+    for stray in ("\f", "\v", "\r", "\u2028", "\x85"):
+        assert guard.node_launcher(PNPM_LAUNCHER.replace("\nfi\nif", f"\nfi{stray}if")) == "", repr(stray)
+
+
 @pytest.mark.parametrize("text", [
     '#!/bin/sh\n# runs the tests\nset -euo pipefail\nhere=$(dirname "$0")\nbash "$here/lib/run.sh"\n',
     '#!/bin/sh\nDIR=lib\nhere=$(dirname "$0")\n\nbash "$here/$DIR/run.sh"\nbash "${here}/${DIR}/run.sh"\n',
