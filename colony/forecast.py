@@ -6,7 +6,8 @@ of when each of its windows runs out, and whether one more helper fits before th
   account then, in ~/.colony/<project>/usage-history.json (record). The lead's wait takes one every OBSERVE_EVERY,
   and `colony capacity` and every wave of helpers keep theirs too.
 - **Burn rate.** Over the last RATE_SPAN of one window, how many percent its use rose an hour, and that divided by the
-  helpers it ran meanwhile (burn). Two readings of the same window at least MIN_SPAN apart make a rate.
+  helpers it ran meanwhile (burn). Two readings of the same window at least MIN_SPAN apart make a rate: usage comes
+  in whole percents, so a short span of the slow weekly window would read one step as a fast pace.
 - **Forecast.** At that pace, when the window reaches [pool] out_at, and whether that comes before its reset
   (outlook).
 - **Fit.** Before a helper opens on an account, the pace with that helper there too: the account's own rate per
@@ -31,7 +32,7 @@ KEPT = 24 * 3600  # readings older than this are dropped
 MOST = 400  # the most readings kept per account
 SAME_READING = 30  # two readings taken within this many seconds of each other are one
 RATE_SPAN = {"five_hour": 60 * 60, "seven_day": 24 * 3600}  # how far back a window's burn rate looks
-MIN_SPAN = 10 * 60  # two readings at least this far apart make a rate
+MIN_SPAN = {"five_hour": 15 * 60, "seven_day": 3 * 3600}  # two readings at least this far apart make a rate
 SAME_WINDOW = 10 * 60  # two readings whose resets differ by less than this read one window
 FIT_SLACK = 15 * 60  # running out less than this before a reset still fits
 OBSERVE_EVERY = 10 * 60  # how often the lead's wait takes a live reading and looks at the forecast
@@ -134,7 +135,8 @@ class Burn:
 
 def burn(points: list[dict], window: str) -> Burn | None:
     """A window's burn rate from an account's kept readings: from the oldest reading of the newest one's window within
-    RATE_SPAN to the newest, at least MIN_SPAN apart, else None."""
+    RATE_SPAN to the newest, at least MIN_SPAN apart, else None. A window not started yet, with no reset time, burns
+    nothing."""
     marked = [(float(p["at"]), p[window][0], p[window][1], p.get("helpers")) for p in points
               if isinstance(p.get(window), list) and len(p[window]) == 2]
     if not marked:
@@ -148,7 +150,7 @@ def burn(points: list[dict], window: str) -> Burn | None:
 
     chosen = [m for m in marked if same(m[2]) and last_at - m[0] <= RATE_SPAN[window]]
     span = last_at - chosen[0][0]
-    if span < MIN_SPAN:
+    if span < MIN_SPAN[window]:
         return None
     counted = [m[3] for m in chosen if isinstance(m[3], (int, float))]
     return Burn(max(0.0, last_used - chosen[0][1]) / (span / 3600), sum(counted) / len(counted) if counted else None,
@@ -182,6 +184,7 @@ class Outlook:
     rate: float | None  # percent an hour at the pace counted, None when no pace is known
     out: float | None  # when it reaches out_at, None when it never fills at this pace or no pace is known
     source: str = ""  # where the pace came from
+    known_reset: bool = True  # false for a window not started, whose reset is one window after now, a guess
 
     @property
     def short(self) -> bool:
@@ -220,7 +223,7 @@ def outlook(config: dict, name: str, window: str, helpers: int | None = None, no
         out = now
     elif rate and rate > 0:
         out = now + (pool.out_at - used) / rate * 3600
-    return Outlook(name, window, used, resets_at, rate, out, source)
+    return Outlook(name, window, used, resets_at, rate, out, source, resets is not None)
 
 
 def fits(config: dict, name: str, helpers: int, pool: capacity.Policy | None = None,
@@ -264,7 +267,9 @@ def pace_text(found: Outlook | None, now: float) -> str:
         return ""
     label = WINDOW_NAMES[found.window]
     if found.rate is None:
-        return f"{label}: no pace yet, which two readings {MIN_SPAN // 60} minutes apart give"
+        span = MIN_SPAN[found.window]
+        apart = f"{span // 3600} hours" if span >= 3600 else f"{span // 60} minutes"
+        return f"{label}: no pace yet, which two readings {apart} apart give"
     pace = f"{found.rate:.1f}% an hour"
     if found.out is not None and found.short:
         return f"{label}: runs out around {clock(found.out, now)}, before it resets at {clock(found.resets, now)} ({pace})"
@@ -309,7 +314,7 @@ def account_lines(config: dict, now: float | None = None, relative: bool = True)
             text += f": stale, past [pool] stale_minutes ({pool.stale_minutes:g}), so placement counts its room unknown"
         else:
             five = outlook(config, name, "five_hour", None, now, pool)
-            if five is not None and five.short:
+            if five is not None and five.short and five.known_reset:
                 text += f"; runs out around {clock(five.out, now)}, before it resets at {clock(five.resets, now)}"
         lines.append(text)
     return lines
@@ -327,7 +332,7 @@ def risk_lines(config: dict, names=None, now: float | None = None) -> list[str]:
             continue
         for window in WINDOW_NAMES:
             found = outlook(config, name, window, None, now, pool, held)
-            if found is not None and found.short:
+            if found is not None and found.short and found.known_reset:
                 lines.append(f"Forecast: {name} runs out around {clock(found.out, now)} at its pace "
                              f"({found.rate:.0f}% an hour), before its {WINDOW_NAMES[window]} window resets at "
                              f"{clock(found.resets, now)}.")
@@ -387,7 +392,7 @@ def lead_part(config: dict, held: dict, now: float | None = None) -> list[str]:
             continue
         for window in WINDOW_NAMES:
             found = outlook(config, name, window, helpers, now, pool, history_, running=helpers)
-            if found is None or not found.short or found.rate is None:
+            if found is None or not found.short or found.rate is None or not found.known_reset:
                 continue
             key = f"{name}:{window}:{int(found.resets // SAME_WINDOW)}"
             stage = "soon" if found.out - now <= SOON else "ahead"

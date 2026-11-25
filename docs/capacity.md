@@ -47,7 +47,7 @@ The lead runs `colony capacity` before it opens helpers and at least every 30 mi
 
 ## Plan around resets
 
-Each fresh reading of an account on this computer is kept for a day, with how many helpers ran on the account then, in `~/.colony/<project>/usage-history.json`. From them Colony works out each window's **burn rate**: how many percent its use rose an hour over the last hour of the 5-hour window, or the last day of the weekly one, and that rate divided by the helpers it ran, the **rate per busy helper**. Two readings of one window at least 10 minutes apart make a rate.
+Each fresh reading of an account on this computer is kept for a day, with how many helpers ran on the account then, in `~/.colony/<project>/usage-history.json`. From them Colony works out each window's **burn rate**: how many percent its use rose an hour over the last hour of the 5-hour window, or the last day of the weekly one, and that rate divided by the helpers it ran, the **rate per busy helper**. Two readings of one window make a rate when they are at least 15 minutes apart for the 5-hour window, or 3 hours for the weekly one: usage comes in whole percents, so a shorter span of the slow weekly window would read one step as a fast pace.
 
 At that pace, the **forecast** says when each window reaches `[pool] out_at`, and whether that comes before the window resets. `colony capacity` and `colony accounts` show it beside each account's reset times, such as `5-hour: runs out around 07:10 UTC, before it resets at 09:39 UTC (18.0% an hour); 6.0% an hour per busy helper, over 3.0 helpers`.
 

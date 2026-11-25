@@ -482,3 +482,27 @@ def test_the_playbook_and_the_skills_say_builders_run_only_as_helpers():
     assert "only for a quick search or a browser check" in builder and "for speed" not in builder
     orchestrator = tomllib.loads((PACKAGE / "modes" / "work" / "orchestrator.toml").read_text())
     assert any("Never start a subagent to build" in rule["text"] for rule in orchestrator["rules"])
+
+
+def test_a_short_span_of_the_weekly_window_makes_no_rate_and_an_unstarted_window_raises_no_warning(host, monkeypatch):
+    """Regression: usage comes in whole percents, so ten minutes of the weekly window read one step as 6% an hour;
+    and a window not started has no reset time, whose guess moved on every look and repeated the warning."""
+    config = load()
+    week = (datetime.now(timezone.utc) + timedelta(days=3)).timestamp()
+    held = {"main": [{"at": time.time() - 600, "seven_day": [40, week], "helpers": 1},
+                     {"at": time.time(), "seven_day": [41, week], "helpers": 1}]}
+    assert forecast.burn(held["main"], "seven_day") is None
+    reading(host.parent / "main", five=0, week=10)
+    path = host.parent / "main" / ".claude.json"
+    state = json.loads(path.read_text())
+    state["cachedUsageUtilization"]["utilization"]["five_hour"]["resets_at"] = None  # no window running yet
+    path.write_text(json.dumps(state))
+    history(config, "main", [(40, 0, 3), (0, 0, 3)])
+    here = [running(f"builder-{n}", host.parent / "main") for n in (1, 2, 3)]
+    monkeypatch.setattr(cli, "running_sessions", lambda config: here)
+    monkeypatch.setattr(cli, "refresh_usage", lambda folders: None)
+    found = forecast.outlook(config, "main", "five_hour", 3, running=0)
+    assert found is not None and not found.known_reset
+    looks = {"at": time.time() - forecast.OBSERVE_EVERY}
+    assert forecast.lead_part(config, looks) == []
+    assert forecast.risk_lines(config) == []
