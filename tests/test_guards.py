@@ -164,7 +164,6 @@ PUSHES_ALLOWED = [
     "git push --dry-run origin HEAD:refs/heads/ana/login",
     "git push -n origin HEAD:refs/heads/ana/login",
     "git push -q origin HEAD:refs/heads/ana/login",
-    "git push origin HEAD:refs/heads/ana/login 2>&1",
     "git log --oneline -3",
 ]
 PUSHES_REFUSED = [
@@ -1355,10 +1354,12 @@ def test_text_that_names_a_kill_push_or_merge_is_refused_with_the_way_out(comman
 # that kind, which the guard's reading then checks. It replaces a count of what the reading saw, which a gh api call,
 # --disable-auto, a plain kill or an alias could make up for a command a quote hid.
 NOT_ALONE = [
-    ("npm test && git push -u origin HEAD:refs/heads/ana/login", "push guard", "a `&&` that joins it"),
-    ("git push origin HEAD:refs/heads/ana/login &", "push guard", "a `&` that joins it"),
-    ("git checkout -b ana/new && git push -u origin ana/new:refs/heads/ana/new", "push guard", "a `&&`"),
-    ("bash -c 'git push origin HEAD:refs/heads/ana/login'", "push guard", "`bash` around it"),
+    ("npm test && git push -u origin HEAD:refs/heads/ana/login", "push guard", "a `&`"),
+    ("git push origin HEAD:refs/heads/ana/login &", "push guard", "a `&`"),
+    ("git checkout -b ana/new && git push -u origin ana/new:refs/heads/ana/new", "push guard", "a `&`"),
+    ("bash -c 'git push origin HEAD:refs/heads/ana/login'", "push guard", "words before it"),
+    ("git push origin HEAD:refs/heads/ana/login 2>&1", "push guard", "a `&`"),
+    ("sudo git push origin HEAD:refs/heads/ana/login", "push guard", "words before it"),
     ("git push origin HEAD:refs/heads/ana/login; echo pushed", "push guard", "a `;`"),
     ("git push origin HEAD:refs/heads/$(git branch --show-current)", "push guard", "a `$(`"),
     ("kill $(cat server.pid)", "kill guard", "a `$(`"),
@@ -1392,6 +1393,31 @@ def test_no_command_the_guard_reads_makes_up_for_one_a_quote_hides(command, whic
 
 def test_a_plain_allowed_push_still_runs_on_its_own_line(on_feature):
     for command in ("git push -u origin HEAD:refs/heads/ana/login", "git push --force-with-lease origin "
-                    "HEAD:refs/heads/ana/login", "git push origin ana/login:refs/heads/ana/login 2>&1"):
+                    "HEAD:refs/heads/ana/login", "  git push origin ana/login:refs/heads/ana/login  "):
         run = push_guard(command, on_feature)
         assert (run.returncode, run.stderr) == (0, ""), command
+
+
+# Raw characters that separate commands, or start quoting the guard's reader may read otherwise than the shell, are
+# refused on a line that names a push, a merge or a kill: each could hide a separator from the parsed checks. Here each
+# hides in a comment, which the reader drops and which used to let the line through.
+HIDING_CHARACTERS = [";", "&", "|", "$'", '$"', "\\"]
+
+
+@pytest.mark.parametrize("character", HIDING_CHARACTERS)
+def test_a_character_that_can_hide_a_separator_refuses_a_plain_line(character, on_feature):
+    for command, which in ((f"git push origin HEAD:refs/heads/ana/login # {character}", "push guard"),
+                           (f"taskkill /PID 4242 # {character}", "kill guard"),
+                           (f"gh api repos/acme/demo/pulls/5/merge # {character}", "merge guard")):
+        run = push_guard(command, on_feature)
+        assert run.returncode == 2 and f"{which}: refused" in run.stderr, (command, run.stderr)
+        assert f"with a `{character}`" in run.stderr, (command, run.stderr)
+
+
+def test_a_plain_line_names_exactly_one_push_merge_or_kill_at_its_start(on_feature):
+    for command, why in (("git push origin HEAD:refs/heads/ana/login 'git push origin main'", "2 of them"),
+                         ("kill 4242 pkill", "words before it"),
+                         ("echo gh pr merge 5", "words before it"),
+                         ("GIT_TRACE=1 git push origin HEAD:refs/heads/ana/login", "words before it")):
+        run = push_guard(command, on_feature)
+        assert run.returncode == 2 and why in run.stderr, (command, run.stderr)

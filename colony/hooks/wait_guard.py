@@ -57,7 +57,8 @@ branch's merge, remote or pushRemote.
 Both follow a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuse an xargs or
 a shell alias that builds one. Beside that, a line whose raw text names a kill, a `git push` or a gh merge anywhere
 must be one plain command of that kind, with no other command, substitution, here-document, eval or `sh -c` around
-it, since quoting the shell reads otherwise can hide one; text that only names one is refused too, with the advice
+it, no `;`, `&`, `|`, `$'`, `$"` or backslash in its raw text, and that one match at its very start, since quoting
+the shell reads otherwise can hide one; text that only names one is refused too, with the advice
 to write it to a file.
 A `gh pr merge` that shares its line with a cd, a wrapper that moves it, or a GH_ or GIT_ variable is refused,
 since the pull request checked may not be the one merged.
@@ -118,6 +119,9 @@ RAW_PUSH = re.compile(r"(?<![\w.-])git\b[^\n;&|]*?\spush(?=\s|$|[;&|)'\"])")
 RAW_MERGE = re.compile(r"(?<![\w.-])gh\b[^\n;&|]*?\s(?:pr\s+merge(?=\s|$|[;&|)'\"])|api\s[^\n;&|]*?"
                        r"(?:/merges?\b|mergePullRequest|enablePullRequestAutoMerge|mergeBranch))")
 NOT_PLAIN = ("\n", "$(", "`", "<<", "<(", ">(")  # raw text a plain command never holds
+# Raw characters a plain command never holds either: each separates commands, or starts quoting ($'...', $"...", a
+# backslash) that the guard's reader may read otherwise than the shell, and so hide a separator.
+NOT_PLAIN_CHARACTERS = (";", "&", "|", "$'", '$"', "\\")
 PLAIN_STEP = {"push": "run the push as its own plain command", "merge": "run the pull request step as its own plain "
               "command", "kill": "run the kill as its own plain command, by its exact process id"}
 LIST_SEPARATORS = {";", "&&", "||", ";;"}
@@ -1392,13 +1396,23 @@ def kind_of(program: list[str]) -> str:
     return ""
 
 
-def plain_line(command: str, kind: str) -> str:
-    """Why a line whose raw text names a `kind` ("push", "merge" or "kill") is no plain command of that kind, or "".
-    A plain line is one simple command, with no other command, operator, substitution, here-document or process
-    substitution, alias or function definition, eval or `sh -c`, and the command it runs is of that kind, so the
-    guard's own reading of it is the shell's."""
-    if mark := next((mark for mark in NOT_PLAIN if mark in command.strip()), ""):
+def plain_line(command: str, kind: str, pattern: re.Pattern) -> str:
+    """Why a line whose raw text names a `kind` ("push", "merge" or "kill"), as `pattern` finds it, is no plain command
+    of that kind, or "". A plain line is one simple command, with no other command, operator, substitution,
+    here-document or process substitution, alias or function definition, eval or `sh -c`. Its raw text holds none of
+    NOT_PLAIN and NOT_PLAIN_CHARACTERS, and `pattern` finds exactly one match there, at its very start, so the
+    command the raw text names is the one the parser reads. And the command it runs is of that kind, so the guard's
+    own reading of it is the shell's."""
+    raw = command.strip()
+    if mark := next((mark for mark in NOT_PLAIN if mark in raw), ""):
         return {"\n": "a second line", "<<": "a here-document"}.get(mark, f"a `{mark}`")
+    if mark := next((mark for mark in NOT_PLAIN_CHARACTERS if mark in raw), ""):
+        return f"a `{mark}`"
+    matches = list(pattern.finditer(raw))
+    if len(matches) != 1:
+        return f"{len(matches)} of them named in its text"
+    if matches[0].start():
+        return "words before it, such as a wrapper, an assignment or another command"
     try:
         line = tokens(command)
     except ValueError:
@@ -1449,7 +1463,7 @@ def main() -> int:
     # The plain-line rule: a line that names a push, a gh merge or a kill anywhere is one plain command of that kind.
     for kind, pattern, reasons in (("push", RAW_PUSH, rewrites), ("merge", RAW_MERGE, merged),
                                    ("kill", RAW_KILL, killed)):
-        if pattern.search(command) and (why := plain_line(command, kind)):
+        if pattern.search(command) and (why := plain_line(command, kind, pattern)):
             what = {"push": "a `git push`", "merge": "a gh merge", "kill": "a kill"}[kind]
             reasons.append(f"this line names {what} with {why}: {PLAIN_STEP[kind]}")
     refusals = []
