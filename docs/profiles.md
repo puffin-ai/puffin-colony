@@ -67,11 +67,13 @@ Colony writes `[person] name`, whose profile it is, and `[person] setup`, the da
 | `decisions.never_raise` | list | both apply | Topics never to raise with you |
 | `monitoring.check_minutes` | whole number | the smaller wins | How often a lead checks on its helpers and the team |
 | `monitoring.report` | `quiet`, `progress` or `detailed` | you are asked once | How a lead keeps you posted |
-| `accounts.pool` | list | only what both name applies | The AI accounts to use, by their names in `colony.toml`, in order. Names only, never a credential |
-| `accounts.switch_at_percent` | 1 to 100 | the smaller wins | Switch to the next account at this percent of a usage window |
+| `pool.accounts` | list | only what both name applies | The AI accounts to use, by their names in `colony.toml`, in your order, as `[people.<person>] accounts` lists them there. Names only, never a credential |
+| `pool.order` | `reset` or `listed` | you are asked once | Which account goes first: the one whose weekly window resets soonest, or your listed order |
+| `pool.out_at` | 1 to 100 | the smaller wins | The percent of a usage window at which an account counts as out of room, and a session switches to the next one |
+| `pool.max_busy` | whole number | the smaller wins | The most helpers busy on one account at once |
 | `machine.max_helpers` | whole number | the smaller wins | The most helpers on one computer |
-| `machine.max_test_runs` | whole number | the smaller wins | The most test runs at once on one computer |
-| `machine.busy_load_percent` | 1 to 100 | the smaller wins | Start less work past this computer load |
+| `machine.max_tests` | whole number | the smaller wins | The most test runs at once on one computer |
+| `machine.busy_load` | number, 0.1 or more | the smaller wins | The load per core at which a computer counts as busy, and less work starts |
 | `tests.full_suite` | `change`, `batch` or `release` | the stricter wins | When the full suite runs: after every change, once per batch, or only at release, with the tests for the changed code and the guard tests in between |
 | `tests.time_cap_minutes` | whole number | you are asked once | The longest a check may block anyone; a longer one runs in the background |
 | `merge.policy` | `pr` or `branches` | the stricter wins | `pr`: agents open pull requests and you merge. `branches`: agents may merge into the branches `merge.branches` names |
@@ -79,6 +81,8 @@ Colony writes `[person] name`, whose profile it is, and `[person] setup`, the da
 | `writing.style` | text | both apply | How agents write messages, docs, commits and pull requests |
 | `writing.language` | text | you are asked once | The language a lead writes to you in |
 | `budgets.dollars_per_day` | dollars | the smaller wins | The most a session spends a day on paid services and model calls without your yes |
+
+The `pool.*` and `machine.*` keys have the names and units of the same keys in `colony.toml`'s `[pool]` and `[machine]` tables, so one name means one thing in both places.
 
 For a choice, the stricter value is the one listed first: `ask` before `routine`, `hold` before `default`, `change` before `batch`, `pr` before `branches`.
 

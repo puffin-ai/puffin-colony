@@ -86,7 +86,7 @@ def test_the_personal_profile_folder_is_colony_config_home_then_appdata_then_xdg
 
 def test_a_profile_round_trips_through_its_toml_writer():
     data = {"mode": "speed", "writing": {"style": 'say "it" plainly\\ \n then stop é \x7f', "language": "English"},
-            "machine": {"max_helpers": 3, "busy_load_percent": 80}, "budgets": {"dollars_per_day": 2.5},
+            "machine": {"max_helpers": 3, "busy_load": 0.8}, "budgets": {"dollars_per_day": 2.5},
             "decisions": {"never_raise": ["a b", "c"]}, "flag": True,
             "answers": {"decisions.answer_wait_minutes": {"team": 30, "mine": 60, "chose": "mine"}},
             "rules": [{"id": 1, "text": "One.", "added": "2026-11-24"}, {"id": 3, "text": "Three.", "from": "x"}]}
@@ -266,6 +266,17 @@ def test_a_helper_gets_only_the_orders_for_its_work_and_a_lead_hears_how_to_lear
            "per batch." in helper
     assert "- Rule p1: Write plainly." in helper and helper.endswith("- Ask your lead, never the person, when an "
                                                                      "order is unclear.")
+
+
+def test_the_pool_and_machine_keys_take_the_units_colony_toml_gives_them(home, capsys):
+    assert run(capsys, "profile", "set", "machine.busy_load", "0.8")[0] == 0
+    assert run(capsys, "profile", "set", "pool.out_at", "90")[0] == 0
+    assert (profile.load().value("machine.busy_load"), profile.load().value("pool.out_at")) == (0.8, 90)
+    for key, value, problem in (("machine.max_tests", "1.5", "is 1.5, not a whole number"),
+                                ("machine.busy_load", "0.05", "outside 0.1 or more"),
+                                ("pool.out_at", "120", "outside 1 to 100")):
+        code, _, err = run(capsys, "profile", "set", key, value)
+        assert code == 2 and problem in err, key
 
 
 def test_the_keys_command_lists_every_key(capsys):

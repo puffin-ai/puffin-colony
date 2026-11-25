@@ -83,7 +83,8 @@ PROFILE_EVERY = 60  # seconds: a running wait reads the profiles again at most t
 class Key:
     """One setting a profile may hold.
 
-    `kind` is choice, whole (a whole number), money (dollars), text or names (a list of short texts). `combine` says
+    `kind` is choice, whole (a whole number), number (any number), money (dollars), text or names (a list of short
+    texts). `combine` says
     what applies when the team's value and the person's differ: stricter (the earlier of `choices` wins), smaller
     (the smaller number wins), both (both lists or texts apply), common (only what both lists name applies, and the
     person is asked when they share nothing) or ask (the person is asked once, and the team's applies until then).
@@ -143,18 +144,27 @@ KEYS = (
          "progress": "Tell the person when work starts, finishes and merges.",
          "detailed": "Keep the person posted at each step."},
         "progress", choices=("quiet", "progress", "detailed"), roles=LEAD_ROLES),
-    Key("accounts.pool", "names", "common", "The AI accounts to use, by their names in colony.toml, in the order "
-        "to use them. Names only, never a credential.", "Use these accounts, in this order: {value}.", ["main"],
+    # The pool and machine keys carry the names and units of colony.toml's [pool] and [machine] (capacity.py), so one
+    # name means one thing in both places. pool.accounts is the person's order, [people.<person>] accounts there.
+    Key("pool.accounts", "names", "common", "The AI accounts to use, by their names in colony.toml, in the person's "
+        "order. Names only, never a credential.", "Use these accounts: {value}.", ["main"], roles=LEAD_ROLES),
+    Key("pool.order", "choice", "ask", "Which account goes first: `reset`, the one whose weekly window resets "
+        "soonest, or `listed`, the person's order.",
+        {"reset": "Use the account whose weekly window resets soonest first.",
+         "listed": "Use the accounts in the listed order."},
+        "reset", choices=("reset", "listed"), roles=LEAD_ROLES),
+    Key("pool.out_at", "whole", "smaller", "The percent of a usage window at which an account counts as out of room, "
+        "and a session switches to the next one.",
+        "Switch to the next account when one reaches {value}% of a usage window.", 95, low=1, high=100,
         roles=LEAD_ROLES),
-    Key("accounts.switch_at_percent", "whole", "smaller", "Switch to the next account when one reaches this percent "
-        "of a usage window.", "Switch to the next account when one reaches {value}% of a usage window.", 90, low=1,
-        high=100, roles=LEAD_ROLES),
+    Key("pool.max_busy", "whole", "smaller", "The most helpers busy on one account at once.",
+        "Keep at most {value} helpers busy on one account at once.", 3, low=1, roles=LEAD_ROLES),
     Key("machine.max_helpers", "whole", "smaller", "The most helpers that run on one computer.",
         "Run at most {value} helpers on one computer.", 4, roles=LEAD_ROLES),
-    Key("machine.max_test_runs", "whole", "smaller", "The most test runs at once on one computer.",
+    Key("machine.max_tests", "whole", "smaller", "The most test runs at once on one computer.",
         "Run at most {value} test runs at once on one computer.", 2, low=1),
-    Key("machine.busy_load_percent", "whole", "smaller", "Scale down past this computer load, in percent.",
-        "Start less work when this computer's load passes {value}%.", 80, low=1, high=100),
+    Key("machine.busy_load", "number", "smaller", "The load per core at which a computer counts as busy, and less "
+        "work starts.", "Start less work when this computer's load per core reaches {value}.", 1.0, low=0.1),
     Key("tests.full_suite", "choice", "stricter", "When the full test suite runs: after every `change`, once per "
         "`batch`, or only at `release`, with the tests for the changed code and the guard tests in between.",
         {"change": "Run the full test suite after every change.",
@@ -445,8 +455,8 @@ def check_value(key: Key, value) -> tuple[object, str]:
         if isinstance(value, str) and value in key.choices:
             return value, ""
         return None, f"is {value!r}, not one of {', '.join(key.choices)}"
-    if key.kind in ("whole", "money"):
-        number = isinstance(value, int) or (key.kind == "money" and isinstance(value, float))
+    if key.kind in ("whole", "number", "money"):
+        number = isinstance(value, int) or (key.kind != "whole" and isinstance(value, float))
         if isinstance(value, bool) or not number or not math.isfinite(value):
             return None, f"is {value!r}, not a {'whole ' if key.kind == 'whole' else ''}number"
         if value < key.low or (key.high is not None and value > key.high):
@@ -473,7 +483,7 @@ def parse_value(key: Key, text: str):
     text = text.strip()
     if key.kind == "names":
         value = [part.strip() for part in text.split(",") if part.strip()]
-    elif key.kind in ("whole", "money"):
+    elif key.kind in ("whole", "number", "money"):
         try:
             value = int(text) if re.fullmatch(r"-?\d+", text) else float(text.lstrip("$"))
         except ValueError:
@@ -1231,7 +1241,7 @@ def keys_cmd(args) -> int:
     for key in KEYS:
         kind = {"choice": f"one of {', '.join(key.choices)}" + (", strictest first" if key.combine == "stricter"
                                                                 else ""),
-                "whole": "a whole number", "money": "dollars", "text": "a text",
+                "whole": "a whole number", "number": "a number", "money": "dollars", "text": "a text",
                 "names": "a list of texts"}[key.kind]
         where = "personal and session only" if not key.team else COMBINE_TEXT[key.combine]
         print(f"{key.name}: {kind}; {where}. {key.text}")
