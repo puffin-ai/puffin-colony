@@ -398,8 +398,9 @@ def refusal(names: list[str], full: set[str], leads: dict[str, list[str]]) -> st
     if not held:
         return AT_CAP
     owners = "; ".join(f"{name} is {' and '.join(leads[name])}'s own" for name in held)
-    return (f"every other account is at its cap of busy helpers, and {owners}, kept for it so its own team never cuts "
-            "it off: set [pool] share_lead_accounts = true in .colony/colony.local.toml to let helpers share it")
+    others = "every other account is at its cap of busy helpers, and " if len(held) < len(names) else ""
+    return (f"{others}{owners}, kept for it so its own team never cuts it off: set [pool] share_lead_accounts = true "
+            "in .colony/colony.local.toml to let helpers share it")
 
 
 def place(config: dict, args, counts: dict[str, set[str]],

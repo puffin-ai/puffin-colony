@@ -506,3 +506,9 @@ def test_a_short_span_of_the_weekly_window_makes_no_rate_and_an_unstarted_window
     looks = {"at": time.time() - forecast.OBSERVE_EVERY}
     assert forecast.lead_part(config, looks) == []
     assert forecast.risk_lines(config) == []
+
+
+def test_with_one_account_that_its_lead_runs_on_the_refusal_names_just_that(host):
+    config = load('[pool]\nreserve = ["team", "spare"]\n')
+    found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
+    assert found is None and why.startswith("main is ana-main-lead's own, kept for it")
