@@ -358,6 +358,63 @@ Optional. Each `[locks.<name>]` table sets one named lock's `slots`, how many ru
 slots = 1
 ```
 
+## Releases and branch health
+
+Optional. These keys set the release, the merge freeze, the long-lived branches, the shared branch's health, steps for the person, and plain status messages. [releases.md](releases.md) says how each works.
+
+The branches come from `[project]`:
+
+| Key | Required | Example | What it does |
+| --- | --- | --- | --- |
+| `integration` | no | `"dev"` | Where the team's work gathers: the branch a release is cut from and comes back into. Default: the base. |
+| `release` | no | `"main"` | The branch a release goes into. Default: origin's default branch, when that differs from the integration branch. |
+| `deploy_workflow` | no | `"deploy.yml"` | The workflow `colony release --after` watches on the release branch until it ends. |
+
+### `[release]`
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `freeze` | `true` | `colony release` freezes the integration branch for every person's leads while the release's checks run. |
+| `freeze_hours` | `12` | How long a freeze lasts unless it is lifted first, so a forgotten one never blocks the team for long. |
+| `migrations` | `[]` | Paths or globs of the project's migrations, such as `["db/changes/*"]`, besides the ones Colony knows by their path, such as `migrations/` or `.sql`. The release's description lists them. |
+| `long_lived` | `[]` | Other long-lived branches each release goes into too, such as `["staging"]`. `colony release --after` and `colony branches --sync` bring the release branch into each. |
+
+### `[health]`
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `branches` | the integration branch | The shared branches `colony health` keeps green. |
+| `source` | `"auto"` | Where a commit's result comes from: `"ci"` the code host's checks, `"local"` the full suite on this computer, `"auto"` CI when the commit has any checks, else the suite here. |
+| `every_minutes` | `60` | How often `colony health watch` looks. |
+| `pause` | `true` | A red branch pauses every lead's `colony merge` and `colony batch` until it passes again, except named fixes. |
+
+### `[steps]`
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `issue` | `0` | The issue that holds the person steps. `0` finds the open `Colony: person steps` issue, or opens one. |
+| `dry_runs` | `{}` | The project's own dry runs, as command starts and their tests, such as `{ "./deploy.sh" = "./deploy.sh --check" }`. They come before the ones Colony knows. |
+
+### `[plain]`
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `allow` | `[]` | Words `colony plain check` lets through, such as the project's own names in capitals. |
+| `jargon` | `[]` | The team's own shorthand, which `colony plain check` flags. |
+
+```toml
+[project]
+integration = "dev"
+release = "main"
+
+[release]
+long_lived = ["staging"]
+migrations = ["db/changes/*"]
+
+[health]
+source = "ci"
+```
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

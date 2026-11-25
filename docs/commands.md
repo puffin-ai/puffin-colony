@@ -159,6 +159,32 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 | `colony wake --follow` | Does the same every minute, and after a sleep, until no session waits for a limit to reset. The StopFailure hook, or a wait, starts it by itself when a limit is noted; one runs per project on each computer. |
 | `colony open-later <n>` | The later waves of `colony helpers <n> --open`, which it starts in the background. You don't run it yourself. |
 
+## Releases and branch health
+
+The release pull request, the merge freeze, the long-lived branches, the shared branch's health, steps for the person, and plain status messages. See [releases.md](releases.md). `release`, `freeze on|off|allow`, `branches` and `health run|watch` are for a lead or the person, never a helper. `release`, `branches`, `health run|watch` and `step add` take `--dry-run`.
+
+| Command | What it does |
+| --- | --- |
+| `colony release` | Opens one pull request from the integration branch into the release branch, with a description drafted from the merged work: what changed, migrations, tests removed or changed, and the checks on its head. First it freezes the integration branch for every person's leads, and posts one `@all` line that says so and names each other lead whose work it carries. An open release pull request is reused. A person merges it. |
+| `colony release --print` | Prints the drafted description and opens nothing. |
+| `colony release --refresh` | Rewrites the open release pull request's description from the work and the checks as they are now. |
+| `colony release --only <n> [--only <n> …]`, `colony release --lead <name>\|me` | Releases only those pull requests, or one lead's: it cuts `<project>/release-<date>` from the release branch, copies each chosen change onto it, oldest first, and opens the pull request from it. The rest stays for a later release, and nothing is frozen. A change that needs work left behind stops it, naming the files. |
+| `colony release --after` | Once a person merged the release: lifts its freeze, opens a pull request that brings the release branch back into the integration branch and into each `[release] long_lived` branch that lacks it, then watches `[project] deploy_workflow` on the release branch until it ends, and exits with its result. |
+| `colony freeze on [--branch B] [--why "…"] [--hours H] [--allow <name> …]` | Pauses landings on the integration branch, or `--branch`, for every person's leads: `colony merge` and `colony batch` refuse it, except named fixes. It ends by itself after `[release] freeze_hours` (12), or `--hours`. |
+| `colony freeze off [--branch B] [--red]` | Lifts the freeze. `--red` lifts a red hold from `colony health` too, as for a false alarm. |
+| `colony freeze allow <branch\|card number> … [--branch B]` | Names fixes that may land while the branch is held. |
+| `colony freeze status [--branch B]` | What is held, on every branch or on one, with who, why and until when. |
+| `colony freeze check [<name> …] [--branch B]` | Exits 0 when the named work may land on the branch, and 1 while a hold refuses it, for other tools. |
+| `colony branches [--sync]` | How far each long-lived branch is from the release branch, and the commits that sit on one branch alone. `--sync` opens a pull request from `<project>/sync-<from>-into-<to>-<time>` into each one that lacks the release branch. Colony never pushes to a long-lived branch. |
+| `colony health run [--branch B] [--source auto\|ci\|local]` | Looks at each shared branch's head once, from CI or the full suite here. On red, it tells the likely cause's lead, tells every lead, and pauses landings until it passes. On green, it lifts that pause. Exits 0 green, 1 red, 3 while the checks still run. |
+| `colony health watch [--every MINUTES]` | Does the same every `[health] every_minutes` (60), and every 2 minutes while a run is going, as one lead's background command. |
+| `colony health status [--branch B]` | What each shared branch last showed on this computer, and what is held. |
+| `colony step add "<what>" [--run "<command>"] [--who <person\|@login\|anyone\|agent>] [--why "…"] [--check "<command>"] [--no-check] [--anyway]` | Hands a step only a person can take over. It tests the step first with `--check`, or the dry-run form of its command when Colony knows one, and never runs the step itself. A failing test stops it unless `--anyway`. It posts the step as one comment on the `Colony: person steps` issue, mentioning who does it, and prints one plain line to tell them. |
+| `colony step list [--who <person>] [--all]` | The open person steps, or one person's, or every one with `--all`. |
+| `colony step done <n> [--note "…"]` | Marks a step done, with who and when, by editing its comment. |
+| `colony plain check "<message>"`, `colony plain check --file <path>\|-` | Names each thing in a message to the person that they may not understand, such as an arrow, a chat abbreviation, an internal code or an unexplained short form, with how to say it instead. Exits 1 when it finds one. |
+| `colony plain templates [<name>]`, `colony plain fill <name> key=value …` | Prints the plain status templates, or fills one in and checks it. |
+
 ## Flags
 
 | Flag | Where | What it does |

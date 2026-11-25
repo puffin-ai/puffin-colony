@@ -223,6 +223,17 @@ The tester checks a release on the deployed app, the way a person would use it, 
 3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
 4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
 
+## Releases and branch health
+
+1. To release, run `colony release`. It drafts the description from the merged work, freezes the integration branch for every lead while the release is checked, and opens the pull request. Read its description; once CI has run, `colony release --refresh` adds the results. Never write the description by hand, and never merge the release yourself: a person does.
+2. To release only part of the work, name it: `colony release --only <n>`, or `--lead <name>`. The rest waits for the next release.
+3. Once the person has merged the release, run `colony release --after` as a background command. It lifts the freeze and opens the pull requests that bring the release back into the other long-lived branches. Then open the tester.
+4. While a branch is held, your merges and batches into it wait. Land only a real fix, after `colony freeze allow <branch>` names it, and tell the other leads why.
+5. One lead runs `colony health watch` as a background command. A `red:` line that names your pull request means your change likely broke the shared branch: fix it before anything else, and name the fix with `colony freeze allow`.
+6. Before a release, run `colony branches`. A long-lived branch that lacks the release branch gets a pull request from `colony branches --sync`, which a person merges.
+7. Never hand the person an untested step in chat. Run `colony step add "<what>" --run "<command>" --who <person>`, which tests it first and keeps it on the code host, then tell the person in the one line it prints. Mark it done with `colony step done <n>`.
+8. Before a status message reaches the person, run `colony plain check "<message>"` and fix what it names. `colony plain templates` has a plain message for each common status.
+
 ## Checks
 
 Every agent tests less and watches more:

@@ -16,7 +16,10 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
-release = ""                       # optional: the branch `colony release` releases the base into, such as main
+integration = ""                   # optional: where the team's work gathers, which a release is cut from; the base
+                                   # when empty
+release = ""                       # optional: the branch `colony release` releases into, such as main; origin's
+                                   # default branch when empty and it differs from the integration branch
 deploy_workflow = ""               # optional: the workflow `colony release --after` watches, such as deploy.yml
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
@@ -166,3 +169,24 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 #
 # [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`
 # slots = 1
+
+# Releases and branch health (docs/releases.md): every table below is optional, and each key shown holds its default.
+# [release]
+# freeze = true                    # `colony release` freezes the integration branch for every lead while it is checked
+# freeze_hours = 12                # a freeze ends by itself after this long
+# migrations = []                  # the project's own migration paths or globs, such as "db/changes/*"
+# long_lived = []                  # other long-lived branches each release goes into, such as "staging"
+#
+# [health]                         # `colony health`: keep the shared branch green
+# branches = []                    # the shared branches; empty is the integration branch
+# source = "auto"                  # "ci", "local" (the full suite here), or "auto": CI when the commit has checks
+# every_minutes = 60               # how often `colony health watch` looks
+# pause = true                     # a red branch pauses every lead's merges until it passes, except named fixes
+#
+# [steps]                          # `colony step`: steps only a person can take
+# issue = 0                        # the issue that holds them; 0 finds or opens `Colony: person steps`
+# dry_runs = {}                    # the project's own tests for a step, such as { "./deploy.sh" = "./deploy.sh --check" }
+#
+# [plain]                          # `colony plain check`: status messages in plain words
+# allow = []                       # the project's own names it lets through
+# jargon = []                      # the team's own shorthand it flags
