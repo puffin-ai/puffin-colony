@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from colony import batch, cli
+from colony import batch, checks, cli
 from colony.batch import Finding
 
 RUBRIC = ["bugs", "security and privacy", "data loading", "contract and write path",
@@ -696,7 +696,7 @@ def fast_card(repo, config, monkeypatch):
             for name, text in files.items():
                 (repo / name).parent.mkdir(parents=True, exist_ok=True)
                 (repo / name).write_text(text)
-        code = batch.run_fast_check(config, Namespace(dry_run=False))
+        code = checks.run_fast_check(config, Namespace(dry_run=False))
         return code, capsys.readouterr().out
     return run
 
@@ -846,7 +846,11 @@ def test_a_fixer_gets_only_the_cards_own_failures_and_the_start_points_stop_the_
     assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 1
     out = capsys.readouterr().out
     assert stubs["claude"].read_text().count("You are a fast builder") == 1
-    assert "every failing check also fails on origin/main alone" in out and "round 2" not in out.split("stopped")[0]
+    # Each round prints its checks' first failure as it streams; apart from those lines, nothing before the stop
+    # line speaks of round 2.
+    before = [line for line in out.split("stopped")[0].splitlines() if "checks: first failure at" not in line]
+    assert "every failing check also fails on origin/main alone" in out and "round 2" not in "\n".join(before)
+    assert "round 1's checks: first failure at" in out
     reports = Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1"
     state = json.loads((reports / "state.json").read_text())
     assert [x["on_start"] for x in state["rounds"]] == [["failing test tests/test_db.py::test_connects"]] * 2

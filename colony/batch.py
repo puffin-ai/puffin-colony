@@ -13,7 +13,10 @@ passes, only while `[budget] provider_dollars` is above 0 (paid_checks). `colony
 once, with no reviewer, walk or fixers, and opens the pull request when they pass, with `gate: fast` in its body.
 
 Fast batches. With `[checks] areas`, a round runs only the areas its change touched, through `{areas}` in the check
-command, and a round after a fix adds the areas that failed (round_areas). A failing test whose output names a timeout
+command, and a round after a fix adds the areas that failed (round_areas). In the related scope, `[checks] scope`, a
+round runs the tests for its change and the guards instead, beside the fast check, and `--full` runs the full suite
+(checks.round_plan). A pass on the same code with the same command is reused from the ledger, and the first failing
+line shows in state.json the moment it streams (checks.py). A failing test whose output names a timeout
 or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again (rerun_timeouts).
 The walk runs only when the change touches `[gate] walk_paths`, and walks only the screens the changed files feed
 (`[walk] screens`), with the browser `[walk] browser` names. minutes.md records the minutes each skip saved. A batch
@@ -359,7 +362,7 @@ def every_area(config: dict, cmd: str) -> str:
 # as a PASS or FAIL line, TAP's ok or not ok, or a test runner's `12 passed`.
 NOT_RUN = re.compile(r"^\W*NOT RUN\b", re.M)
 RAN = re.compile(r"^\W*(PASS|PASSED|FAIL|FAILED|ERROR|ok|not ok)\b|\b\d+ (passed|failed)\b", re.M)
-NOT_RUN_EXIT = 2  # `colony fast-check`'s exit code when nothing was checked
+NOT_RUN_EXIT = 2  # `colony fast-check`'s exit code when nothing was checked (checks.run_fast_check)
 ONLY_NOT_RUN = "its output only says NOT RUN: "  # starts the result line of a check run that checked nothing
 
 
@@ -375,50 +378,6 @@ def branch_changes(root: Path, base: str) -> list[str]:
     changed = _git(root, "diff", "--name-only", fork).splitlines()
     changed += _git(root, "ls-files", "--others", "--exclude-standard").splitlines()
     return sorted({path for path in changed if path})
-
-
-def fast_check_command(config: dict, root: Path) -> tuple[str, list[str] | None]:
-    """A builder's fast check, `[project] fast_check`, with `{areas}` filled from the areas its branch changes
-    (areas_of), and those areas: [] when the change touches none, such as a docs-only card, and None when the command
-    names no areas, so it runs as it is."""
-    cmd = fast_check(config["project"])
-    if "{areas}" not in cmd or not check_areas(config):
-        return cmd, None
-    areas = areas_of(config, branch_changes(root, config["project"]["base"]))
-    return (check_command(config, cmd, areas) if areas else cmd), areas
-
-
-def run_fast_check(config: dict, args) -> int:
-    """`colony fast-check`: run a builder's fast check for the areas its branch changes, and end on one line for the
-    done line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no
-    check area or the output only says NOT RUN (ran_nothing). It exits 0, 1, or NOT_RUN_EXIT."""
-    root = cli.repo_root()
-    cmd, areas = fast_check_command(config, root)
-    named = f" for {' '.join(areas)}" if areas else ""
-    if areas == []:
-        print("fast check: not run, the change touches no check area")
-        return NOT_RUN_EXIT
-    print(f"$ {cmd}", flush=True)
-    if args.dry_run:
-        return 0
-    command, shell, env = portable.shell(cmd, checks_env(config, root))
-    proc = subprocess.Popen(command, shell=shell, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, errors="replace")
-    output = []
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        output.append(line)
-    code = proc.wait()
-    text = "".join(output)
-    last = next((line.strip() for line in reversed(output) if line.strip()), "no output")
-    if code:
-        print(f"fast check: failed{named}, exit {code}: {last}")
-        return 1
-    if ran_nothing(text):
-        print(f"fast check: not run{named}, {ONLY_NOT_RUN}{last}")
-        return NOT_RUN_EXIT
-    print(f"fast check: passed{named}: {last}")
-    return 0
 
 
 def test_id(finding: Finding) -> str:
@@ -636,6 +595,7 @@ class Batch:
     dry: bool = False
     review: bool = True
     checks_only: bool = False  # `colony batch --fast`: the full checks once, with no reviewer, walk or fixers
+    full: bool = False  # `colony batch --full`: every round runs the full suite, whatever [checks] scope says
     sender: str = ""  # the demo review's signature on its board line, the lead's `<login>-main-lead`
     person: str = ""  # whose accounts a rate-limited step moves to (switch_account)
     limited: set = field(default_factory=set)  # the accounts that hit their rate limit in this batch
@@ -674,7 +634,8 @@ class Batch:
         check_settings(config)
         account = _account(config, args)
         b = cls(config, name, cards, start, _root(config, args), account,
-                bool(getattr(args, "dry_run", False)), review, checks_only, person=_person(config, args, account[0]))
+                bool(getattr(args, "dry_run", False)), review, checks_only, bool(getattr(args, "full", False)),
+                person=_person(config, args, account[0]))
         if demo:
             from colony import wait
 
@@ -795,7 +756,10 @@ def _person(config: dict, args, account: str) -> str:
 
 def check_settings(config: dict) -> None:
     """Refuse a colony.toml whose checks or walk settings this version can't run: `[project] web_checks`, which
-    `[checks] areas` replaced, `{areas}` in a check command with no areas named, and an unknown `[walk] browser`."""
+    `[checks] areas` replaced, `{areas}` in a check command with no areas named, a `[checks]` or `[ci]` key
+    checks.validate refuses, and an unknown `[walk] browser`."""
+    from colony import checks
+
     project = config["project"]
     if project.get("web_checks"):
         raise SystemExit("[project] web_checks is gone: name each check area's paths in [checks] areas, and put "
@@ -803,6 +767,7 @@ def check_settings(config: dict) -> None:
     if not check_areas(config) and any("{areas}" in (project.get(key) or "") for key in ("checks", "fast_check")):
         raise SystemExit("[project] checks has {areas}, but [checks] areas names none: add the areas and their paths")
     try:
+        checks.validate(config)
         walk_browser(config)
     except cli.ColonyError as e:
         raise SystemExit(str(e)) from None
@@ -868,7 +833,10 @@ def walker_prompt(b: Batch, r: int, head: str, changed: list[str]) -> str:
 
 def fixer_prompt(b: Batch, r: int, items: list[Finding], checkout: Path, branch: str) -> str:
     """Fill the fixer template with one card's findings, and the gate's check: the fast check for a fast gate, else
-    the full checks, each for the check areas its findings' files are in (areas_of)."""
+    the full checks, each for the check areas its findings' files are in (areas_of). In the related scope it is the
+    round's check for the findings' files and failing tests (checks.round_plan)."""
+    from colony import checks as scoped
+
     lines = []
     for f in items:
         place = f"{f.path}:{f.line} — " if f.path and f.line else f"{f.path} — " if f.path else ""
@@ -877,6 +845,10 @@ def fixer_prompt(b: Batch, r: int, items: list[Finding], checkout: Path, branch:
     paths = [f.path for f in items]
     areas = areas_of(b.config, paths) if paths and all(paths) else list(check_areas(b.config))
     checks = check_command(b.config, cmd, areas or list(check_areas(b.config)))
+    if paths and all(paths) and (b.full or scoped.settings(b.config)["scope"] != "areas"):
+        planned = scoped.round_plan(b, paths, areas or list(check_areas(b.config)) or None,
+                                    [test_id(f) for f in items if test_id(f)])
+        checks = planned.cmd or checks
     return fill(cli.package_file("prompts", "fixer.md"), project=b.tag, checkout=checkout, branch=branch, round=r,
                 batch=b.name, reports=b.reports, findings="\n".join(lines), checks=checks, trailer=b.trailer)
 
@@ -1122,14 +1094,24 @@ def rerun_timeouts(b: Batch, r: int, output: str, failures: list[Finding], log: 
     return [f for f in failures if test_id(f) not in cleared], cleared
 
 
-def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, started: float, clock: str):
+def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, started: float, clock: str,
+               watcher: threading.Thread | None = None, cap: float = 0):
     """Wait for the round's background checks, rerun the tests a timeout may have failed (rerun_timeouts), and write
     checks-<r>.md; return (passed, result line, failures, the run's minutes before any rerun). The checks pass after
     a failed run when every failing test passed alone and the output shows no other failure (other_failures). A run
     that exits 0 but only says NOT RUN (ran_nothing) blocks nothing, and its line starts ONLY_NOT_RUN, so the round
-    and the pull request say the checks did not run."""
-    code = proc.wait()
+    and the pull request say the checks did not run. A run past `cap` seconds, `[checks] caps`, is stopped, and stops
+    the batch. `watcher` is the thread that marks the first failure as it streams (checks.watch_log)."""
+    from colony import checks
+
+    code = checks.wait_capped(proc, cap)
     b.track(proc, on=False)
+    if watcher is not None:
+        watcher.join(timeout=5)
+    if code is None:
+        b.running(f"checks-r{r}", False)
+        b.minute(f"checks-r{r}", (time.time() - started) / 60, clock=clock)
+        raise Stop(f"round {r}'s checks ran past their cap of {checks.span(cap)} and were stopped; their log is {log}")
     minutes = (time.time() - started) / 60
     b.running(f"checks-r{r}", False)
     b.minute(f"checks-r{r}", minutes, clock=clock)
@@ -1158,11 +1140,22 @@ def failure_key(finding: Finding) -> str:
 def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
     """The batch's start commit, and the failures `cmd` shows there alone, without the cards, each as failure_key:
     none when it passes there, or when the install fails there, which tells nothing. It runs once per command in a
-    batch, in a worktree of its own that it removes after, and state.json keeps the answer."""
+    batch, in a worktree of its own that it removes after, and state.json keeps the answer. The ledger keeps it too,
+    by the commit's code and the command, so a later batch from the same start reuses it (checks.keep)."""
+    from colony import checks
+
     sha = b.git("merge-base", "HEAD", b.start)
     known = b.state.setdefault("start_checks", {})
     if cmd in known:
         return sha, set(known[cmd])
+    key, _, tree = checks.commit_key(b, sha, cmd)
+    hit = checks.lookup(checks.colony_home(b.config), key) if checks.settings(b.config)["reuse"] else None
+    if hit and hit.get("result") in ("pass", "fail"):
+        failing = set(hit.get("failures") or []) if hit["result"] == "fail" else set()
+        b.saved(f"start-checks-r{r}", float(hit.get("seconds") or 0) / 60)
+        known[cmd] = sorted(failing)
+        b.save()
+        return sha, failing
     wt = b.worktrees / f"{b.tag}-batch-{b.name}-start"
     step, started, clock = f"start-checks-r{r}", time.time(), time.strftime("%H:%M")
     b.running(step, True)
@@ -1184,11 +1177,14 @@ def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
                 code = proc.wait()
             finally:
                 b.track(proc, on=False)
-        failing = {failure_key(f) for f in parse_check_failures(log.read_text(errors="replace"))} if code else set()
+        output = log.read_text(errors="replace")
+        failing = {failure_key(f) for f in parse_check_failures(output)} if code else set()
     finally:
         _git(b.root, "worktree", "remove", "--force", str(wt), check=False)
         b.running(step, False)
         b.minute(step, (time.time() - started) / 60, clock=clock)
+    last = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "no output")
+    checks.keep(b, key, sha, tree, cmd, "fail" if code else "pass", last, (time.time() - started) / 60, failing)
     known[cmd] = sorted(failing)
     b.save()
     return sha, failing
@@ -1239,42 +1235,77 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     source (checks, review or walk).
 
     The checks are the fast check alone for a fast gate (fast_gate), else the full checks, for the round's check
-    areas (round_areas); a round with no area to check skips them. The review runs when b.review is set, and the walk
-    when should_walk says so. The paid checks run when the checks pass and nothing else is open, or in the `last`
-    round when the checks pass. The round is done, and the findings empty, when the checks pass, the review reports
-    `open: 0` or was skipped, and the walk passed or was skipped.
+    areas (round_areas); a round with no area to check skips them. In the related scope they are the tests for the
+    round's change and the guards, beside the fast check, and the tests the round before failed (checks.round_plan);
+    `colony batch --full` runs the full suite. A pass the ledger keeps for the same code and command is reused, and
+    the first failing line is marked in state.json the moment it streams (checks.watch_log). The review runs when
+    b.review is set, and the walk when should_walk says so. The paid checks run when the checks pass and nothing else
+    is open, or in the `last` round when the checks pass. The round is done, and the findings empty, when the checks
+    pass, the review reports `open: 0` or was skipped, and the walk passed or was skipped.
     """
+    from colony import checks as scoped
+
     project, settings = b.project, b.config["gate"]
     head = b.git("rev-parse", "HEAD")
     prev = b.state["rounds"][-1] if b.state["rounds"] else None
     changed = b.git("diff", "--name-only", f"{prev['head']}..HEAD" if prev else f"origin/{project['base']}...HEAD").splitlines()
     areas = round_areas(b, prev, changed)
-    cmd = check_command(b.config, fast_check(project) if fast_gate(b.config) else project["checks"], areas)
+    planned = scoped.round_plan(b, changed, areas, (prev or {}).get("failed_tests") or [])
+    cmd = planned.cmd or ""
     walk = should_walk(settings, b.state["rounds"], changed)
     b.state["round"] = r
     log = b.reports / f"checks-{r}.log"
     started, clock = time.time(), time.strftime("%H:%M")
-    proc = None
-    if areas != []:
+    proc, reused, watcher, key = None, None, None, ("", "", "")
+    kind = "full" if b.full or scoped.settings(b.config)["scope"] == "full" else "checks"
+    cap = float(scoped.settings(b.config)["caps"].get(kind, 0))
+    if planned.cmd is not None:
+        key = scoped.commit_key(b, "HEAD", cmd)
+        reused = scoped.reusable_pass(b.config, key[0])
+    if planned.cmd is not None and not reused:
         b.running(f"checks-r{r}", True)
         with log.open("wb") as out:
             command, shell, env = portable.shell(cmd, b.check_env())
             proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT,
                                     **portable.own_group())
             b.track(proc)
+
+        def first_failure(line: str) -> None:
+            with b.lock:
+                b.state.setdefault("first_failures", {})[str(r)] = {"line": line, "at": time.strftime("%H:%M")}
+                b.save()
+            print(f"colony batch {b.name}: round {r}'s checks: first failure at {time.strftime('%H:%M')}: {line}",
+                  flush=True)
+
+        watcher = scoped.watch_log(log, proc, first_failure, scoped.settings(b.config)["failure"])
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
     with futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
                              f"review-r{r}", review_report, parse_open) if b.review else None
         walking = pool.submit(walk_round, b, r, head, changed) if walk else None
         on_start, start_sha = [], ""
-        if proc is None:
+        if reused:
+            line = (f"reused: passed on this same code at {scoped.clock(reused.get('at', 0))}: "
+                    f"{reused.get('line', '')}")
+            passed, check_findings, check_minutes = True, [], 0.0
+            (b.reports / f"checks-{r}.md").write_text(f"checks: pass\n\n`{cmd}` {line}\n")
+            b.saved(f"checks-r{r}", float(reused.get("seconds") or 0) / 60)
+        elif proc is None:
             passed, line, check_findings, check_minutes = True, "skipped: the change touches no check area", [], 0.0
             (b.reports / f"checks-{r}.md").write_text(f"checks: skipped\n\n{line}\n")
         else:
-            passed, line, check_findings, check_minutes = run_checks(b, r, cmd, proc, log, started, clock)
+            passed, line, check_findings, check_minutes = run_checks(b, r, cmd, proc, log, started, clock, watcher,
+                                                                     cap)
+            if proc.returncode == 0 and passed and not line.startswith(ONLY_NOT_RUN):
+                scoped.keep(b, key[0], key[1], key[2], cmd, "pass", line, check_minutes)
+            elif not passed:
+                scoped.keep(b, key[0], key[1], key[2], cmd, "fail", line, check_minutes,
+                            {failure_key(f) for f in check_findings})
             if not passed and check_findings and not b.checks_only and not b.demo:
                 check_findings, on_start, start_sha = split_on_start(b, r, cmd, check_findings)
+        if planned.untested:
+            with (b.reports / f"checks-{r}.md").open("a") as out:
+                out.write("".join(f"- no test names `{path}`\n" for path in planned.untested[:30]))
         if review:
             review.result()
         walked = walking.result() if walking else None
@@ -1286,12 +1317,14 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     walk_text = walk_report.read_text() if walk else ""
     walk_result = parse_walk(walk_text) if walk else "skipped"
     signature = sorted(DURATION.sub("", f.text) for f in check_findings)
-    checks = "skipped" if proc is None else "fail" if not passed else "not run" if line.startswith(ONLY_NOT_RUN) \
+    ran = proc is not None or bool(reused)
+    checks = "skipped" if not ran else "fail" if not passed else "not run" if line.startswith(ONLY_NOT_RUN) \
         else "pass"
     b.state["rounds"].append({"round": r, "head": head, "open": open_count if b.review else "skipped", "walk": walk_result,
-                              "checks": checks, "checks_cmd": cmd if proc is not None else "", "checks_line": line,
+                              "checks": checks, "checks_cmd": cmd if ran else "", "checks_line": line,
                               "checks_signature": signature, "areas": areas,
                               "failed_areas": failed_areas(b, areas, check_findings),
+                              "failed_tests": [test_id(f) for f in check_findings if test_id(f)],
                               "on_start": [f.text for f in on_start]})
     b.save()
     if not passed and on_start and not check_findings:
@@ -1558,6 +1591,16 @@ def plan(b: Batch) -> str:
                   "fixes touched"]
     else:
         lines.append(f"  {what}, in the background: $ {cmd}")
+    from colony import checks as scoped
+
+    scope = "full" if b.full else scoped.settings(b.config)["scope"]
+    if scope == "full":
+        lines.append(f"  --full: every round runs the full suite, $ {every_area(b.config, project['checks'])}")
+    elif scope == "related":
+        lines.append(f"  in the related scope, the checks are the tests for each round's change and the guards, "
+                     f"beside the fast check: $ {scoped.settings(b.config)['related']}")
+    lines.append("  a check that passed on this same code before is reused, and the first failing line shows in "
+                 f"`{cli.NAME} status` the moment it streams")
     if checks.get("rerun"):
         lines.append(f"  a failing test whose output names a timeout or a time limit runs once more by itself: "
                      f"$ {checks['rerun']}")
@@ -1778,6 +1821,9 @@ def batch_status(config: dict, args) -> int:
           f"walk {f'{parse_walk(walk)} (round {walk_round_})' if walk else 'none yet'}")
     running = state.get("running", {})
     print("running: " + (", ".join(f"{step} since {clock}" for step, clock in running.items()) or "nothing"))
+    first = (state.get("first_failures") or {}).get(str(state.get("round", 0)))
+    if first:
+        print(f"checks, round {state.get('round')}: first failure at {first['at']}: {first['line']}")
     if state.get("result"):
         print(f"result: {state['result']}")
     minutes = folder / "minutes.md"
