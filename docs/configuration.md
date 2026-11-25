@@ -233,6 +233,14 @@ The anti-bloat limits that `colony card new` and `colony tidy` keep. See [cycle.
 
 `colony tools` prints this table after it writes the tools you accepted, and setup adds it. It records `mcp`, the MCP servers, and `skills`, the skill folders. The commands don't read it.
 
+## Standing orders
+
+How a session works for its person and the team, such as how much a lead decides alone or when the full suite runs, lives in profiles, not in `colony.toml`: your personal profile, the team profile `.colony/team.toml`, and session settings. [profiles.md](profiles.md) has the format and how they combine.
+
+| Name | Example | What it does |
+| --- | --- | --- |
+| `COLONY_CONFIG_HOME` | `~/dotfiles/colony` | The folder that holds your personal profile. Without it: `%APPDATA%\colony` on Windows, else `$XDG_CONFIG_HOME/colony`, else `~/.config/colony`. |
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

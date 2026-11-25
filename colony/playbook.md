@@ -69,6 +69,17 @@ Only the lead talks with the person, in its chat and on the Needs issue. Every m
 - Asks at most one question, with its choices and your pick first.
 - Ends with `Needs you`, each open decision with its default, when it waits on the person.
 
+## Standing orders
+
+Standing orders are the rules and settings a session follows without being told again: the person's own profile, which follows them into every repo and is never committed, the team's, `.colony/team.toml`, which changes only through a reviewed pull request, and settings for one session. Where they and this playbook differ, the orders win.
+
+- **Read them at the start.** A lead runs `colony profile show --orders` when its session starts, and follows what it prints. The prompt hook shows them too, and `colony wait` ends with any change while the session runs: follow the new orders at once.
+- **Where the team's and the person's disagree,** Colony applies the stricter, or both lists, or the team's until the person answers once. When an order says unresolved, ask the person once which applies, and record the answer with `colony profile resolve <key> team|mine`.
+- **Setup, once.** When the prompt hook says the person has no personal profile yet, ask the questions `colony profile setup` prints, in one message, and write the answers with `colony profile setup --set <key>=<value> ...`. Never ask them again.
+- **Learn from corrections.** When the person corrects how you work, offer once to keep it as a standing order, and on a yes run `colony prefer add "<the rule, in one sentence>" --correction`. `colony prefer list` shows the rules, and `colony prefer remove <ref>` drops one. `colony profile import` offers the preferences the person already gave their agent tool, each added only after their yes.
+- **Between people,** such as a line to another person's lead, the team profile alone binds: your person's own orders are theirs.
+- **A helper** follows the orders its prompt hook or its lead gives it, asks its lead when one is unclear, and never changes a profile.
+
 ## Tiers
 
 The lead picks a tier for each request before it writes a card:

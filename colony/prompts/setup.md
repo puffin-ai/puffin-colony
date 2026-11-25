@@ -214,6 +214,10 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        Pull request: <the PR link>. Merge it now, so every teammate's agent gets the board and the owner table.
        Each teammate pulls and runs `{name}`, and any other agent uses `tools/board`.
 
+## Standing orders
+
+In every mode, before you open the pull request, run `{name} profile init`. It writes `{dir}/team.toml`, the team profile: the standing orders every person's sessions follow here, with every key commented out until the team fills it in through a reviewed pull request. Commit it with the other files you wrote. Ask none of the person's own preferences here: their lead asks its short set of questions once, on its first start, into their personal profile, which lives outside the repo and is never committed.
+
 ## Never
 
 - Print, copy or write the value of an environment variable, a key, a token or a password.
