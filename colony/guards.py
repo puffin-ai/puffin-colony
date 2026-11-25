@@ -696,10 +696,14 @@ def unread(config: dict, args) -> int:
     so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr."""
     from colony import wait
 
-    hook_event()  # read and dropped: the prompt stays in the window
+    event = hook_event()  # the prompt stays in the window; only the standing orders' correction reminder reads it
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         return 0
+    from colony import profile  # the standing orders when a session starts, and any change since (profile.py)
+
+    for line in profile.hook_lines(config, me, str(event.get("prompt") or "")):
+        print(line)
     try:
         note = watchdog_note(config, me)
     except (OSError, ValueError, KeyError) as e:

@@ -85,6 +85,12 @@ def no_usage_refresh(monkeypatch, outside_a_colony_session):  # after the cleari
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")
 
 
+@pytest.fixture(autouse=True)
+def no_real_profile(monkeypatch, tmp_path, outside_a_colony_session):  # after the clearing, which would drop it
+    """No test reads or writes the real personal profile: its folder, $COLONY_CONFIG_HOME, is a fresh one per test."""
+    monkeypatch.setenv("COLONY_CONFIG_HOME", str(tmp_path / "colony-config"))
+
+
 if portable.WINDOWS:
     if not sys.flags.utf8_mode:
         pytest.exit("On Windows, run the suite in Python's UTF-8 mode, the mode Colony relaunches itself in there: "
