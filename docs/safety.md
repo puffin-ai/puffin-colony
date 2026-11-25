@@ -91,6 +91,7 @@ The guards stop an agent's honest mistakes, and the easy ways around them. They 
   - quotes in the operands of a binding command other than `export`, `readonly`, `unset` and `env`, such as `read 'X'`, whose names the guard reads from the raw text;
   - zsh's `${name::=value}`, which always assigns, and parameter flags such as `${(P)name}`, which name a variable through another.
   - a `cd` in a file a script sources, which moves the script's later lines to another folder.
+  - `${BASH_SOURCE[0]}` in an own-folder idiom, which the guard reads as the script's own path whichever shell runs it, though only bash sets it: under sh, dash or zsh it is empty, so the folder is the one the script starts in.
 
   When a review finds another such way around the guards, it goes on this list rather than into more guard code.
 
