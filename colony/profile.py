@@ -28,8 +28,8 @@ The Python API, for the startup routine and anything else that starts a session:
         The merged orders for one session. `root` is the repo (found with git when None), `person` the session's
         person ($COLONY_PERSON when None), `config` a loaded colony.toml (its [project] base and name are read when
         given, else the repo's file is), `session` True for this process's session file, False for none, or a Path,
-        and `layers` extra Layer objects that sit between the personal and the session layer, such as a mode's
-        bundle of settings (layer_from builds one from a dict). Profile.settings maps each key to a Setting with its
+        and `layers` extra Layer objects that sit between the personal and the session layer in place of the active
+        mode's bundle, which load adds itself (boot.mode_layer; layer_from builds a layer from a dict). Profile.settings maps each key to a Setting with its
         value, source and conflict note; Profile.rules lists the rules with their refs (p1, t2, s1); Profile.warnings
         holds every problem found, with no secret in it; Profile.value(key, default) reads one value.
     render(profile, role="lead") -> str
@@ -190,6 +190,19 @@ KEYS = (
     Key("budgets.dollars_per_day", "money", "smaller", "The most a session spends a day on paid services and model "
         "calls without the person's yes, in dollars.",
         "Spend at most ${value} a day on paid services and model calls without the person's yes.", 0),
+    # The keys the startup routine, request intake and the decisions flow read (boot.py, decisions.py).
+    Key("intake.plan", "choice", "stricter", "Whether a lead shows its plan for a request before it starts: `show` "
+        "shows the task groups, their owners and done-when results and waits for the person's yes; `start` starts at "
+        "once and posts the plan for the record.",
+        {"show": "Show the plan for each request, its task groups, owners and done-when results, and start only "
+                 "after the person's yes.",
+         "start": "Start each request at once, without showing the plan first, unless the person asks to see it; "
+                  "post the plan for the record."},
+        "start", choices=("show", "start"), roles=LEAD_ROLES),
+    Key("decisions.gates", "names", "both", "Kinds of work drafted first and built only after the person's yes on "
+        "the draft, such as new screens or schema changes.",
+        "Draft these first, and build them only after the person's yes on the draft: {value}.", ["new screens"],
+        roles=LEAD_ROLES),
 )
 BY_NAME = {key.name: key for key in KEYS}
 COMBINE_TEXT = {"stricter": "the stricter wins", "smaller": "the smaller wins", "both": "both apply",
@@ -720,9 +733,10 @@ def merge(team: Layer | None, own_side: list[Layer], answers: dict, person: str 
 
 def load(root=None, person: str | None = None, *, config: dict | None = None, session=True, layers=(),
          team_only: bool = False) -> Profile:
-    """The merged standing orders for one session: the team's profile, then the person's own, any `layers` (such as
-    a mode's bundle), and this session's, combined key by key (merge). With `team_only`, the team's alone: the
-    orders for work between people. It never raises for a broken file: each problem is a warning."""
+    """The merged standing orders for one session: the team's profile, then the person's own, the active mode's
+    bundle (boot.mode_layer, for the `mode` the session or the personal profile names) or the `layers` given
+    instead, and this session's, combined key by key (merge). With `team_only`, the team's alone: the orders for
+    work between people. It never raises for a broken file: each problem is a warning."""
     root = Path(root) if root else repo()
     given = (config or {}).get("project")
     project = given if isinstance(given, dict) else project_table(root)
@@ -741,6 +755,13 @@ def load(root=None, person: str | None = None, *, config: dict | None = None, se
         own_side += [layer for layer in layers if isinstance(layer, Layer)]
         path = session if isinstance(session, Path) else (session_path(project.get("name")) if session else None)
         mine = read_layer(path, "session", f"session ({display(path)})") if path else None
+        if not layers:  # the active mode's bundle sits between the personal profile and the session (boot.py)
+            named = next((layer.settings["mode"] for layer in (mine, personal) if layer and "mode" in layer.settings),
+                         "")
+            if named:
+                from colony import boot
+
+                own_side.append(boot.mode_layer(named, root, str(project.get("base", "") or "")))
         if mine:
             own_side.append(mine)
     for layer in ([team] if team else []) + own_side:
@@ -1039,6 +1060,9 @@ def hook_lines(config: dict, me: str, prompt: str = "") -> list[str]:
             lines += setup_nudge(config, me)
             if hint := correction_hint(prompt):
                 lines.append(hint)
+            from colony import boot  # a prompt that is a mode's name switches that mode on (boot.py)
+
+            lines += boot.prompt_lines(config, prompt)
         return lines
     except (cli.ColonyError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
         print(f"{cli.NAME} hooks unread: the standing orders were not read: {e}", file=sys.stderr)

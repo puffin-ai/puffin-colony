@@ -244,6 +244,9 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
         ("UserPromptSubmit", None, unread_hook, "hooks unread"),
         ("SessionStart", None, dict(unread_hook), "hooks unread"),
     ]
+    from colony import boot  # the startup routine, the automatic handover, and the approvals hook (boot.py)
+
+    entries += boot.hook_entries(program)
     if not plugin:
         return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE")]
     # The repo's guard needs only its copied script, and its other hooks need its launcher.

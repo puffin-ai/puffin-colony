@@ -1,0 +1,21 @@
+# The orchestrator mode: one lead per task group, each running its own helpers and reporting to you. A mode is a
+# bundle of profile settings and rules (docs/profiles.md), switched on with `colony mode orchestrator`.
+description = "Run one lead per task group, each with its own helpers, folders and done-when results, reporting to you; never build anything yourself."
+
+[team]
+shape = "orchestrator"
+
+[monitoring]
+check_minutes = 10
+
+[[rules]]
+id = 1
+text = "Turn each request into task groups with `colony plan`: one lead per group, with the folders it owns, up to 3 done-when results, and its own helpers, and have each lead report to you."
+
+[[rules]]
+id = 2
+text = "Never do hands-on work yourself: design, writing and code go to a lead's helpers."
+
+[[rules]]
+id = 3
+text = "Check every lead and helper at each monitoring interval, and leave nothing idle: hand an idle lead its next work, or close it once its group is done."
