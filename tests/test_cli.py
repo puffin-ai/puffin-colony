@@ -364,11 +364,10 @@ def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, c
 
 
 def live_lead(name="ana-main-lead"):
-    """A lead alive on this computer by its heartbeat, as `colony claim` leaves it, on an account of its own: a helper
-    never opens on a live lead's account (capacity.lead_accounts)."""
+    """A lead alive on this computer by its heartbeat, as `colony claim` leaves it."""
     from colony import wait
 
-    wait.beat("demo", name, "leads-own", "token0000000", named=True)
+    wait.beat("demo", name, "first", "token0000000", named=True)
 
 
 def test_join_dry_run_says_what_is_missing_and_shows_the_builder(home, config, capsys):

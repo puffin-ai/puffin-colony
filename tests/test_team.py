@@ -219,14 +219,20 @@ def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch)
     assert capacity.lead_accounts(config, []) == {}
 
 
-def test_open_refuses_when_only_a_leads_own_account_has_room_and_names_the_setting(host, monkeypatch):
+def test_when_only_a_leads_own_account_has_room_helpers_share_it_with_one_warning(host, monkeypatch, capsys):
     config = load("[pool]\nmax_busy = 1\n")
     here = [running("builder-1", host.parent / "team"), running("builder-2", host.parent / "spare")]
     monkeypatch.setattr(presence, "everyone",
                         lambda config: ([presence.Status("ana-main-lead", "lead", account="main")], [], ""))
     monkeypatch.setattr(cli, "running_sessions", lambda config: here)
     args = argparse.Namespace(name="builder-3", person="ana", account=None, dry_run=True, here=False)
-    with pytest.raises(cli.ColonyError, match="main is ana-main-lead's own, kept for it .*share_lead_accounts = true"):
+    assert cli.open_builder(config, args) == 0 and args.account == "main"
+    out = capsys.readouterr().out
+    assert out.count("Warning: account main is ana-main-lead's own, and no other account has room") == 1
+    assert "at most 1 at once" in out and "put this one in [pool] reserve" in out
+    here.append(running("builder-3", host.parent / "main"))  # the lead's account at its lower cap: no more there
+    args.account = None
+    with pytest.raises(cli.ColonyError, match="main is ana-main-lead's own and runs 1 helpers, the most it takes"):
         cli.open_builder(config, args)
 
 
@@ -238,7 +244,8 @@ def test_colony_capacity_marks_the_account_kept_for_a_lead(host, monkeypatch, ca
     monkeypatch.setattr(cli, "running_sessions", lambda config: [])
     assert capacity.show(config, argparse.Namespace(person="ana", json=False)) == 0
     out = capsys.readouterr().out
-    assert "- main: 5h 10%" in out and "Kept for ana-main-lead, its own account: no helper opens here" in out
+    assert "- main: 5h 10%" in out and "Kept for ana-main-lead, its own account: a helper opens here only when no " \
+        "other account has room, at most 2 at once" in out
 
 
 # 83. Live usage before every placement
@@ -508,7 +515,43 @@ def test_a_short_span_of_the_weekly_window_makes_no_rate_and_an_unstarted_window
     assert forecast.risk_lines(config) == []
 
 
-def test_with_one_account_that_its_lead_runs_on_the_refusal_names_just_that(host):
-    config = load('[pool]\nreserve = ["team", "spare"]\n')
+def test_with_one_account_its_helpers_share_it_under_a_cap_one_lower(host):
+    """Most people have one AI account: its lead shares it with up to max_busy minus one helpers."""
+    config = load("[pool]\nmax_busy = 3\n")
+    config["people"]["ana"]["accounts"] = ["main"]  # main is the only account of ana's
+    leads = {"main": ["ana-main-lead"]}
+    name, _, why = capacity.place(config, ana(), {"main": {"builder-1"}}, leads)[0]
+    assert name == "main" and why.startswith(capacity.SHARED) and "helpers 1 of 2" in why
+    found, why = capacity.place(config, ana(), {"main": {"builder-1", "builder-2"}}, leads)
+    assert found is None and why.startswith("main is ana-main-lead's own and runs 2 helpers")
+    shared = load('[pool]\nshare_lead_accounts = true\n')
+    shared["people"]["ana"]["accounts"] = ["main"]
+    assert capacity.place(shared, ana(), {"main": {"builder-1", "builder-2"}}, leads)[0][0] == "main"  # the full cap
+
+
+def test_a_shared_lead_account_takes_a_helper_only_while_the_lead_keeps_room(host):
+    config = load()
+    config["people"]["ana"]["accounts"] = ["main"]
+    leads = {"main": ["ana-main-lead"]}
+    reading(host.parent / "main", five=75, week=10, five_resets_in=timedelta(hours=1))
+    # one helper and the lead at the 10% guess each: 20% an hour, from 75% to the lead's 85% in half an hour
+    found, why = capacity.place(config, ana(), {}, leads)
+    assert found is None and why.startswith(capacity.NO_FIT)
+    assert "would leave the lead less than 10% of its 5-hour window before it resets" in why
+    reading(host.parent / "main", five=40, week=10, five_resets_in=timedelta(hours=1))
+    assert capacity.place(config, ana(), {}, leads)[0][0] == "main"
+
+
+def test_the_pools_reserve_stays_strict_even_for_the_only_account(host):
+    config = load('[pool]\nreserve = ["main"]\n')
+    config["people"]["ana"]["accounts"] = ["main"]
     found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
-    assert found is None and why.startswith("main is ana-main-lead's own, kept for it")
+    assert found is None and why == capacity.AT_CAP
+
+
+def test_a_leads_own_account_out_of_room_takes_no_helper(host):
+    config = load()
+    config["people"]["ana"]["accounts"] = ["main"]
+    reading(host.parent / "main", five=97, week=10)
+    found, why = capacity.place(config, ana(), {}, {"main": ["ana-main-lead"]})
+    assert found is None and why.startswith("main is ana-main-lead's own account and out of room: wait for its reset")

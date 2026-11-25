@@ -22,4 +22,4 @@ text = "Check every lead and helper at each monitoring interval, and leave nothi
 
 [[rules]]
 id = 4
-text = "Never start a subagent to build or to run a task group: open each group's lead with `colony plan start`, and builders as helpers with `colony helpers <n> --open`, never on your own account. Run `colony capacity` before each wave and at least every 30 minutes."
+text = "Never start a subagent to build or to run a task group: open each group's lead with `colony plan start`, and builders as helpers with `colony helpers <n> --open`, which keeps your own account for you while another has room. Run `colony capacity` before each wave and at least every 30 minutes."

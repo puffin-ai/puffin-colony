@@ -12,7 +12,9 @@ of when each of its windows runs out, and whether one more helper fits before th
   (outlook).
 - **Fit.** Before a helper opens on an account, the pace with that helper there too: the account's own rate per
   helper, else the pool's average, else [pool] helper_rate. A helper that would run the account out more than
-  FIT_SLACK before a reset goes to another account, or waits for the reset (fits, next_reset).
+  FIT_SLACK before a reset goes to another account, or waits for the reset (fits, next_reset). On a lead's own
+  account, which helpers share only when no other account has room, the lead counts as one more busy session, and
+  the helpers must leave it LEAD_ROOM percent of each window until the window resets.
 - **Warnings.** The lead's wait says ahead of time, in plain words, when an account's helpers run it out before its
   reset, and how many helpers to move where (lead_part). It counts the helpers on this computer.
 
@@ -35,6 +37,7 @@ RATE_SPAN = {"five_hour": 60 * 60, "seven_day": 24 * 3600}  # how far back a win
 MIN_SPAN = {"five_hour": 15 * 60, "seven_day": 3 * 3600}  # two readings at least this far apart make a rate
 SAME_WINDOW = 10 * 60  # two readings whose resets differ by less than this read one window
 FIT_SLACK = 15 * 60  # running out less than this before a reset still fits
+LEAD_ROOM = 10.0  # percent of each window helpers leave a lead whose own account they share, until it resets
 OBSERVE_EVERY = 10 * 60  # how often the lead's wait takes a live reading and looks at the forecast
 SOON = 30 * 60  # an account that runs out within this long gets an urgent line
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 24 * 3600}
@@ -189,15 +192,21 @@ class Outlook:
     @property
     def short(self) -> bool:
         """Whether it runs out more than FIT_SLACK before it resets."""
-        return self.out is not None and self.out < self.resets - FIT_SLACK
+        return self.before(FIT_SLACK)
+
+    def before(self, slack: float) -> bool:
+        """Whether it runs out more than `slack` seconds before it resets."""
+        return self.out is not None and self.out < self.resets - slack
 
 
 def outlook(config: dict, name: str, window: str, helpers: int | None = None, now: float | None = None,
-            pool: capacity.Policy | None = None, held: dict | None = None, running: int | None = None) -> Outlook | None:
+            pool: capacity.Policy | None = None, held: dict | None = None, running: int | None = None,
+            lead: bool = False) -> Outlook | None:
     """A window's forecast, or None when the account has no reading of it. With `helpers` None, at the pace its
     readings show; else at the pace with that many helpers busy, where `running` helpers run on it now: its measured
     rate plus each helper more at the rate one helper uses (per_helper). The weekly window scales its own measured
-    rate by the helpers alone."""
+    rate by the helpers alone. With `lead`, the account is a lead's own: it fills to [pool] out_at less LEAD_ROOM, and
+    with no measured rate, which would hold the lead's own use, the lead counts as one more busy session."""
     now = time.time() if now is None else now
     pool = pool or capacity.policy(config)
     found = capacity.windows(config, name).get(window)
@@ -214,34 +223,42 @@ def outlook(config: dict, name: str, window: str, helpers: int | None = None, no
         counted = (measured.helpers if measured.helpers is not None else before) if measured is not None else 0
         if window == "five_hour":
             each, source = per_helper(config, name, held, pool)
+            sessions = helpers + (1 if lead and measured is None else 0)
             if each is not None:
-                rate = max(0.0, (measured.rate if measured else 0.0) + (helpers - counted) * each)
+                rate = max(0.0, (measured.rate if measured else 0.0) + (sessions - counted) * each)
         elif measured is not None and counted:
             rate = measured.rate * helpers / counted
-    out = None
-    if used >= pool.out_at:
+    out, ceiling = None, pool.out_at - (LEAD_ROOM if lead else 0.0)
+    if used >= ceiling:
         out = now
     elif rate and rate > 0:
-        out = now + (pool.out_at - used) / rate * 3600
+        out = now + (ceiling - used) / rate * 3600
     return Outlook(name, window, used, resets_at, rate, out, source, resets is not None)
 
 
-def fits(config: dict, name: str, helpers: int, pool: capacity.Policy | None = None,
-         now: float | None = None) -> tuple[bool, str]:
+def fits(config: dict, name: str, helpers: int, pool: capacity.Policy | None = None, now: float | None = None,
+         lead: bool = False) -> tuple[bool, str]:
     """Whether `helpers` busy helpers on an account last until each window resets, give or take FIT_SLACK, with a
-    short why. An account whose reading is missing or stale fits, since nothing says otherwise."""
+    short why. With `lead`, the account is a lead's own: the lead counts too, and the helpers must leave it LEAD_ROOM
+    percent of each window until the window resets, with no slack. An account whose reading is missing or stale fits,
+    since nothing says otherwise."""
     now = time.time() if now is None else now
     pool = pool or capacity.policy(config)
     if capacity.stale(config, name, pool, now) is not None:
         return True, ""
     held = history(config)
     for window in WINDOW_NAMES:
-        found = outlook(config, name, window, helpers, now, pool, held, running=helpers - 1)
-        if found is not None and found.short:
+        found = outlook(config, name, window, helpers, now, pool, held, running=helpers - 1, lead=lead)
+        if found is not None and found.before(0.0 if lead else FIT_SLACK):
+            if lead:
+                return False, (f"{plural(helpers, 'helper')} on {name}, its lead's own account, would leave the lead "
+                               f"less than {LEAD_ROOM:g}% of its {WINDOW_NAMES[window]} window before it resets at "
+                               f"{clock(found.resets, now)} ({found.used:g}% used"
+                               + (f", {found.rate:.0f}% an hour, by {found.source})" if found.rate else ")"))
             return False, (f"{plural(helpers, 'helper')} on {name} would run its {WINDOW_NAMES[window]} window out "
                            f"around {clock(found.out, now)}, before it resets at {clock(found.resets, now)} "
                            f"({found.rate:.0f}% an hour, by {found.source})")
-    five = outlook(config, name, "five_hour", helpers, now, pool, held, running=helpers - 1)
+    five = outlook(config, name, "five_hour", helpers, now, pool, held, running=helpers - 1, lead=lead)
     return True, (f"it lasts to its 5-hour reset at {clock(five.resets, now)} with them"
                   if five is not None and five.rate else "")
 
