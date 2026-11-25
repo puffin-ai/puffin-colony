@@ -100,13 +100,15 @@ def main_checkout(start: Path | None = None) -> Path | None:
 
 def exclude(line: str, start: Path | None = None) -> bool:
     """Add a line to the clone's own exclude file, <git common dir>/info/exclude, which every worktree reads and
-    nothing commits. Returns whether it added it."""
+    nothing commits. It appends the line when it is missing and never rewrites the file, so two commands at once never
+    lose the person's own lines (at worst the line shows twice). Returns whether it added it."""
     path = common_dir(start) / "info" / "exclude"
-    lines = path.read_text().splitlines() if path.exists() else []
-    if line in lines:
+    text = path.read_text() if path.exists() else ""
+    if line in text.splitlines():
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join([*lines, line]) + "\n")
+    with open(path, "a") as handle:
+        handle.write(("\n" if text and not text.endswith("\n") else "") + line + "\n")
     return True
 
 

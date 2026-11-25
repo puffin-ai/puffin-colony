@@ -397,6 +397,10 @@ def install(config: dict, args) -> int:
     guard into .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the
     same hooks."""
     root = cli.repo_root()
+    if not args.dry_run and config.get("project", {}).get("worktrees"):
+        from colony import folders  # setup's step: a worktrees folder inside the repo stays out of `git status`
+
+        folders.keep_out(config["project"]["worktrees"], folders.main_checkout(root))
     # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
     name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
     settings, guard = root / ".claude" / name, root / cli.DIR / "hooks" / GUARD

@@ -164,7 +164,6 @@ def load_config(path=None) -> dict:
     if project.get("worktrees") and not os.path.isabs(project["worktrees"]):  # such as ".worktrees", from the clone
         project["worktrees"] = portable.native(os.path.normpath((main or path.resolve().parent.parent)
                                                                 / project["worktrees"]))
-    folders.keep_out(project["worktrees"], main)  # a worktree inside the repo is never an uncommitted change
     folders.validate(config)
     return config
 

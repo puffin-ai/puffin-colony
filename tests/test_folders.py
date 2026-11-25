@@ -278,7 +278,9 @@ def test_worktrees_default_to_a_folder_inside_the_main_checkout_from_any_worktre
     (host / ".colony").mkdir()
     (host / ".colony" / "colony.toml").write_text(CONFIG.replace('worktrees = "~/trees"\n', ""))
     commit_all(host)
-    assert cli.load_config()["project"]["worktrees"] == str(host / ".worktrees")
+    config = cli.load_config()
+    assert config["project"]["worktrees"] == str(host / ".worktrees")
+    folders.ready(config)  # as `colony worktree add` does: it makes the folder and keeps it out of `git status`
     tree = host / ".worktrees" / "demo-builder-1-3"
     subprocess.run(["git", "-C", str(host), "worktree", "add", "-q", "-b", "b/3", str(tree)], check=True)
     monkeypatch.chdir(tree)
@@ -286,6 +288,34 @@ def test_worktrees_default_to_a_folder_inside_the_main_checkout_from_any_worktre
     assert "/.worktrees/" in (host / ".git" / "info" / "exclude").read_text().splitlines()
     status = subprocess.run(["git", "-C", str(host), "status", "--porcelain"], capture_output=True, text=True)
     assert status.stdout == ""
+
+
+def test_loading_the_config_writes_nothing_and_the_exclude_line_is_only_ever_appended(home, host, monkeypatch):
+    """Regression: every config load could rewrite .git/info/exclude whole, which first empties it, so two commands
+    starting at once could lose the person's own lines. Loading the config now writes nothing; folders.ready and
+    `colony hooks install` add the line, appending it when it is missing and never rewriting the file."""
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG.replace('worktrees = "~/trees"\n', ""))
+    commit_all(host)
+    exclude = host / ".git" / "info" / "exclude"
+    exclude.write_text("# the person's own\n*.local\nbuild/")  # no newline at its end
+    config = cli.load_config()
+    assert exclude.read_text() == "# the person's own\n*.local\nbuild/"
+    monkeypatch.setattr(folders.Path, "write_text", lambda *args, **kwargs: pytest.fail("the file was rewritten"))
+    folders.ready(config)
+    assert exclude.read_text() == "# the person's own\n*.local\nbuild/\n/.worktrees/\n"
+    folders.ready(config)
+    assert exclude.read_text().count("/.worktrees/") == 1
+
+
+def test_hooks_install_keeps_the_worktrees_folder_out_of_git_status(home, host):
+    from colony import guards
+
+    (host / ".colony").mkdir()
+    (host / ".colony" / "colony.toml").write_text(CONFIG.replace('worktrees = "~/trees"\n', ""))
+    commit_all(host)
+    assert guards.install(cli.load_config(), argparse.Namespace(dry_run=False)) == 0
+    assert "/.worktrees/" in (host / ".git" / "info" / "exclude").read_text().splitlines()
 
 
 def test_worktree_add_makes_one_inside_the_folder_and_refuses_a_name_that_leaves_it(home, host, capsys):
