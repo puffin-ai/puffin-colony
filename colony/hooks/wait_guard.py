@@ -1343,8 +1343,9 @@ STDIN_REFUSAL = ("a shell on this line reads its script on standard input from s
 def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
     """A line's simple commands as sequence() splits them, each with what a redirection gives its standard input,
     descriptor 0: the file after a `<`, or "<<" for what the guard can't read as a file, a here-document, a
-    here-string or a copy of another descriptor (`<&`), else ""; and the operator before it, such as | for a command
-    fed by a pipe. A redirection of any other descriptor, such as `3< file` or `2> file`, leaves standard input be."""
+    here-string, a copy of another descriptor (`<&3`, `0>&3`) or any other operator on descriptor 0, else ""; and the
+    operator before it, such as | for a command fed by a pipe. A redirection of any other descriptor, such as
+    `3< file` or `2> file`, leaves standard input be."""
     found: list[tuple[list[str], str, str]] = []
     words: list[str] = []
     given, before, skip, stdin = "", "", "", False
@@ -1356,7 +1357,9 @@ def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
         elif token in REDIRECTIONS or token.startswith("<<"):
             descriptor = int(words.pop()) if words and words[-1].isdigit() else None
             skip = token
-            stdin = token.startswith("<") and descriptor in (None, 0)
+            # Standard input changes when the redirection targets descriptor 0: any operator that names it, such as
+            # `0>&3`, and an input one that names none. Only a plain `<` gives a file the guard can read.
+            stdin = descriptor == 0 or (descriptor is None and token.startswith("<"))
         elif token and set(token) <= PUNCTUATION:
             if words:
                 found.append((words, given, before))
