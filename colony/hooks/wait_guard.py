@@ -1258,14 +1258,19 @@ def file_bytes(name: str, cwd: str) -> bytes | None:
 
 
 def json_strings(value) -> list[str]:
-    """Every string in a JSON value, its keys too, with its escapes decoded."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [text for key, item in value.items() for text in (str(key), *json_strings(item))]
-    if isinstance(value, list):
-        return [text for item in value for text in json_strings(item)]
-    return []
+    """Every string in a JSON value, its keys too, with its escapes decoded. It walks with a stack of its own, so no
+    nesting can exhaust Python's."""
+    found, stack = [], [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            found.append(item)
+        elif isinstance(item, dict):
+            found += [str(key) for key in item]
+            stack += item.values()
+        elif isinstance(item, list):
+            stack += item
+    return found
 
 
 def graphql_source(option: str, value: str) -> str | None:
@@ -1328,7 +1333,7 @@ def api_merge(arguments: list[str], cwd: str = "") -> str:
         if given == "--input":  # a JSON body, whose \\u escapes GitHub decodes: read every string as GitHub will
             try:
                 text = "\n".join(json_strings(json.loads(text)))
-            except ValueError:
+            except (ValueError, RecursionError):  # not JSON, or nested past what Python's reader follows
                 return (f"`gh api graphql` sends {source} as its body, which the guard can't read as JSON, so it "
                         "can't check that the query merges nothing")
         if GRAPHQL_MERGE.search(text):
@@ -1807,7 +1812,8 @@ def plain_line(command: str, kind: str, pattern: re.Pattern) -> str:
 def main() -> int:
     """Read the hook's call from stdin: exit 2 with the reasons for a foreground wait, a push that rewrites a protected
     branch, a merge or push the person hasn't allowed, or a kill by name or pattern, else 0. A GitHub tool's call,
-    which Claude Code sends here too, is read for a merge alone."""
+    which Claude Code sends here too, is read for a merge alone. A call the guard can't read runs; an error while it
+    checks one it could read refuses it, since Claude Code runs a call whose hook fails any other way."""
     try:
         call = json.load(sys.stdin)
         tool_input = call["tool_input"]
@@ -1815,17 +1821,28 @@ def main() -> int:
             raise TypeError("the input is not an object")
         tool = str(call.get("tool_name") or "Bash")
         cwd = str(call.get("cwd") or os.getcwd())
-        if tool.startswith("mcp__"):
-            merged = tool_merges(tool, tool_input, cwd)
-            if merged:
-                sys.stderr.write(MERGE_REFUSAL.format(reason="; ".join(dict.fromkeys(merged))) + "\n")
-                return 2
-            return 0
-        command = tool_input["command"]
+        command = tool_input.get("command") if not tool.startswith("mcp__") else ""
         if not isinstance(command, str):
             raise TypeError("the command is not text")
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         return 0  # a call the guard can't read runs, and Claude Code's own checks still apply to it
+    try:
+        return check(tool, tool_input, cwd, command)
+    except Exception as e:  # a bug or a surprise in the guard: refuse, never let the call through unchecked
+        sys.stderr.write(f"guard: refused, the guard could not check this call ({type(e).__name__}: "
+                         f"{str(e)[:200]}). Run it again on a line of its own; if it keeps happening, ask your "
+                         "person.\n")
+        return 2
+
+
+def check(tool: str, tool_input: dict, cwd: str, command: str) -> int:
+    """The checks of one call main read: 2 with the reasons on stderr when a guard refuses it, else 0."""
+    if tool.startswith("mcp__"):
+        merged = tool_merges(tool, tool_input, cwd)
+        if merged:
+            sys.stderr.write(MERGE_REFUSAL.format(reason="; ".join(dict.fromkeys(merged))) + "\n")
+            return 2
+        return 0
     rewrites: list[str] = []
     merged: list[str] = []
     killed: list[str] = []

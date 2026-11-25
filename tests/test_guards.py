@@ -632,6 +632,28 @@ def test_a_graphql_input_body_is_read_as_json_with_its_escapes_decoded(body, hos
     assert merge_refused(run, "`gh api graphql`"), run.stderr
 
 
+def test_a_graphql_input_body_nested_past_pythons_limit_is_refused(hosted, tmp_path):
+    """Regression: a body nested deeper than Python's recursion limit raised RecursionError, which crashed the guard
+    with exit 1, and Claude Code runs a call whose hook fails that way."""
+    (hosted / "body.json").write_text("[" * 100000 + "]" * 100000)
+    run = push_guard("gh api graphql --input body.json", hosted, path=github(tmp_path / "gh"))
+    assert merge_refused(run, "`gh api graphql`"), (run.returncode, run.stderr[-300:])
+
+
+def test_an_error_inside_the_guard_refuses_the_call_never_lets_it_run(hosted):
+    """Regression: an error the guard didn't expect while it checked a call ended it with exit 1, which Claude Code
+    takes as a hook that failed, and runs the call anyway. Any such error now refuses the call, exit 2."""
+    script = (f"import importlib.util, sys\n"
+              f"spec = importlib.util.spec_from_file_location('g', {str(GUARD)!r})\n"
+              "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)\n"
+              "def broken(*args, **kwargs): raise RuntimeError('a bug')\n"
+              "g.pushes = broken\n"
+              "sys.exit(g.main())\n")
+    call = json.dumps({"cwd": str(hosted), "tool_input": {"command": "git push origin HEAD:refs/heads/ana/login"}})
+    run = subprocess.run([sys.executable, "-c", script], input=call, capture_output=True, text=True)
+    assert run.returncode == 2 and "the guard could not check this call" in run.stderr, run.stderr
+
+
 def test_a_graphql_query_from_a_file_without_a_merge_runs(hosted, tmp_path):
     (hosted / "issues.graphql").write_text("query { repository(owner: \"acme\", name: \"demo\") { id } }")
     (hosted / "body.json").write_text(json.dumps({"query": "query { viewer { login } }"}))
