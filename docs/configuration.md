@@ -140,6 +140,13 @@ How lines travel between sessions. See [messages.md](messages.md).
 | --- | --- | --- | --- |
 | `board` | no | `12` | Hack only. The number of the pinned `Board: <project>` issue, which setup opens and pins. Every line goes there instead of to cards. |
 | `lead_digest_minutes` | no | `10` | How long the lead's wait gathers lines before it prints them as a digest. A line that can't wait prints at once: `urgent:`, `blocked:` and `question:` lines, your lines, and `done` for a card the batch waits on. |
+| `max_line` | no | `300` | The most characters a line's sentence holds. A longer note goes as a file, with `--attach`. Default 300. |
+| `start_ack_minutes` | no | `10` | How long a lead's `start:` line waits for the helper's wait to acknowledge it before it goes again. `0` asks for no acknowledgement. Default 10. |
+| `start_resends` | no | `2` | How many times an unacknowledged start line goes again before the lead hears it at once. Default 2. |
+| `nudge` | no | `"auto"` | When `colony post` and `colony say` nudge the recipient's cmux workspace on this computer: `"off"`, `"auto"` for a recipient whose wait isn't running here, or `"always"`. `--nudge` nudges once whatever it says. Default `"off"`. |
+| `redeliver_minutes` | no | `60` | After a compaction or a restart, how far back the SessionStart hook shows the lines a session was shown and hasn't acknowledged with `colony ack`. `0` shows none. Default 60. |
+| `check_names` | no | `true` | Refuse a line for a name no learned, live or registered session has. Default true. |
+| `refuse_local_paths` | no | `true` | Refuse a line that names a path on this computer, such as `/tmp/x.md`, which a session on another computer can't read. Default true. |
 
 ## `[people]`
 

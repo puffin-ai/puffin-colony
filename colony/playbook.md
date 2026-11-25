@@ -45,6 +45,12 @@ The lead sends a builder only these three:
 
 Progress never goes in a line: it goes in the board's fields, which wake no one.
 
+Getting every line through:
+- When your agent tool streams a running command's output, as Claude Code's Monitor tool does, start `colony wait --follow` there once: it prints each line as it comes and never exits on its lines. Otherwise start `colony wait` in the background, as below.
+- Keep one wait. A new one stops the older one for your session by itself; `colony waits` lists the waits on this computer, and `colony waits --stop <pid>` stops one by its exact id. Never stop a wait any other way.
+- Once you have acted on the lines shown to you, run `colony ack`. After a compaction or a restart, the lines you haven't acknowledged show again; check each before you act on it.
+- A note too long for a line, or a file, goes with `--attach <file>`, never as a path on your computer, which other computers can't read.
+
 A builder's wait returns on the first line from its lead. The lead's wait gathers lines and returns them every `lead_digest_minutes` (default 10), and at once on `urgent:`, `blocked:`, `question:`, a person's line, or a waited-on `done`. The lead's wait also adds a `stale:` line for each card In progress whose Last update on the board is over 2.5 hours old.
 
 Leads talk to each other on the issue `Colony: coordination`, each by its claimed name, such as `ana-main-lead`: `colony say sam-web-lead "<sentence>"`. Lead-to-lead lines, and the lead's lines for `@<login>` or `@all`, are free text. A sentence is at most 300 characters, not counting what Colony adds around it, and several sentences in one `colony post` or `colony say` go out together as one comment. Use them to ask another lead, hand work across, or warn before a merge into `{base}` (start that one `urgent:`). The lead's wait reads it too, by the same rules. The coordination issue and each Needs issue close at 200 comments, with a summary of their open items, and a fresh one with the same title goes on: posting checks it, and `colony tidy` does too.

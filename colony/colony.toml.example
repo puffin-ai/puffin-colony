@@ -66,6 +66,13 @@ use_api_key = false                # true lets sessions bill ANTHROPIC_API_KEY i
 
 [messages]
 lead_digest_minutes = 10           # the lead reads gathered lines this often; urgent, blocked, questions and your lines come at once
+# max_line = 300                   # the most characters in a line's sentence; a longer note goes with --attach <file>
+# start_ack_minutes = 10           # a start line goes again when the helper's wait hasn't acknowledged it by then; 0 for none
+# start_resends = 2                # sends of an unacknowledged start line before the lead hears it at once
+# nudge = "off"                    # "auto" types a pointer into an idle recipient's cmux workspace on this computer; or "always"
+# redeliver_minutes = 60           # after a compaction or restart, show the unacknowledged lines from this far back
+# check_names = true               # refuse a line for a name no session has
+# refuse_local_paths = true        # refuse a line naming a path on this computer, which other computers can't read
 
 [people]
 logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once
