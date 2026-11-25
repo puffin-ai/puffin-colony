@@ -194,7 +194,29 @@ KILL_REFUSAL = ("kill guard: refused, {reason}. A kill by name or pattern can en
 
 # The merge guard
 SAFETY = "safety"  # the colony.toml table that holds merge_into and protect
-GH_TIMEOUT = 20  # seconds the guard gives `gh pr view` to say which branch a pull request merges into
+GH_TIMEOUT = 10  # seconds the guard gives one GitHub read, such as `gh pr view` naming a pull request's branch
+# The guard's own limit on one call's checks, in seconds. Claude Code runs a call whose hook it stops at the hook's
+# timeout (guards.GUARD_TIMEOUT, set above this), so the guard keeps its own: past it, a read gets no more time, and
+# the call is refused (OutOfTime). A merge's four GitHub reads fit inside it. COLONY_GUARD_DEADLINE may only shorten it.
+DEADLINE = 50
+STARTED = time.monotonic()
+
+
+class OutOfTime(Exception):
+    """The guard's checks of one call ran past its deadline (time_left)."""
+
+
+def time_left(limit: float) -> float:
+    """The seconds a read may take: `limit`, or what is left of the guard's deadline when that is less. Raises
+    OutOfTime when nothing is left, so the call is refused rather than let through by Claude Code's own timeout."""
+    try:
+        deadline = min(DEADLINE, max(0.0, float(os.environ.get("COLONY_GUARD_DEADLINE", DEADLINE))))
+    except ValueError:
+        deadline = DEADLINE
+    left = deadline - (time.monotonic() - STARTED)
+    if left <= 0:
+        raise OutOfTime(f"its checks took more than {deadline:g} seconds")
+    return min(limit, left)
 HOLDS_REF = "refs/colony/holds"  # origin's merge freeze and red holds, which `colony freeze` and `colony health` keep
 PR_MERGE_VALUE_OPTIONS = {"-t", "--subject", "-b", "--body", "-F", "--body-file", "--match-head-commit", "-A",
                           "--author-email"}
@@ -725,7 +747,7 @@ def current_branch(cwd: str) -> str:
     """The branch checked out in cwd, or "" when git can't say."""
     try:
         run = subprocess.run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=cwd or None,
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return ""
     return run.stdout.strip() if run.returncode == 0 else ""
@@ -735,7 +757,7 @@ def default_branch(cwd: str) -> str:
     """The repo's default branch, origin's HEAD as git remembers it, else main."""
     try:
         run = subprocess.run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], cwd=cwd or None,
-                             capture_output=True, text=True, timeout=5)
+                             capture_output=True, text=True, timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return "main"
     found = run.stdout.strip().removeprefix("refs/remotes/origin/") if run.returncode == 0 else ""
@@ -781,7 +803,7 @@ def committed_toml(cwd: str, branches: list[str]) -> str | None:
         try:
             run = subprocess.run(["git", "--no-replace-objects", "show",
                                   f"refs/remotes/origin/{branch}:.colony/colony.toml"],
-                                 cwd=cwd or None, capture_output=True, text=True, timeout=5)
+                                 cwd=cwd or None, capture_output=True, text=True, timeout=time_left(5))
         except (OSError, subprocess.SubprocessError):
             return None
         if run.returncode == 0:
@@ -825,7 +847,7 @@ def remote_url(cwd: str, remote: str, push: bool = True) -> str:
     argv = (["git", "remote", "get-url", *(["--push"] if push else []), remote] if named
             else ["git", "ls-remote", "--get-url", remote])
     try:
-        run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=5)
+        run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return ""
     return run.stdout.strip().splitlines()[0] if run.returncode == 0 and run.stdout.strip() else ""
@@ -856,7 +878,7 @@ def host_toml(host: str, repo: str, ref: str = "") -> str | None:
     argv = ["gh", "api", *(["--hostname", host] if host and host != "github.com" else []),
             "-H", "Accept: application/vnd.github.raw", path]
     try:
-        run = subprocess.run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
+        run = subprocess.run(argv, capture_output=True, text=True, timeout=time_left(GH_TIMEOUT))
     except (OSError, subprocess.SubprocessError):
         return None
     return run.stdout if run.returncode == 0 else None
@@ -938,7 +960,7 @@ def git_alias(name: str, cwd: str, overrides: list[tuple[str, str | None]]) -> s
             return "" if value is None else value
     try:
         run = subprocess.run(["git", "config", "--get", f"alias.{name}"], cwd=cwd or None, capture_output=True,
-                             text=True, timeout=5)
+                             text=True, timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return None
     return run.stdout.strip() if run.returncode == 0 else None
@@ -1061,7 +1083,7 @@ def fed(arguments: list[str], program: str, known: frozenset[str], words: set[st
 def remotes(cwd: str) -> list[str]:
     """The remotes this clone names, as `git remote` lists them."""
     try:
-        run = subprocess.run(["git", "remote"], cwd=cwd or None, capture_output=True, text=True, timeout=5)
+        run = subprocess.run(["git", "remote"], cwd=cwd or None, capture_output=True, text=True, timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return []
     return run.stdout.split() if run.returncode == 0 else []
@@ -1071,7 +1093,7 @@ def git_config(cwd: str, key: str) -> list[str]:
     """Every value git config holds for a key here, or ["?"] when git can't say, which counts as one."""
     try:
         run = subprocess.run(["git", "config", "--get-all", key], cwd=cwd or None, capture_output=True, text=True,
-                             timeout=5)
+                             timeout=time_left(5))
     except (OSError, subprocess.SubprocessError):
         return ["?"]
     return run.stdout.split("\n")[:-1] if run.returncode == 0 else [] if run.returncode == 1 else ["?"]
@@ -1250,7 +1272,7 @@ def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str, str]:
     argv = ["gh", "pr", "view", *([target] if target else []), *(["--repo", repo] if repo else []),
             "--json", "baseRefName,url,headRefName", "--jq", '.baseRefName + " " + .url + " " + .headRefName']
     try:
-        run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=GH_TIMEOUT)
+        run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=time_left(GH_TIMEOUT))
     except (OSError, subprocess.SubprocessError):
         return "", "", ""
     words = run.stdout.split() if run.returncode == 0 else []
@@ -1264,7 +1286,7 @@ def host_json(host: str, path: str) -> tuple[object, bool]:
     it has no such thing (HTTP 404), or (None, False) when it can't be read."""
     argv = ["gh", "api", *(["--hostname", host] if host and host != "github.com" else []), path]
     try:
-        run = subprocess.run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
+        run = subprocess.run(argv, capture_output=True, text=True, timeout=time_left(GH_TIMEOUT))
     except (OSError, subprocess.SubprocessError):
         return None, False
     if run.returncode:
@@ -2038,7 +2060,7 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False, variabl
 def gh_alias(name: str, cwd: str) -> str | None:
     """What a gh alias stands for, from `gh alias list`, or None when `name` is no alias."""
     try:
-        run = subprocess.run(["gh", "alias", "list"], cwd=cwd or None, capture_output=True, text=True, timeout=10)
+        run = subprocess.run(["gh", "alias", "list"], cwd=cwd or None, capture_output=True, text=True, timeout=time_left(10))
     except (OSError, subprocess.SubprocessError):
         return None
     for line in run.stdout.splitlines() if run.returncode == 0 else []:
@@ -2333,6 +2355,10 @@ def main() -> int:
         return 0
     try:
         return check(tool, tool_input, cwd, command)
+    except OutOfTime as e:
+        sys.stderr.write(f"guard: refused, {e}, mostly waiting on GitHub, so it could not check this call in time. "
+                         "Run it again; when GitHub is slow, wait a minute first.\n")
+        return 2
     except Exception as e:  # a bug or a surprise in the guard: refuse, never let the call through unchecked
         sys.stderr.write(f"guard: refused, the guard could not check this call ({type(e).__name__}: "
                          f"{str(e)[:200]}). Run it again on a line of its own; if it keeps happening, ask your "

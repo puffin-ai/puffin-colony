@@ -2140,3 +2140,36 @@ def test_a_plain_line_names_exactly_one_push_merge_or_kill_at_its_start(on_featu
                          ("GIT_TRACE=1 git push origin HEAD:refs/heads/ana/login", "words before it")):
         run = push_guard(command, on_feature)
         assert run.returncode == 2 and why in run.stderr, (command, run.stderr)
+
+
+# The guard's time limit
+
+
+def test_the_guards_hook_waits_longer_than_the_guards_own_deadline_and_a_merges_reads_fit_inside_it():
+    """Audit (seen but not reported, a): the guard's hook entry set no timeout, and a merge's four GitHub reads, at
+    20 seconds each, could outlast Claude Code's default, which runs a call whose hook times out. The hook now waits
+    GUARD_TIMEOUT, above the guard's own deadline, and the four reads fit inside that deadline."""
+    guard = guard_module()
+    assert 4 * guard.GH_TIMEOUT < guard.DEADLINE < guards.GUARD_TIMEOUT - 10
+    entries = [hook for event, matcher, hook, _ in guards.hook_entries() if matcher == guards.GUARD_MATCHER]
+    assert entries and all(hook["timeout"] == guards.GUARD_TIMEOUT for hook in entries)
+    plugin = [hook["timeout"] for entry in guards.plugin_hooks()["hooks"]["PreToolUse"]
+              if entry.get("matcher") == guards.GUARD_MATCHER for hook in entry["hooks"]]
+    assert plugin == [guards.GUARD_TIMEOUT]
+
+
+def test_a_merge_whose_github_reads_outlast_the_guards_deadline_is_refused_in_time(hosted, tmp_path, monkeypatch):
+    """A GitHub that never answers can't hold the guard past its deadline: each read gets only the time left, and a
+    call the guard can't finish checking in time is refused, never let through by Claude Code's timeout."""
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV)
+    executable(tmp_path / "slow" / "gh", "#!/bin/sh\nexec sleep 30\n")
+    monkeypatch.setenv("COLONY_GUARD_DEADLINE", "2")
+    started = time.monotonic()
+    run = push_guard("gh pr merge 5", hosted, path=str(tmp_path / "slow"))
+    assert run.returncode == 2 and time.monotonic() - started < 15, run.stderr
+    monkeypatch.setenv("COLONY_GUARD_DEADLINE", "0.001")
+    run = push_guard("gh pr merge 5", hosted, path=str(tmp_path / "slow"))
+    assert run.returncode == 2 and run.stderr.startswith("guard: refused, its checks took more than 0.001 seconds")
+    assert push_guard("ls", hosted).returncode == 0  # a call that needs no reads runs
+    monkeypatch.setenv("COLONY_GUARD_DEADLINE", "9999")  # it may only shorten the deadline
+    assert guard_module().time_left(1e6) <= guard_module().DEADLINE

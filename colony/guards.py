@@ -42,6 +42,9 @@ ERROR_CODE = re.compile(r"[a-z_]{1,40}")
 UNREAD_EVERY = 30  # with no wait running, the prompt hook reads GitHub itself at most once per 30 seconds
 WAIT_FRESH = 60  # a wait whose last poll is under a minute old is running, and the prompt hook leaves GitHub to it
 HOOK_TIMEOUT = 20  # seconds Claude Code gives the prompt hook before it goes on without it
+# Seconds Claude Code gives the wait guard. Claude Code runs a call whose hook runs past its timeout, so this sits
+# above the guard's own deadline (wait_guard.DEADLINE), past which the guard refuses the call itself.
+GUARD_TIMEOUT = 90
 OUTBOX = "outbox"  # ~/.colony/<project>/outbox.json: the hooks' lines that failed to post, oldest first
 WATCHDOG_ENV = "CLAUDE_CODE_RETRY_WATCHDOG"
 WATCHDOG_EVERY = 24 * 3600  # the prompt hook says a session runs without the watchdog at most once a day
@@ -247,7 +250,8 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
     agents = f"colony/hooks/{AGENT_GUARD}" if plugin else f"{cli.DIR}/hooks/{AGENT_GUARD}"
     entries = [
-        ("PreToolUse", GUARD_MATCHER, {"type": "command", "command": python_command(guard, root=root)}, guard),
+        ("PreToolUse", GUARD_MATCHER, {"type": "command", "command": python_command(guard, root=root),
+                                        "timeout": GUARD_TIMEOUT}, guard),
         ("PreToolUse", AGENT_MATCHER, {"type": "command", "command": python_command(agents, root=root)}, agents),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking", program), "async": True}, "hooks asking"),
