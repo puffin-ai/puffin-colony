@@ -858,6 +858,8 @@ def executable(path: Path, text: str) -> Path:
     "make && ./build/tool",
     "cd scripts && ./check.sh",  # a script read from the folder the cd names
     ".colony/bin/colony status",  # Colony's own launcher, run by its path
+    "pnpm install && ./node_modules/.bin/vitest run",  # a launcher after a build tool
+    "rm -rf coverage && ./node_modules/.bin/vitest run",  # a launcher after a command that writes no file
 ])
 def test_ordinary_build_and_test_lines_run(command, on_feature):
     """Regression (audit, Job B finding 1): the script check read node files, tool launchers and programs not yet
@@ -976,6 +978,42 @@ def test_a_launchers_variables_and_writes_are_read_flow_safely(text, on_feature,
     executable(on_feature / "launch.sh", text.format(here=on_feature))
     run = push_guard("./launch.sh", on_feature)
     assert run.returncode == 2, run.stderr
+
+
+@pytest.mark.parametrize("command, text", [
+    # A typed line's $0 is the shell's: its dirname is no launcher's folder.
+    ('basedir=$(dirname "$0")\nsort -o node push.sh\nchmod +x node\n"$basedir/node"', ""),
+    # Bindings the guard doesn't count: printf -v, an array element, a nameref, a function standing in for dirname.
+    ("bash launch.sh", 'X={safe}\nprintf -v X %s {evil}\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'E={evil}\nX={safe}\nX[0]=$E\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'X={safe}\ndeclare -n R=X\nR={evil}\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'dirname() {{ echo {evil}/x; }}\nhere=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    # A variable the shell sets itself, such as PWD after a cd, never comes from the guard's own environment.
+    ('cd {evil} && bash "$PWD/run.sh"', ""),
+    # A write by a program the guard didn't list, or earlier on the line that runs the launcher, can make its node.
+    ("sort -o node_modules/.bin/node push.sh && chmod +x node_modules/.bin/node && ./node_modules/.bin/vitest run", ""),
+    ("cp push.sh node_modules/.bin/node && ./node_modules/.bin/vitest run", ""),
+    # A file that is a launcher but for its lines that write the interpreter gets no launcher's leave.
+    ("./node_modules/.bin/vitest run", 'sort -o "$basedir/node" "$basedir/../../push.sh"\nchmod +x "$basedir/node"\n'),
+])
+def test_the_launcher_leave_and_variables_fail_closed(command, text, on_feature, monkeypatch):
+    """Regression (security review of 70bb363): a typed line's dirname "$0" passed as a launcher's folder; printf -v,
+    an array element, a nameref or a function bound a variable the guard read as bound once; PWD came from the guard's
+    own environment; and a write by a program the guard didn't list, or on the line that ran the launcher, made the
+    interpreter a launcher runs. A missing interpreter now passes only in npm's or pnpm's launcher, line for line,
+    with nothing earlier on the line that may write a file."""
+    safe, evil = on_feature / "safe", on_feature / "evil"
+    executable(safe / "run.sh", "#!/bin/sh\necho harmless\n")
+    executable(evil / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(evil / "x" / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "push.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "run.sh", "#!/bin/sh\necho harmless\n")  # what the launch folder's own run.sh holds
+    launcher = PNPM_LAUNCHER.replace("if [ -x", f"{text}if [ -x") if command.startswith("./") else PNPM_LAUNCHER
+    executable(on_feature / "node_modules" / ".bin" / "vitest", launcher)
+    executable(on_feature / "launch.sh", text.format(safe=safe, evil=evil))
+    monkeypatch.setenv("PWD", str(safe))
+    run = push_guard(command.format(evil=evil), on_feature)
+    assert run.returncode == 2, (command, run.stderr)
 
 
 @pytest.mark.parametrize("command", [

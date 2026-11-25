@@ -1495,10 +1495,7 @@ KNOWN_PROGRAMS = re.compile(r"^(?:node|nodejs|deno|bun|tsx|ts-node|python[0-9.]*
                             r"|php[0-9.]*|java|lua[0-9.]*|luajit|Rscript|julia|elixir|erl|escript|osascript"
                             r"|tclsh[0-9.]*|swift|kotlin|scala|groovy|guile|racket|sbcl)$")
 SINKS = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"}  # outputs that write no file
-# Programs that write files, and so could make the program a later command runs (scripts, shell_segments).
-WRITERS = {"cp", "mv", "ln", "install", "tee", "dd", "curl", "wget", "touch", "rsync", "tar", "unzip", "gunzip",
-           "cpio", "ditto", "scp", "patch", "git", "python", "python3", "node", "perl", "ruby"}
-# Interpreters a launcher runs by a path the guard can't name, such as pnpm's "$basedir/node": each is a program.
+# Interpreters an npm or pnpm launcher runs, from its own folder when the file is there (node_launcher).
 INTERPRETERS = {"node", "nodejs", "python", "python3", "python2", "deno", "bun", "ruby", "perl", "php", "java",
                 "lua", "Rscript", "julia", "elixir", "erl"}
 # Programs that build other programs: a program run by its path that doesn't exist yet is one of theirs when one of
@@ -1541,7 +1538,7 @@ def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str,
     descriptor 0: the file after a `<`, or "<<" for what the guard can't read as a file, a here-document, a
     here-string, a copy of another descriptor (`<&3`, `0>&3`) or any other operator on descriptor 0, else ""; the
     operator before it, such as | for a command fed by a pipe; the folder it runs in, or "" when the guard can't
-    name it; and whether it writes a file, by a writer program (WRITERS, `sed -i`) or an output redirection to a
+    name it; and whether it may write a file, by its program (writer) or an output redirection to a
     file. It follows a cd or pushd to a folder named in full, logically, as the shell does, and a ( ) group's own; a
     cd with no folder or ~, one where the line or this computer sets CDPATH or the line sets HOME, a popd, or a
     wrapper's -C or --chdir leaves the folder unknown. A redirection of any other descriptor, such as `3< file` or
@@ -1609,44 +1606,61 @@ def moves_folder(words: list[str]) -> bool:
     return any(moving_word(word) for word in command_parts(words)[0])
 
 
+# Commands that write no file and run no other command (writer). Any command not listed may write one, so an earlier
+# command on a line may have made the program a later one runs.
+KEEPS_FILES = {"cd", "pushd", "popd", "echo", "printf", "test", "[", "[[", "true", "false", ":", "dirname",
+               "basename", "uname", "pwd", "exit", "export", "unset", "ls", "cat", "grep", "rm", "rmdir", "mkdir",
+               "chmod", "which", "type", "sleep", "wait", "date"}
+
+
 def writer(words: list[str]) -> bool:
-    """Whether a simple command may write files: a writer program (WRITERS, `sed -i`), or one whose work the guard
-    can't see from its words: a shell, eval, source, a wrapper, or a program run by its path."""
+    """Whether a simple command may write a file: every command but one KEEPS_FILES lists, and any whose words run a
+    command of their own, such as a quoted $(...) or `...`. A command the guard doesn't know counts as a write."""
+    if any(mark in word for word in words for mark in ("$(", "`", "<(", ">(")):
+        return True
     program = run_program(words)
-    name = PurePath(program[0]).name if program else ""
-    wrapped = bool(words) and PurePath(words[0]).name in WRAPPERS
-    return (name in WRITERS or (name == "sed" and any(word.startswith("-i") for word in program[1:])) or wrapped
-            or is_shell(name) or name == "eval" or name in SCRIPT_SOURCES or (bool(program) and "/" in program[0]))
+    return bool(program) and PurePath(program[0]).name not in KEEPS_FILES
 
 
 class Variables(NamedTuple):
-    """What a script's text binds: the values the guard can follow (`values`), which of them name the launcher's own
-    folder (`launchers`), and every name the text binds in any way (`bound`)."""
+    """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`), and
+    whether it holds something that may bind any name unseen (`opaque`, REBINDS)."""
 
     values: dict
-    launchers: frozenset
     bound: frozenset
+    opaque: bool = False
 
 
 NAME_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-LAUNCHER_FOLDER = re.compile(r'\$\(dirname\s+"?(?:\$0|\$\(echo\s+"\$0"\s*\|\s*sed\s[^)]*\))"?\)')
+SCRIPT_FOLDER = re.compile(r'\$\(dirname\s+"?(?:\$0|\$\(echo\s+"\$0"\s*\|\s*sed\s[^)]*\))"?\)')
 PLAIN_VALUE = re.compile(r"""[^\s$`'";|&()<>]+|'[^']*'|"[^"$`\\]*\"""")
-# npm's and pnpm's launchers turn their own folder into a Windows path on Windows alone: a line that binds nothing here.
-CYGPATH = re.compile(r'(?<![\w$])([A-Za-z_][A-Za-z0-9_]*)=(?:`cygpath -w "\$\1"`|\$\(cygpath -w "\$\1"\))')
-BINDERS = re.compile(r"\b(?:read|export|local|declare|typeset|readonly|unset|getopts|mapfile|readarray)\b([^;\n|&]*)")
+BINDERS = re.compile(r"\b(?:read|export|readonly|unset|getopts|mapfile|readarray|vared|zparseopts)\b([^;\n|&]*)")
+# What may bind a variable in a way script_variables doesn't count, or stand in for a command a value comes from: eval,
+# source or ., an alias or a function (one named dirname, say), declare, typeset or local (a nameref among them),
+# printf -v, let, arithmetic, ${NAME=value}, an array element, select and coproc. A text that holds any of them
+# resolves no variable at all.
+REBINDS = re.compile(r"\b(?:eval|source|alias|function|declare|typeset|local|let|select|coproc)\b"
+                     r"|printf\b[^;\n|&]*\s-v|(?:^|[;&|(\s])\.\s|[\w-]+\s*\(\s*\)|\(\("
+                     r"|\$\{[A-Za-z_]\w*:?=|[A-Za-z_]\w*\[[^\]\n]*\]\+?=", re.M)
+# Variables the shell sets itself, such as PWD after a cd or REPLY after a read: the guard's own environment says
+# nothing of them. Only an upper-case name may come from this computer's environment (zsh's path and cdpath are
+# PATH's and CDPATH's).
+SHELL_SET = {"PWD", "OLDPWD", "REPLY", "OPTARG", "OPTIND", "MAPFILE", "READLINE_LINE", "RANDOM", "SRANDOM",
+             "SECONDS", "LINENO", "BASH_REMATCH", "BASH_SOURCE", "BASH_ARGV", "BASH_ARGC", "BASH_LINENO",
+             "BASH_COMMAND", "BASH_SUBSHELL", "BASHPID", "FUNCNAME", "PIPESTATUS", "COPROC", "DIRSTACK",
+             "EPOCHREALTIME", "EPOCHSECONDS", "HISTCMD", "SHLVL", "PPID", "UID", "EUID", "GROUPS", "MATCH"}
+ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 
 
-def script_variables(text: str, path: str) -> Variables:
-    """The variables a script's text binds. A name has a value the guard follows only when the text binds it once, on
-    a line of its own: to a plain word or a quoted one with no $ or `, or to the launcher's own folder,
-    `NAME=$(dirname "$0")` (through `echo "$0" | sed` too, as npm's and pnpm's launchers write it, whose Windows-only
-    cygpath line binds nothing here). A second assignment anywhere, or any read, for, export, local, declare and the
-    like, leaves the name with no value the guard can know. `path` is the script's path as it was run, its $0."""
+def script_variables(text: str, path: str | None) -> Variables:
+    """The variables a text binds. A name has a value the guard follows only when the text binds it once, on a line
+    of its own: to a plain word or a quoted one with no $ or `, or, in a script file run by `path` (its $0), to its
+    own folder, `NAME=$(dirname "$0")` (through `echo "$0" | sed` too). A typed line's $0 is the shell's, so `path`
+    is None and no folder follows. A second assignment anywhere, any read, for, export and the like, leaves the name
+    with no value the guard can know, and a text REBINDS matches resolves none."""
     counts: dict[str, int] = {}
     for match in re.finditer(r"(?<![\w$.\-/])([A-Za-z_][A-Za-z0-9_]*)\+?=", text):
         counts[match[1]] = counts.get(match[1], 0) + 1
-    for match in CYGPATH.finditer(text):
-        counts[match[1]] -= 1
     for match in BINDERS.finditer(text):
         for word in match[1].split():
             name = word.partition("=")[0]
@@ -1654,45 +1668,49 @@ def script_variables(text: str, path: str) -> Variables:
                 counts[name] = counts.get(name, 0) + 2  # never a single plain binding
     for match in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\b", text):
         counts[match[1]] = counts.get(match[1], 0) + 2
-    values, launchers = {}, set()
-    folder = os.path.dirname(path) or "."
-    for line in text.splitlines():
+    opaque = bool(REBINDS.search(text))
+    values = {}
+    for line in [] if opaque else text.splitlines():
         named = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$", line)
         if not named or counts.get(named[1]) != 1:
             continue
         name, value = named[1], named[2]
-        if LAUNCHER_FOLDER.fullmatch(value):
-            values[name] = folder
-            launchers.add(name)
+        if SCRIPT_FOLDER.fullmatch(value):
+            if path is not None:
+                values[name] = os.path.dirname(path) or "."
         elif PLAIN_VALUE.fullmatch(value):
             values[name] = value.strip("'\"")
-    bound = {name for name in counts} | {match[1] for match in CYGPATH.finditer(text)}
-    return Variables(values, frozenset(launchers), frozenset(bound))
+    return Variables(values, frozenset(counts), opaque)
 
 
-def expand(word: str, variables: Variables | None) -> tuple[str, bool]:
-    """A path word with variables filled in, and whether it is a launcher's own path. A name the script binds takes
-    the value script_variables follows, or none when it binds the name in a way the guard can't follow; a name it
-    never binds takes this computer's value. A $ left over is a variable the guard can't resolve. Only a path built
-    from the launcher's own folder alone, with nothing from this computer's environment or ~, is a launcher's."""
-    variables = variables or Variables({}, frozenset(), frozenset())
-    used, outside = set(), False
+def inner_variables(outer: Variables, text: str) -> Variables:
+    """The variables a shell's -c line or eval's text sees: no value the guard follows, since an outer value may not
+    reach a new shell and the text's own bindings come in an order the guard doesn't follow; this computer's own
+    for a name neither text binds."""
+    inner = script_variables(text, None)
+    return Variables({}, outer.bound | inner.bound, outer.opaque or inner.opaque)
+
+
+def expand(word: str, variables: Variables) -> str:
+    """A path word with variables filled in: a name the text binds takes the value script_variables follows, or none
+    when it binds the name in a way the guard can't follow; an upper-case name it never binds, and no shell sets
+    itself (SHELL_SET), takes this computer's value. A $ left over is a variable the guard can't resolve, and so is
+    a ~ when the text may bind HOME."""
 
     def fill(match: re.Match) -> str:
-        nonlocal outside
         name = match[1] or match[2]
-        if name in variables.values:
-            used.add(name)
-            return variables.values[name]
-        if name in variables.bound or name not in os.environ:
+        if variables.opaque:
             return match[0]
-        outside = True
-        return os.environ[name]
+        if name in variables.values:
+            return variables.values[name]
+        if name in variables.bound or name in SHELL_SET or not ENVIRONMENT_NAME.fullmatch(name):
+            return match[0]
+        return os.environ.get(name, match[0])
 
     filled = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", fill, word)
-    if filled.startswith("~"):
-        outside, filled = True, os.path.expanduser(filled)
-    return filled, bool(used) and used <= variables.launchers and not outside
+    if re.match(r"~(?:/|$)", filled) and (variables.opaque or "HOME" in variables.bound):
+        return "$HOME" + filled[1:]
+    return os.path.expanduser(filled)
 
 
 def script_named(program: list[str]) -> tuple[str, bool]:
@@ -1767,14 +1785,43 @@ def script_text(name: str, cwd: str, read_by_shell: bool) -> tuple[str, str]:
     return ("text" if read_by_shell or runs_as_shell(data) else "program"), text
 
 
+# npm's and pnpm's launchers (cmd-shim's, such as pnpm's node_modules/.bin/vitest), line for line: the line that
+# names the launcher's own folder, the lines around it, and the lines that run its interpreter (node_launcher).
+SHIM_FOLDER = 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")'
+SHIM_LINES = re.compile(r'#!/bin/sh|case `uname` in|\*CYGWIN\*(?:\|\*MINGW\*\|\*MSYS\*)?\)'
+                        r'(?: basedir=`cygpath -w "\$basedir"`;;)?|if command -v cygpath > /dev/null 2>&1; then'
+                        r'|basedir=`cygpath -w "\$basedir"`|fi|;;|esac|else|if \[ -z "\$NODE_PATH" \]; then'
+                        r'|export NODE_PATH="[^"$`\\]*(?::\$NODE_PATH)?"|ret=\$\?|exit \$ret')
+SHIM_RUNS = re.compile(r'if \[ -x "\$basedir/(?P<own>[\w.-]+)" \]; then'
+                       r'|(?:exec )?(?:"\$basedir/(?P<run>[\w.-]+)"|(?P<path>[\w.-]+)) +"\$basedir/[^"$`\\]*" "\$@"')
+
+
+def node_launcher(text: str) -> str:
+    """The interpreter an npm or pnpm launcher runs, such as node, when `text` is such a launcher line for line, else
+    "". The launcher runs "$basedir/<interpreter>" from its own folder when that file is there, and the interpreter
+    on PATH when it isn't."""
+    named, folder = set(), False
+    for line in text.splitlines():
+        line = line.strip()
+        if line == SHIM_FOLDER:
+            folder = True
+        elif line and not SHIM_LINES.fullmatch(line):
+            runs = SHIM_RUNS.fullmatch(line)
+            if not runs:
+                return ""
+            named.add(runs["own"] or runs["run"] or runs["path"])
+    return next(iter(named)) if folder and len(named) == 1 and named <= INTERPRETERS else ""
+
+
 def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built: bool = False,
-                    launcher: bool = False) -> list[tuple[str, str]]:
+                    wrote: bool = False) -> list[tuple[str, str]]:
     """(kind, what) for each push, merge or kill a script holds, or a script it runs in turn holds: what follows the
     script's name in a reason, such as "holds a `git push`". Kind script is the script guard's: a script it can't
     read or find, a program run by its path that doesn't exist yet and that nothing earlier on the line (`built`)
     builds, and scripts nested deeper than DEPTH. A program it doesn't read still may not name a push, a merge or a
-    kill in its text. `launcher` says the name came from a launcher's variable and nothing earlier wrote a file, so
-    a missing interpreter by that name, such as pnpm's "$basedir/node", is the interpreter itself."""
+    kill in its text. An npm or pnpm launcher (node_launcher) whose own interpreter, such as "$basedir/node", isn't
+    there runs the one on PATH, unless an earlier command on the line may write a file (`wrote`, writer) and none
+    builds."""
     status, text = script_text(name, cwd, read_by_shell)
     if status == "program":
         return [(kind, f"holds {what}, in a program the guard doesn't read") for kind, pattern, what in HELD
@@ -1782,8 +1829,8 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
     if status == "missing":
         if read_by_shell:
             return [("script", "can't be found from this folder: run it by a path the guard can read")]
-        if built or (launcher and PurePath(name).name in INTERPRETERS):
-            return []  # a program the line builds first, or a launcher's interpreter
+        if built:
+            return []  # a program the line builds first
         return [("script", "doesn't exist yet, and nothing earlier on this line builds it: run it on a line of its "
                            "own once it exists, so the guard can read it")]
     if status == "unread":
@@ -1802,10 +1849,21 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
     except ValueError:  # its text can't be read as commands: refuse when it may run another script
         return [("script", f"runs commands the guard can't read, and may run another script, so {NESTED}")] \
             if RAW_SCRIPT.search(text) else []
+    interpreter = node_launcher(text)
+    if interpreter:
+        own = os.path.join(os.path.dirname(name) or ".", interpreter)
+        if script_text(own, cwd, False)[0] != "missing":
+            return [(kind, f"runs {own}, which {what}")
+                    for kind, what in script_findings(own, cwd, depth + 1, False, built, wrote)]
+        if built or not wrote:
+            return []  # the launcher runs the interpreter on PATH
+        return [("script", f"runs {own} when that file is there, and an earlier command on this line may write it: "
+                           "run the launcher on a line of its own")]
     if depth >= DEPTH:
         return [("script", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
     return [(kind, f"runs {inner}, which {what}" if inner else f"runs a line where {what}")
-            for kind, inner, what in scripts(text, cwd, depth + 1, variables=script_variables(text, name))]
+            for kind, inner, what in scripts(text, cwd, depth + 1, variables=script_variables(text, name),
+                                             built=built, wrote=wrote)]
 
 
 def parsed_findings(text: str, cwd: str) -> list[tuple[str, str]]:
@@ -1839,25 +1897,30 @@ def fed_files(segments: list[tuple[list[str], str, str, str, bool]], index: int,
     return None if any(word in STDIN_NAMES or word.startswith(SPECIAL_FILES) for word in files) else files
 
 
-def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
-            variables: Variables | None = None) -> list[tuple[str, str, str]]:
+def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False, variables: Variables | None = None,
+            built: bool = False, wrote: bool = False) -> list[tuple[str, str, str]]:
     """(kind, script, what) for each script the line runs, through a shell's -c and eval too, that holds a push, a
     merge or a kill, or runs a script that does, and each the script guard refuses (kind script); script is "" when
     the reason names no file. A shell that reads its script on standard input is read from the regular files a `<`
     or a plain `cat` gives it, and refused when fed by anything else. Each file is read from the folder its command
     runs in, which a plain cd names (shell_segments); a relative script in a folder the guard can't name is refused.
-    A file named with variables is read where the variables a script set say (script_variables, `variables`); one
-    the guard can't resolve is refused. With `probe`, it only says whether the line runs any script or shell line at
-    all."""
+    A file named with variables is read where the variables the text binds say (script_variables, `variables`, the
+    script's own when this text is a script's); one the guard can't resolve is refused. `built` and `wrote` say a
+    command before this text, on the line that ran it, may build or write a program. With `probe`, it only says
+    whether the line runs any script or shell line at all."""
     try:
         line = tokens(command)
     except ValueError:
         return []
     found: list[tuple[str, str, str]] = []
+    variables = variables if variables is not None else script_variables(command, None)
     segments = shell_segments(line, cwd)
     for index, (words, given, before, here, _) in enumerate(segments):
         program = run_program(words)
         name = PurePath(program[0]).name if program else ""
+        built_before = built or any(PurePath(run_program(earlier)[0]).name in BUILDERS
+                                    for earlier, *_ in segments[:index] if run_program(earlier))
+        wrote_before = wrote or any(segment[4] for segment in segments[:index])
         if is_shell(name) or name == "eval":
             inner = shell_lines(name, program[1:])
             if inner:
@@ -1866,7 +1929,9 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
                 if depth >= DEPTH:
                     found.append(("script", "", f"this line {NESTED}"))
                 else:
-                    found += [item for text in inner for item in scripts(text, here or cwd, depth + 1)]
+                    found += [item for text in inner for item in scripts(
+                        text, here or cwd, depth + 1, variables=inner_variables(variables, text), built=built_before,
+                        wrote=wrote_before)]
                 continue
         if name == "env":  # env_parts couldn't read env's options or its -S string
             found.append(("script", "", "`env` holds an option or a string the guard can't read, so it can't tell what "
@@ -1892,11 +1957,8 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
                 found.append(("script", "", STDIN_REFUSAL))
                 continue
             files = fed
-        built = any(PurePath(run_program(earlier)[0]).name in BUILDERS
-                    for earlier, *_ in segments[:index] if run_program(earlier))
-        wrote = any(segment[4] for segment in segments[:index])
         for file in files:
-            path, own = expand(file, variables if variables is not None else script_variables(command, ""))
+            path = expand(file, variables)
             if "$" in path:
                 found.append(("script", file, "names its file with a variable the guard can't resolve: run it by a "
                                               "path written in full"))
@@ -1906,9 +1968,8 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
                                               "way it can't follow. Run the script by its full path, or cd to a folder "
                                               "named in full first"))
                 continue
-            launcher = own and not wrote  # the launcher's own folder, with nothing written to it first
             found += [(kind, file, what)
-                      for kind, what in script_findings(path, here, depth, read_by_shell, built, launcher)]
+                      for kind, what in script_findings(path, here, depth, read_by_shell, built_before, wrote_before)]
     return found
 
 
