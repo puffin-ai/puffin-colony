@@ -10,6 +10,6 @@ description: Resolve a merge or rebase that stopped on conflicts, keeping both s
 3. **Resolve each hunk.** Keep both intents where they fit together. Where they can't, keep the one the merge is for, and note the trade-off in the commit message. Invent no new behavior.
 4. **Rebuild generated files.** For a file the build writes, listed under `generated` in `.colony/colony.toml`, take either side, then run its `regen` command. Never merge a generated file by hand.
 5. **Run the checks.** Run the fast check, and the tests of every file that conflicted. Fix what the merge broke.
-6. **Finish.** Stage the files and commit, or run `git rebase --continue` until every commit is applied. Push your branch, and post `done` again on the card with the fast check's last line.
+6. **Finish.** Stage the files and commit, or run `git rebase --continue` until every commit is applied. Push your branch, as `git push -u origin HEAD:refs/heads/<your branch>`, and post `done` again on the card with the fast check's last line.
 
 On your own branch, finish the merge; don't abort it. The lead's batch worktree is the one place that aborts a merge, because the lead hands the conflict to the builder who owns the branch.

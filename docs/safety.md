@@ -39,18 +39,20 @@ The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, 
 
 ### The push guard
 
-Working out exactly where git will push, through remotes, push URLs, URL rewrites, config and environment variables, is a game a guard loses. So the push guard allows two forms of push, and refuses every other:
+Working out exactly where git will push, through remotes, refmaps, `push.default`, upstreams, push URLs, URL rewrites, config and environment variables, is a game a guard loses. So the push guard allows one form of push, with its destination spelled out in full, and refuses every other:
 
 ```
-git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>
-git push [-u] [--force-with-lease] [--dry-run] <remote> HEAD:<branch>
+git push [-u] [--force-with-lease] [--dry-run] <remote> HEAD:refs/heads/<branch>
+git push [-u] [--force-with-lease] [--dry-run] <remote> <local branch>:refs/heads/<branch>
 ```
 
-- **The remote** is a plain name this clone's `git remote` lists, never a URL or a path, and its push address, after its `pushurl` and git's `pushInsteadOf`, is the repo it fetches from.
-- **The branch** is a plain branch name, never a protected one: the base, the repo's default branch (origin's `HEAD`), or a branch or pattern in `[safety] protect`. For `HEAD:<branch>`, the branch checked out must not be protected either, and nothing earlier on the line may change it.
-- **Nothing else** joins them but `-q` and `-v`, which change only what git prints. A push is refused whatever its words when its line sets a `GIT_`, `HOME` or `XDG_CONFIG_HOME` variable, moves to another folder (`cd`, `git -C`, `env -C`, `sudo -D`), or points git elsewhere (`git -c`, `--config-env`, `--git-dir`, `--work-tree`).
+A builder pushes its branch as `git push -u origin HEAD:refs/heads/<branch>`. A full destination means git applies no refmap and ignores `push.default` and the upstream, so git config can't send the push to another branch.
 
-So `git push --force`, `git push` alone, `--all`, `--tags`, `--delete`, a `+` refspec and a push to a URL are all refused, and the message names the two forms. Work reaches a protected branch through a pull request, which you merge, or which an agent merges under the merge guard's rules. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
+- **The remote** is a plain name this clone's `git remote` lists, never a URL or a path, with no `remote.<name>.push` or `remote.<name>.mirror` in its git config, and its push address, after its `pushurl` and git's `pushInsteadOf`, is the repo it fetches from.
+- **The branch** is a plain branch name, never a protected one: the base, the repo's default branch (origin's `HEAD`), or a branch or pattern in `[safety] protect`. For `HEAD`, the branch checked out must not be protected either, and nothing earlier on the line may change it.
+- **Nothing else** joins them but `-q` and `-v`, which change only what git prints. A push is refused whatever its words when its line sets a `GIT_`, `HOME` or `XDG_CONFIG_HOME` variable, moves to another folder (`cd`, `git -C`, `env -C`, `sudo -D`), points git elsewhere (`git -c`, `--config-env`, `--git-dir`, `--work-tree`), or runs a `git config`, `git branch` or `git remote` before it.
+
+So `git push --force`, `git push` alone, a short destination such as `git push origin feature`, `--all`, `--tags`, `--delete`, a `+` refspec and a push to a URL are all refused, and the message shows the allowed form. The merge guard also refuses a `git config` that sets a remote's push refspec or mirror, `push.default`, `remote.pushDefault`, or a branch's `merge`, `remote` or `pushRemote`. Work reaches a protected branch through a pull request, which you merge, or which an agent merges under the merge guard's rules. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
 
 ### The merge guard
 

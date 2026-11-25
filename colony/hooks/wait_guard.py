@@ -17,17 +17,20 @@ and merge guards below read bodies as commands, so no here-document the guard mi
 quoting Python's shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell reads
 fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
-The push guard lets a `git push` run, in every mode and even in the background, only in one of two forms, and
-refuses every other: `git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>`, and the same with
-`HEAD:<branch>` (-q and -v may join them, since they change only what git prints). The remote is a plain name this
-clone's `git remote` lists, whose push address, after its pushurl and git's pushInsteadOf, is the repo it fetches from.
-The branch is a plain branch name, never a protected one: the base, `[project] base` in .colony/colony.toml (main when
+The push guard lets a `git push` run, in every mode and even in the background, only in one form, with its
+destination in full, and refuses every other: `git push [-u] [--force-with-lease] [--dry-run] <remote>
+HEAD:refs/heads/<branch>`, or a plain local branch in place of HEAD (-q and -v may join it, since they change only
+what git prints). A full destination makes git apply no refmap and ignore push.default and the upstream. The remote
+is a plain name this clone's `git remote` lists, with no remote.<name>.push or remote.<name>.mirror in its git config,
+whose push address, after its pushurl and git's pushInsteadOf, is the repo it fetches from. The branch is a plain
+branch name, never a protected one: the base, `[project] base` in .colony/colony.toml (main when
 unset), the repo's default branch, origin's HEAD (main when git can't say), and `[safety] protect`. For HEAD, the
 branch checked out must not be protected either, and nothing earlier on the line may change it. A push is refused
 whatever its words when its line sets a GIT_, HOME or XDG_CONFIG_HOME variable, moves it to another folder (a cd, `git
--C`, `env -C`, `sudo -D`), or points git elsewhere (`-c`, --config-env, --git-dir, --work-tree): working out where git
-then pushes is a guess, and the guard doesn't guess. Land work on a protected branch through a pull request. A line
-whose quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
+-C`, `env -C`, `sudo -D`), points git elsewhere (`-c`, --config-env, --git-dir, --work-tree), or runs a `git config`,
+`git branch` or `git remote` before it: working out where git then pushes is a guess, and the guard doesn't guess.
+Land work on a protected branch through a pull request. A line whose quoting it can't read is refused whenever it
+holds `git` and `push`: run such a push on its own.
 
 The kill guard refuses, in every mode and even in the background, a kill by pattern or by name: pkill, killall,
 skill, `fuser -k`, `taskkill /IM` and PowerShell's `Stop-Process -Name`, and a `kill` whose process ids come from a
@@ -48,7 +51,8 @@ branch of the pull request's repo, read with `gh api`, and only when that repo i
 address after its url rewrites. When GitHub can't be read, nothing is allowed. The guard refuses what rewrites that
 picture: `git update-ref` or `symbolic-ref` on refs/remotes/, a fetch into refs/remotes/ by hand, `git remote
 set-head` with a branch, `set-url`, `rename` or `remove` of origin, `git config --edit`, and config that changes a
-remote's URL, a fetch refspec, a URL rewrite or an include.
+remote's URL, fetch or push refspec or mirror, a URL rewrite, an include, push.default, remote.pushDefault, or a
+branch's merge, remote or pushRemote.
 
 Both follow a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuse an xargs or
 a shell alias that builds one. As a backstop, the kill, push and merge guards refuse any line whose raw text names
@@ -132,11 +136,11 @@ REMOTE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")  # a remote's plain n
 # A plain branch name, as git check-ref-format allows one, without globs, refs/, HEAD or a leading dash.
 BRANCH = re.compile(r"^(?!-)(?!refs/)(?!HEAD$)(?!.*(?:\.\.|//|@\{|\.lock(?:/|$)|/\.))"
                     r"[A-Za-z0-9_.][A-Za-z0-9_./-]*(?<![./])$")
-PUSH_REFUSAL = ("push guard: refused, {reason}. A push takes one of two forms: `git push [-u] [--force-with-lease] "
-                "[--dry-run] <remote> <branch>`, or the same with `HEAD:<branch>`, where the remote is one this "
-                "clone names, whose push and fetch addresses are one repo, and the branch is your own, never "
-                "{branches}. Land work on those through a pull request (in Hack, `colony merge <branch>`), or ask "
-                "your person."
+PUSH_REFUSAL = ("push guard: refused, {reason}. A push takes one form alone: `git push [-u] [--force-with-lease] "
+                "[--dry-run] <remote> HEAD:refs/heads/<branch>`, or `<local branch>:refs/heads/<branch>` in place of "
+                "HEAD, where the remote is one this clone names, with no push refspec or mirror in its git config, "
+                "whose push and fetch addresses are one repo, and the branch is your own, never {branches}. Land "
+                "work on those through a pull request (in Hack, `colony merge <branch>`), or ask your person."
                 " If these words are only text, such as a here-document or a message that names them, "
                 "write the text to a file with your file tool and pass the file instead.")
 REFUSAL = ("wait guard: refused, {reason}. A foreground wait blocks the session. Start the command with "
@@ -181,9 +185,11 @@ TABLE_HEADER = re.compile(r"^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\"' -]+\]\]?[ \t]*(?:#
 ORIGIN = re.compile(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::\d+)?[:/]"
                     r"([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
 PR_URL = re.compile(r"^(https?://[^/\s]+/[^/\s]+/[^/\s]+)/pull/\d+")
-# The settings that say where origin is and what a fetch writes into refs/remotes/, which the guard reads as origin's.
-REMOTE_KEYS = re.compile(r"^(?:remote\.[^\s]+\.(?:url|pushurl|fetch)|url\.[^\s]+\.(?:insteadof|pushinsteadof)"
-                         r"|include\.path|includeif\.[^\s]+\.path)$", re.I)  # with the includes that can set them
+# The settings that say where origin is, what a fetch writes into refs/remotes/, and where a push goes, which the
+# guard reads, with the includes that can set them.
+REMOTE_KEYS = re.compile(r"^(?:remote\.[^\s]+\.(?:url|pushurl|fetch|push|mirror)|url\.[^\s]+\.(?:insteadof"
+                         r"|pushinsteadof)|push\.default|remote\.pushdefault"
+                         r"|branch\.[^\s]+\.(?:merge|remote|pushremote)|include\.path|includeif\.[^\s]+\.path)$", re.I)
 CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section", "-e",
                  "--edit"}
 CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "--get-color",
@@ -897,6 +903,16 @@ def remotes(cwd: str) -> list[str]:
     return run.stdout.split() if run.returncode == 0 else []
 
 
+def git_config(cwd: str, key: str) -> list[str]:
+    """Every value git config holds for a key here, or ["?"] when git can't say, which counts as one."""
+    try:
+        run = subprocess.run(["git", "config", "--get-all", key], cwd=cwd or None, capture_output=True, text=True,
+                             timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ["?"]
+    return run.stdout.split("\n")[:-1] if run.returncode == 0 else [] if run.returncode == 1 else ["?"]
+
+
 def one_repo(one: str, other: str) -> bool:
     """Whether two addresses git gives name one repo: the same owner/name on the same host, or the same address."""
     first, second = repo_of(one), repo_of(other)
@@ -904,11 +920,12 @@ def one_repo(one: str, other: str) -> bool:
 
 
 def push_refusal(arguments: list[str], cwd: str, protected: list[str], changed: str = "") -> str:
-    """Why a `git push` with these arguments, the words after `push`, takes none of the allowed forms, or "". The
-    allowed forms are `[flags] <remote> <branch>` and `[flags] <remote> HEAD:<branch>`, with PUSH_FLAGS alone; a
-    remote this clone names, whose push address, after its pushurl and git's pushInsteadOf, is the repo it fetches
-    from; and a plain branch name that isn't protected. For HEAD, the branch checked out mustn't be protected either,
-    and nothing before the push on its line (`changed`) may change which branch that is."""
+    """Why a `git push` with these arguments, the words after `push`, takes no allowed form, or "". The allowed form
+    is `[flags] <remote> <source>:refs/heads/<branch>`, with PUSH_FLAGS alone: a full destination, so git applies no
+    refmap and no push.default. The source is HEAD or a plain branch name. The remote is one this clone names, with no
+    remote.<name>.push or remote.<name>.mirror in its config, whose push address, after its pushurl and git's
+    pushInsteadOf, is the repo it fetches from. The branch is a plain name that isn't protected. For HEAD, the branch
+    checked out mustn't be protected either, and nothing before the push on its line (`changed`) may change it."""
     words = []
     for word in arguments:
         if word.startswith("-") and word != "-":
@@ -922,12 +939,21 @@ def push_refusal(arguments: list[str], cwd: str, protected: list[str], changed: 
     remote, spec = words
     if not REMOTE_NAME.fullmatch(remote) or remote not in remotes(cwd):
         return f"`{remote}` is no remote this clone names"
-    head = spec.startswith("HEAD:")
-    branch = spec[len("HEAD:"):] if head else spec
+    source, colon, destination = spec.partition(":")
+    if not colon or not destination.startswith("refs/heads/"):
+        return f"`{spec}` names no full destination, such as HEAD:refs/heads/<branch>"
+    branch, head = destination[len("refs/heads/"):], source == "HEAD"
+    if not source:
+        return f"`{spec}` deletes {branch}"
+    if not head and not BRANCH.fullmatch(source):
+        return f"`{source}` is not HEAD or a plain branch name"
     if not BRANCH.fullmatch(branch):
-        return f"`{spec}` is not a plain branch name"
+        return f"`{destination}` is not a plain branch"
     if hit := reached(branch, protected):
         return f"{hit} is protected"
+    for key in (f"remote.{remote}.push", f"remote.{remote}.mirror"):
+        if git_config(cwd, key):
+            return f"`{remote}` has {key} in git config, which can send a push elsewhere"
     if head:
         if changed:
             return f"{changed} on this line can change the branch HEAD names"
@@ -1033,10 +1059,13 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
                           push_refusal(program[index + 1:], cwd, protected_branches(cwd), changed))
                 if reason:
                     refused.append(reason)
-            elif reason := forges(subcommand, program[index + 1:], overrides):
-                updates.append(reason)
-            elif subcommand in LINE_CHANGES_GIT:
-                changed = changed or f"`git {subcommand}`"
+            else:
+                if reason := forges(subcommand, program[index + 1:], overrides):
+                    updates.append(reason)
+                if subcommand in LINE_CHANGES_GIT:  # refused or not, what it changes holds for the rest of the line
+                    changed = changed or f"`git {subcommand}`"
+                    if subcommand in ("config", "branch", "remote"):  # each can change where a later push goes
+                        moved = moved or f"`git {subcommand}`"
         elif name in SHELLS or name == "eval":
             for inner in shell_lines(name, program[1:]):
                 found = pushes(inner, cwd, depth + 1, changed, moved or wrapped, seen)

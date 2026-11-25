@@ -127,7 +127,8 @@ def git_in(root: Path, *arguments: str) -> None:
 def push_refused(run: subprocess.CompletedProcess, reason: str = "") -> bool:
     """Whether the push guard refused the call, for `reason` when given, and named the forms it allows."""
     return run.returncode == 2 and run.stderr.startswith(f"push guard: refused, {reason}") and \
-        "A push takes one of two forms" in run.stderr and "colony merge <branch>" in run.stderr
+        "A push takes one form alone: `git push [-u] [--force-with-lease] [--dry-run] <remote> " \
+        "HEAD:refs/heads/<branch>`" in run.stderr and "colony merge <branch>" in run.stderr
 
 
 def merge_refused(run: subprocess.CompletedProcess, reason: str = "") -> bool:
@@ -151,72 +152,84 @@ def on_feature(hosted):
     return hosted
 
 
-# The push guard's allow-list: `git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>`, or HEAD:<branch>.
+# The push guard's allow-list: `git push [-u] [--force-with-lease] [--dry-run] <remote> <source>:refs/heads/<branch>`.
 PUSHES_ALLOWED = [
-    "git push origin ana/login",
-    "git push -u origin ana/login",
-    "git push --set-upstream origin ana/login",
-    "git push --force-with-lease origin ana/login",
-    "git push -u --force-with-lease origin HEAD:ana/login",
-    "git push origin HEAD:ana/new",
-    "git push --dry-run origin ana/login",
-    "git push -n origin ana/login",
-    "git push -q origin ana/login",
-    "git push origin v1.0",
-    "npm test && git push -u origin ana/login",
-    "git push origin ana/login &",
-    "git checkout -b ana/new && git push -u origin ana/new",  # a checkout changes no branch a push names in full
-    "bash -c 'git push origin ana/login'",
+    "git push origin HEAD:refs/heads/ana/login",
+    "git push -u origin HEAD:refs/heads/ana/login",
+    "git push --set-upstream origin ana/login:refs/heads/ana/login",
+    "git push --force-with-lease origin HEAD:refs/heads/ana/login",
+    "git push -u --force-with-lease origin HEAD:refs/heads/ana/login",
+    "git push origin HEAD:refs/heads/ana/new",
+    "git push origin main:refs/heads/ana/from-main",  # a protected source onto a branch of the agent's own
+    "git push --dry-run origin HEAD:refs/heads/ana/login",
+    "git push -n origin HEAD:refs/heads/ana/login",
+    "git push -q origin HEAD:refs/heads/ana/login",
+    "npm test && git push -u origin HEAD:refs/heads/ana/login",
+    "git push origin HEAD:refs/heads/ana/login &",
+    "git checkout -b ana/new && git push -u origin ana/new:refs/heads/ana/new",
+    "bash -c 'git push origin HEAD:refs/heads/ana/login'",
     "git log --oneline -3",
 ]
 PUSHES_REFUSED = [
     ("git push", "this push names no remote and branch"),
     ("git push origin", "a push names exactly one remote and one branch"),
-    ("git push origin ana/login ana/other", "a push names exactly one remote and one branch"),
-    ("git push origin main", "main is protected"),
-    ("git push origin HEAD:main", "main is protected"),
-    ("git push --force origin ana/login", "`--force` is not part of an allowed push"),
-    ("git push -f origin ana/login", "`-f` is not part of an allowed push"),
-    ("git push --force-with-lease=main:abc123 origin ana/login", "`--force-with-lease=main:abc123` is not part"),
-    ("git push --delete origin ana/login", "`--delete` is not part"),
-    ("git push -d origin ana/login", "`-d` is not part"),
+    ("git push origin HEAD:refs/heads/a HEAD:refs/heads/b", "a push names exactly one remote and one branch"),
+    # A short destination lets git config choose the branch, through a refmap, push.default or an upstream.
+    ("git push origin ana/login", "`ana/login` names no full destination"),
+    ("git push origin HEAD:ana/login", "`HEAD:ana/login` names no full destination"),
+    ("git push origin HEAD", "`HEAD` names no full destination"),
+    ("git push origin @", "`@` names no full destination"),
+    ("git push origin v1.0", "`v1.0` names no full destination"),
+    ("git push origin refs/heads/ana/login", "`refs/heads/ana/login` names no full destination"),
+    ("git push origin HEAD:refs/heads/main", "main is protected"),
+    ("git push origin ana/login:refs/heads/main", "main is protected"),
+    ("git push origin :refs/heads/ana/login", "`:refs/heads/ana/login` deletes ana/login"),
+    ("git push origin +HEAD:refs/heads/ana/login", "`+HEAD` is not HEAD or a plain branch name"),
+    ("git push origin 'refs/heads/*:refs/heads/*'", "`refs/heads/*` is not HEAD or a plain branch name"),
+    ("git push origin HEAD:refs/heads/a..b", "`refs/heads/a..b` is not a plain branch"),
+    ("git push origin HEAD:refs/tags/v1", "`HEAD:refs/tags/v1` names no full destination"),
+    ("git push --force origin HEAD:refs/heads/ana/login", "`--force` is not part of an allowed push"),
+    ("git push -f origin HEAD:refs/heads/ana/login", "`-f` is not part of an allowed push"),
+    ("git push --force-with-lease=main:abc123 origin HEAD:refs/heads/ana/login",
+     "`--force-with-lease=main:abc123` is not part"),
+    ("git push --delete origin HEAD:refs/heads/ana/login", "`--delete` is not part"),
+    ("git push -d origin HEAD:refs/heads/ana/login", "`-d` is not part"),
     ("git push --all origin", "`--all` is not part"),
     ("git push --branches origin", "`--branches` is not part"),
     ("git push --mirror origin", "`--mirror` is not part"),
     ("git push --tags origin", "`--tags` is not part"),
-    ("git push --repo=origin ana/login", "`--repo=origin` is not part"),
-    ("git push -o ci.skip origin ana/login", "`-o` is not part"),
-    ("git push --no-verify origin ana/login", "`--no-verify` is not part"),
-    ("git push origin +ana/login", "`+ana/login` is not a plain branch name"),
-    ("git push origin :ana/login", "`:ana/login` is not a plain branch name"),
-    ("git push origin ana/login:ana/other", "`ana/login:ana/other` is not a plain branch name"),
-    ("git push origin refs/heads/ana/login", "`refs/heads/ana/login` is not a plain branch name"),
-    ("git push origin 'refs/heads/*:refs/heads/*'", "`refs/heads/*:refs/heads/*` is not a plain branch name"),
-    ("git push origin HEAD", "`HEAD` is not a plain branch name"),
-    ("git push origin @", "`@` is not a plain branch name"),
-    ("git push https://github.com/acme/demo.git ana/login", "`https://github.com/acme/demo.git` is no remote"),
-    ("git push fork/x ana/login", "`fork/x` is no remote"),  # a remote name with a slash reads as a path
-    ("git push nowhere ana/login", "`nowhere` is no remote"),
-    ("git -c push.default=matching push origin ana/login", "`git -c` on this line can change where git pushes"),
-    ("git -c alias.p='push origin ana/login' p", "`git -c` on this line can change where git pushes"),
-    ("git --config-env=push.default=X push origin ana/login", "`git --config-env` on this line"),
-    ("git -C . push origin ana/login", "`git -C` on this line"),
-    ("git --git-dir=.git push origin ana/login", "`git --git-dir` on this line"),
-    ("git --work-tree=. push origin ana/login", "`git --work-tree` on this line"),
-    ("GIT_DIR=.git git push origin ana/login", "`GIT_DIR` on this line"),
-    ("GIT_CONFIG_GLOBAL=/tmp/x git push origin ana/login", "`GIT_CONFIG_GLOBAL` on this line"),
-    ("export GIT_CONFIG_PARAMETERS=x; git push origin ana/login", "`GIT_CONFIG_PARAMETERS` on this line"),
-    ("GIT_CONFIG_COUNT=1; git push origin ana/login", "`GIT_CONFIG_COUNT` on this line"),
-    ("HOME=/tmp git push origin ana/login", "`HOME` on this line"),
-    ("XDG_CONFIG_HOME=/tmp git push origin ana/login", "`XDG_CONFIG_HOME` on this line"),
-    ("cd /tmp && git push origin ana/login", "`cd` on this line can change where git pushes"),
-    ("env -C /tmp git push origin ana/login", "`-C` on this line"),
-    ("sudo -D /tmp git push origin ana/login", "`-D` on this line"),
-    ("git checkout main && git push origin HEAD:ana/login", "`git checkout` on this line can change the branch HEAD"),
-    ("bash -c 'git push origin main'", "main is protected"),
-    ("eval 'git push origin main'", "main is protected"),
-    ("sudo -u ana git push origin main", "main is protected"),
-    ("GIT_DIR=.git bash -c 'git push origin ana/login'", "`GIT_DIR` on this line"),
+    ("git push --repo=origin HEAD:refs/heads/ana/login", "`--repo=origin` is not part"),
+    ("git push -o ci.skip origin HEAD:refs/heads/ana/login", "`-o` is not part"),
+    ("git push --no-verify origin HEAD:refs/heads/ana/login", "`--no-verify` is not part"),
+    ("git push https://github.com/acme/demo.git HEAD:refs/heads/ana/login", "`https://github.com/acme/demo.git` is no "
+                                                                             "remote"),
+    ("git push fork/x HEAD:refs/heads/ana/login", "`fork/x` is no remote"),  # a remote name with a slash reads as a path
+    ("git push nowhere HEAD:refs/heads/ana/login", "`nowhere` is no remote"),
+    ("git -c push.default=matching push origin HEAD:refs/heads/ana/login", "`git -c` on this line can change where"),
+    ("git -c alias.p='push origin HEAD:refs/heads/ana/login' p", "`git -c` on this line can change where git pushes"),
+    ("git --config-env=push.default=X push origin HEAD:refs/heads/ana/login", "`git --config-env` on this line"),
+    ("git -C . push origin HEAD:refs/heads/ana/login", "`git -C` on this line"),
+    ("git --git-dir=.git push origin HEAD:refs/heads/ana/login", "`git --git-dir` on this line"),
+    ("git --work-tree=. push origin HEAD:refs/heads/ana/login", "`git --work-tree` on this line"),
+    ("GIT_DIR=.git git push origin HEAD:refs/heads/ana/login", "`GIT_DIR` on this line"),
+    ("GIT_CONFIG_GLOBAL=/tmp/x git push origin HEAD:refs/heads/ana/login", "`GIT_CONFIG_GLOBAL` on this line"),
+    ("export GIT_CONFIG_PARAMETERS=x; git push origin HEAD:refs/heads/ana/login", "`GIT_CONFIG_PARAMETERS` on this"),
+    ("GIT_CONFIG_COUNT=1; git push origin HEAD:refs/heads/ana/login", "`GIT_CONFIG_COUNT` on this line"),
+    ("HOME=/tmp git push origin HEAD:refs/heads/ana/login", "`HOME` on this line"),
+    ("XDG_CONFIG_HOME=/tmp git push origin HEAD:refs/heads/ana/login", "`XDG_CONFIG_HOME` on this line"),
+    ("cd /tmp && git push origin HEAD:refs/heads/ana/login", "`cd` on this line can change where git pushes"),
+    ("env -C /tmp git push origin HEAD:refs/heads/ana/login", "`-C` on this line"),
+    ("sudo -D /tmp git push origin HEAD:refs/heads/ana/login", "`-D` on this line"),
+    ("git checkout main && git push origin HEAD:refs/heads/ana/login", "`git checkout` on this line can change the "
+                                                                        "branch HEAD"),
+    # A git config, git branch or git remote earlier on the line can change where any later push goes.
+    ("git config push.default upstream && git push origin HEAD:refs/heads/ana/login", "`git config` on this line"),
+    ("git branch -u origin/main && git push origin HEAD:refs/heads/ana/login", "`git branch` on this line"),
+    ("git remote -v; git push origin HEAD:refs/heads/ana/login", "`git remote` on this line"),
+    ("bash -c 'git push origin HEAD:refs/heads/main'", "main is protected"),
+    ("eval 'git push origin HEAD:refs/heads/main'", "main is protected"),
+    ("sudo -u ana git push origin HEAD:refs/heads/main", "main is protected"),
+    ("GIT_DIR=.git bash -c 'git push origin HEAD:refs/heads/ana/login'", "`GIT_DIR` on this line"),
 ]
 
 
@@ -234,29 +247,32 @@ def test_the_push_guard_refuses_every_other_push_and_names_the_allowed_forms(com
 
 
 def test_a_push_of_head_needs_a_branch_checked_out_that_isnt_protected(hosted):
-    assert push_refused(push_guard("git push origin HEAD:ana/x", hosted), "main, the branch checked out, is protected")
+    assert push_refused(push_guard("git push origin HEAD:refs/heads/ana/x", hosted),
+                        "main, the branch checked out, is protected")
     git_in(hosted, "commit", "-q", "--allow-empty", "-m", "base")
     git_in(hosted, "checkout", "-q", "--detach")
-    assert push_refused(push_guard("git push origin HEAD:ana/x", hosted), "HEAD is no branch here")
+    assert push_refused(push_guard("git push origin HEAD:refs/heads/ana/x", hosted), "HEAD is no branch here")
 
 
 def test_the_protected_branches_are_the_base_the_default_branch_and_protect(on_feature):
     (on_feature / ".colony" / "colony.toml").write_text(
         '[project]\nbase = "dev"\n\n[safety]\nprotect = ["staging", "release/[0-9]*"]\nmerge_into = ["release/*"]\n')
     for branch in ("dev", "main", "staging", "release/1.2"):
-        assert push_refused(push_guard(f"git push origin {branch}", on_feature), f"{branch} is protected"), branch
-    assert push_guard("git push origin release-notes", on_feature).returncode == 0
+        assert push_refused(push_guard(f"git push origin HEAD:refs/heads/{branch}", on_feature),
+                            f"{branch} is protected"), branch
+    assert push_guard("git push origin HEAD:refs/heads/release-notes", on_feature).returncode == 0
     git_in(on_feature, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
-    assert push_refused(push_guard("git push origin trunk", on_feature), "trunk is protected")
-    assert push_guard("git push origin main", on_feature).returncode == 0  # now neither the base nor the default
+    assert push_refused(push_guard("git push origin HEAD:refs/heads/trunk", on_feature), "trunk is protected")
+    # main is now neither the base nor the default branch
+    assert push_guard("git push origin HEAD:refs/heads/main", on_feature).returncode == 0
 
 
 @pytest.mark.parametrize("key, value", [("remote.origin.pushurl", "https://github.com/someone/else.git"),
                                         ("url.https://github.com/someone/.pushInsteadOf", "https://github.com/acme/")])
 def test_a_remote_whose_push_address_is_another_repo_is_refused(key, value, on_feature):
-    assert push_guard("git push origin ana/login", on_feature).returncode == 0
+    assert push_guard("git push origin HEAD:refs/heads/ana/login", on_feature).returncode == 0
     git_in(on_feature, "config", key, value)
-    run = push_guard("git push origin ana/login", on_feature)
+    run = push_guard("git push origin HEAD:refs/heads/ana/login", on_feature)
     assert push_refused(run, "`origin` pushes to https://github.com/someone/"), (key, run.stderr)
 
 
@@ -264,14 +280,24 @@ def test_a_remote_in_a_folder_pushes_where_it_fetches(on_feature, tmp_path_facto
     backup = tmp_path_factory.mktemp("backup")
     subprocess.run(["git", "init", "-q", "--bare", str(backup)], check=True)
     git_in(on_feature, "remote", "add", "backup", str(backup))
-    assert push_guard("git push backup ana/login", on_feature).returncode == 0
+    assert push_guard("git push backup HEAD:refs/heads/ana/login", on_feature).returncode == 0
+
+
+@pytest.mark.parametrize("key, value", [("remote.origin.push", "refs/heads/ana/login:refs/heads/main"),
+                                        ("remote.origin.mirror", "true")])
+def test_a_remote_whose_config_maps_or_mirrors_its_pushes_is_refused(key, value, on_feature):
+    """A full destination already makes git skip the refmap, and a mirror refuses a refspec, but the guard refuses
+    such a remote anyway: its config says pushes there go somewhere else."""
+    git_in(on_feature, "config", key, value)
+    run = push_guard("git push origin HEAD:refs/heads/ana/login", on_feature)
+    assert push_refused(run, f"`origin` has {key} in git config"), (key, run.stderr)
 
 
 def test_merge_into_lets_no_push_into_a_protected_branch(on_feature, tmp_path):
     """merge_into is the person's yes for a pull request's merge: a push into a protected branch is never one."""
     (on_feature / ".colony" / "colony.toml").write_text('[project]\nbase = "main"\n\n[safety]\nmerge_into = ["main"]\n')
     stub = github(tmp_path / "gh", default='[project]\nbase = "main"\n\n[safety]\nmerge_into = ["main"]\n')
-    assert push_refused(push_guard("git push origin main", on_feature, path=stub), "main is protected")
+    assert push_refused(push_guard("git push origin HEAD:refs/heads/main", on_feature, path=stub), "main is protected")
 
 
 LINES_THE_GUARD_CANT_FOLLOW = [
@@ -290,10 +316,10 @@ def test_a_push_built_from_words_the_guard_cant_see_is_refused(command, on_featu
 def test_a_git_alias_in_config_is_read_as_what_it_runs(on_feature):
     git_in(on_feature, "config", "alias.ship", "push origin main")
     git_in(on_feature, "config", "alias.sh-ship", "!git push origin main")
-    git_in(on_feature, "config", "alias.mine", "push -u origin ana/login")
+    git_in(on_feature, "config", "alias.mine", "push -u origin HEAD:refs/heads/ana/login")
     git_in(on_feature, "config", "alias.st", "status")
-    assert push_refused(push_guard("git ship", on_feature), "main is protected")
-    assert push_refused(push_guard("git sh-ship", on_feature), "main is protected")
+    assert push_refused(push_guard("git ship", on_feature), "`main` names no full destination")
+    assert push_refused(push_guard("git sh-ship", on_feature), "`main` names no full destination")
     for command in ("git mine", "git st", "git lfs pull"):  # git lfs: an outside git-lfs program, no alias
         assert push_guard(command, on_feature).returncode == 0, command
 
@@ -377,6 +403,14 @@ def test_a_yes_holds_only_when_origin_is_the_pull_requests_repo(hosted, tmp_path
 
 
 FORGES = [
+    "git config push.default upstream",
+    "git config remote.origin.push refs/heads/ana/login:refs/heads/main",
+    "git config remote.origin.mirror true",
+    "git config branch.ana/login.merge refs/heads/main",
+    "git config branch.ana/login.remote fork",
+    "git config branch.ana/login.pushRemote fork",
+    "git config remote.pushDefault fork",
+    "git -c remote.origin.push=refs/heads/x:refs/heads/main fetch",
     "git config --edit",
     "git config -e --local",
     "git config include.path /tmp/elsewhere.cfg",
@@ -398,6 +432,7 @@ FORGES = [
 NO_FORGE = [
     "git fetch origin", "git fetch origin main", "git pull --rebase origin main", "git remote set-head origin -a",
     "git remote -v", "git config --get remote.origin.url", "git config remote.origin.url", "git config user.name T",
+    "git config --get push.default",
     "git update-ref refs/heads/ana/x HEAD", "git remote add upstream https://github.com/acme/demo.git",
 ]
 
@@ -1186,7 +1221,8 @@ def test_a_fake_here_document_hides_no_merge(fake, hosted):
 
 @pytest.mark.parametrize("fake", FAKE_HEREDOCS[:3])
 def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
-    assert push_refused(push_guard(fake.format(hidden="git push origin main"), hosted), "main is protected")
+    assert push_refused(push_guard(fake.format(hidden="git push origin HEAD:refs/heads/main"), hosted),
+                        "main is protected")
     assert guard(json.dumps({"tool_input": {"command": fake.format(hidden="sleep 600")}})).returncode == 2
 
 
