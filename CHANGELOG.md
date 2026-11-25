@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+The run-lessons upgrade: 85 changes learned from one long run with several leads, orchestrators and many helpers. A session now starts from your standing orders without onboarding. Helpers open by live account readings and the computer's room. The watch knows a session that waits on purpose. Colony recovers what a crash or a sleep stopped, and every merge waits for your yes.
+
+Changes to know before you upgrade:
+
+- Agents merge into nothing by default. `[safety] merge_into` lists the branches they may merge pull requests into, and it counts only once it is on GitHub's default branch. A project whose leads merge into an integration branch must list it.
+- The push guard allows one form of push alone, on a line of its own: `git push -u origin HEAD:refs/heads/<branch>`. Every other push is refused, and so is a kill by name or pattern, such as `pkill` or `killall`. Close a session with `colony stop <name>`.
+- You approve a helper's command at your own terminal, with `colony approve`. No approval travels through GitHub.
+- Worktrees go in `.worktrees` inside the repo by default, and Colony makes them nowhere else. Your own settings go in `.colony/colony.local.toml`, and `colony upgrade` migrates old settings.
+- A lead's own account is kept free of helpers while another account has room, and each session runs at most `[subagents] max_running` subagents, 2 by default. Builders run only as helpers.
+- `colony release` freezes the integration branch while the release is checked, lists every unreleased pull request, and brings the release back through a pull request instead of a merge.
+
+Standing orders and starting a session (profiles.md, boot.md, decisions.md):
+
+- Standing orders at three levels: your personal profile, which follows you into every repo, the team's `.colony/team.toml`, and settings for one session. The stricter rule wins when two disagree. `colony profile` shows each order and where it came from, and `colony prefer` adds, lists and removes rules, including a correction you made.
+- Setup asks its questions once, and can import preferences from your agent tool's memory after you confirm each one. The personal profile is never committed, and no profile holds a secret.
+- The startup routine runs by itself: it loads the orders and the last handover, refreshes the project summary, checks the live leads, pull requests, cards, accounts and the computer, then prints a short briefing and its next step. A handover is saved whenever a session ends, crashes or compacts.
+- Named modes, such as `colony mode orchestrator` or `unattended`, switch a bundle of orders on with one word. A one-sentence request becomes a plan of task groups with owners and done-when results. Every helper starts with its lead's orders.
+- A lead asks you only through `colony ask`, with a full explanation, and records your answer word for word. Topics not to raise, and a daily spending budget, bind every session.
+
+Capacity (capacity.md):
+
+- A policy for the team's pool of accounts, from any provider: which to use first, when to switch, and how many helpers each runs. `colony helpers <n> --open` opens helpers in waves, by live readings, and plans around each account's reset. `colony accounts` lists and finds accounts.
+- Colony reads the computer's cores, memory, disk and load, and sets how many helpers, test runs and builds run at once. `colony lock` guards what can't be shared, such as one test database.
+- A session stopped by a usage limit wakes when the limit resets, and after a sleep the helpers that stopped start again. `colony services` checks every service the team relies on, and the lead hears when one fails.
+
+Messages (messages.md):
+
+- `colony wait --follow` keeps running, one wait per session. Start lines are re-sent until acknowledged, a nudge wakes an idle recipient, unread lines come back after a compaction, and a line to an unknown name is refused. Leads on every computer see and message each other, and notes travel as attachments.
+
+Watching (watch.md):
+
+- The team watch knows a session that waits on purpose (`colony intent`), so it raises no false "stuck" alerts. Helpers report on a rhythm, cards show progress against their predictions, and helper chatter is folded. A watchdog keeps watching when every session has stopped, and a status page opens on a phone.
+
+Safety and recovery (safety.md):
+
+- `colony crash-report` says when each session stopped and the likely cause, and `colony resume` reopens every session that was alive before, on its own account and in its own folder. A background command stopped from outside, such as a session's `colony wait`, is named to its session so it starts again. `colony safety protect` turns on a GitHub ruleset for the protected branches.
+
+Checks (checks.md):
+
+- Checks run in proportion to the change, each within a time budget, and a slow one runs in the background while work goes on. Results stream as they arrive, a passing result is reused for the same commit, and `colony ci` starts CI on any commit and posts its results.
+
+Folders (folders.md):
+
+- One lead registry for every copy of the repo. A lead lends folders for a card, borrows from another, and frees those of a lead gone silent. Every command follows the configured check settings.
+
+Releases (releases.md):
+
+- The release pull request's description is written from the merged work: what changed, migrations, tests removed or changed, and check results. A merge freeze binds every person's leads. `colony release --only` releases a chosen part, and `colony branches --sync` keeps the long-lived branches in step. `colony health` keeps the shared branch green, `colony step` hands the person tested steps, and `colony plain check` keeps status messages plain.
+
+Cards and testing (cycle.md, testing.md):
+
+- `colony card new` names cards that plan to touch the same files. A card can wait for others and starts when they land, and an idle lead picks up its next queued card. A helper's changed files come from its diff, and finished cards close whatever branch they merged into. Testers reuse the accounts and fixtures you prepared, and share one findings list across computers.
+
 ## 0.6.0, 2026-11-12
 
 Hack mode holds up through a long day with several people, each with a lead on their own computer: leads see each other reliably, merges queue across computers, the demo has a clock, and everyone knows what is live. The parts that help every mode now work in every mode. A builder's fast check runs for its card's area, `colony tidy` clears finished worktrees, and the push guard reads a push the way git does.
