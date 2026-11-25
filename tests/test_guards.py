@@ -2196,3 +2196,60 @@ def test_a_merge_whose_github_reads_outlast_the_guards_deadline_is_refused_in_ti
     assert push_guard("ls", hosted).returncode == 0  # a call that needs no reads runs
     monkeypatch.setenv("COLONY_GUARD_DEADLINE", "9999")  # it may only shorten the deadline
     assert guard_module().time_left(1e6) <= guard_module().DEADLINE
+
+
+# A script's own folder, named by the common idioms
+
+
+OWN_FOLDER_IDIOMS = [
+    ('DIR=$(dirname "$0")', "$DIR/lib"),
+    ('DIR="$(dirname "${BASH_SOURCE[0]}")"', "$DIR/lib"),
+    ('DIR="$(cd "$(dirname "$0")" && pwd)"', "$DIR/lib"),
+    ('DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"', "$DIR/lib"),
+    ('DIR="$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd -P)"', "$DIR/lib"),
+    ('DIR="$(realpath "$(dirname "$0")")"', "$DIR/lib"),
+    ('DIR="$(readlink -f "$(dirname "${BASH_SOURCE[0]}")")"', "$DIR/lib"),
+    ('DIR="$(dirname "$(realpath "$0")")"', "$DIR/lib"),
+    ("TOP=$(git rev-parse --show-toplevel)", "$TOP/scripts/lib"),
+]
+
+
+@pytest.mark.parametrize("runs", ["bash", "source"])
+@pytest.mark.parametrize("assignment, folder", OWN_FOLDER_IDIOMS)
+def test_a_script_that_names_its_own_folder_by_a_common_idiom_runs_what_it_names(assignment, folder, runs,
+                                                                                   on_feature):
+    """Regression (orchestrator, after the audit fixes): the script guard refused the most common repo script shape,
+    DIR="$(cd "$(dirname "$0")" && pwd)" then source "$DIR/lib.sh". A variable set once at the top to an idiom that
+    names the script's own folder, or the repo's top folder, now resolves, and the guard reads the file it names."""
+    executable(on_feature / "scripts" / "ci.sh",
+               f'#!/usr/bin/env bash\nset -euo pipefail\n{assignment}\n{runs} "{folder}/run.sh"\necho ok\n')
+    executable(on_feature / "scripts" / "lib" / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    run = push_guard("./scripts/ci.sh", on_feature)
+    assert run.returncode == 2 and "holds a `git push`" in run.stderr, (assignment, runs, run.stderr)
+    executable(on_feature / "scripts" / "lib" / "run.sh", "#!/bin/sh\ngreet() { echo hi; }\n")
+    run = push_guard("./scripts/ci.sh", on_feature)
+    assert (run.returncode, run.stderr) == (0, ""), (assignment, runs, run.stderr)
+
+
+@pytest.mark.parametrize("text, lib", [
+    # Values outside the idioms: a folder above the script's, another variable's, an argument.
+    ('DIR="$(cd "$(dirname "$0")/.." && pwd)"\nbash "$DIR/scripts/lib/run.sh"\n', ""),
+    ('DIR="$(cd "$SOMEWHERE" && pwd)"\nbash "$DIR/lib/run.sh"\n', ""),
+    ('DIR=$(dirname "$1")\nbash "$DIR/lib/run.sh"\n', ""),
+    # A sourced file that may change the script's values: it sets DIR, it evals, or it sources more.
+    ('DIR="$(cd "$(dirname "$0")" && pwd)"\nsource "$DIR/lib.sh"\nbash "$DIR/lib/run.sh"\n', "DIR=/elsewhere\n"),
+    ('DIR="$(cd "$(dirname "$0")" && pwd)"\nsource "$DIR/lib.sh"\nbash "$DIR/lib/run.sh"\n', 'eval "$SETUP"\n'),
+    ('DIR="$(cd "$(dirname "$0")" && pwd)"\n. "$DIR/lib.sh"\nbash "$DIR/lib/run.sh"\n', ". ./more.sh\n"),
+    # A source the guard can't place, behind the shell's own builtin.
+    ('DIR="$(cd "$(dirname "$0")" && pwd)"\nbuiltin source "$DIR/lib.sh"\nbash "$DIR/lib/run.sh"\n', "greet() { :; }\n"),
+    # A sourced file's $0 is the script's that sources it, not its own.
+    ('source "$(dirname "$0")/lib.sh"\n', 'HERE=$(dirname "$0")\nbash "$HERE/lib/run.sh"\n'),
+])
+def test_a_value_outside_the_own_folder_idioms_or_one_a_source_may_change_stays_refused(text, lib, on_feature):
+    """Everything but the idioms stays fail-closed, and a script's values hold past a source only when the guard
+    reads the sourced file and finds nothing in it that may change them."""
+    executable(on_feature / "scripts" / "ci.sh", f"#!/usr/bin/env bash\n{text}")
+    executable(on_feature / "scripts" / "lib" / "run.sh", "#!/bin/sh\necho harmless\n")
+    (on_feature / "scripts" / "lib.sh").write_text(lib)
+    run = push_guard("./scripts/ci.sh", on_feature)
+    assert run.returncode == 2 and "with a variable the guard can't resolve" in run.stderr, (text, lib, run.stderr)

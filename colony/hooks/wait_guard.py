@@ -1648,13 +1648,15 @@ class Variables(NamedTuple):
     """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`),
     whether it holds something that may bind any name unseen (`opaque`, REBINDS), whether a name it never binds
     may take this computer's value (`environment`), which a line that ran it may have bound unseen, and whether it
-    may change how it, or a script it runs, reads its own lines (`steers`, STEERS), when it follows no value."""
+    may change how it, or a script it runs, reads its own lines (`steers`, STEERS), when it follows no value; and the
+    lines it read in full as an own-folder idiom (`settled`, own_folder), which the script check then leaves out."""
 
     values: dict
     bound: frozenset
     opaque: bool = False
     environment: bool = True
     steers: bool = False
+    settled: frozenset = frozenset()
 
 
 NO_VARIABLES = Variables({}, frozenset())
@@ -1670,11 +1672,30 @@ BINDERS = re.compile(rf"\b(?:{BINDER_NAMES})\b([^;\n|&]*)")
 # say), declare, typeset or local (a nameref among them), let, arithmetic, select, coproc, trap, enable, printf -v,
 # print -v, wait -p, set -A, ${NAME=value}, an array element, a named descriptor such as {NAME}>, and a binding
 # command given a name made at run time, such as read "$n". A text that holds any of them resolves no variable.
-REBINDS = re.compile(r"\b(?:eval|source|alias|function|declare|typeset|local|let|select|coproc|trap|enable)\b"
-                     r"|\bprintf?\b[^;\n|&]*\s-v|\bwait\b[^;\n|&]*\s-p|\bset\s+[-+]A\b"
-                     r"|(?:^|[;&|(\s])\.\s|[\w-]+\s*\(\s*\)|\(\(|\$\{[A-Za-z_]\w*:?=|[A-Za-z_]\w*\[[^\]\n]*\]\+?="
-                     r"|\{[A-Za-z_]\w*\}\s*[<>]"
-                     rf"|\b(?:{BINDER_NAMES})\b[^;\n|&<>]*\s[\"']*[$`]", re.M)
+RUN_TIME_BINDS = (r"\b(?:eval|alias|declare|typeset|let|select|coproc|trap|enable)\b"
+                  r"|\bprintf?\b[^;\n|&]*\s-v|\bwait\b[^;\n|&]*\s-p|\bset\s+[-+]A\b"
+                  r"|\(\(|\$\{[A-Za-z_]\w*:?=|[A-Za-z_]\w*\[[^\]\n]*\]\+?=|\{[A-Za-z_]\w*\}\s*[<>]"
+                  rf"|\b(?:{BINDER_NAMES}|local)\b[^;\n|&<>]*\s[\"']*[$`]")
+REBINDS = re.compile(RUN_TIME_BINDS + r"|\b(?:function|local)\b|[\w-]+\s*\(\s*\)", re.M)
+# A file a script sources runs in the script's own shell, so it may bind the script's names: the script follows its
+# values past it only when the guard reads the file and finds nothing in it that may (quiet_source).
+SOURCES = re.compile(r"\bsource\b|(?:^|[;&|(\s])\.\s", re.M)
+# What a sourced file may not hold: any of REBINDS but its own functions and `local`, which bind nothing of the
+# script's that the file doesn't name, and no further source.
+SOURCED_REBINDS = re.compile(RUN_TIME_BINDS + r"|\bsource\b|(?:^|[;&|(\s])\.\s", re.M)
+# The values that name a script's own folder, or its repo's top folder, set once at its top (own_folder). REF is the
+# script's path, as $0 or ${BASH_SOURCE[0]}; DIRNAME its folder, as dirname names it.
+REF = r'"?(?P<ref>\$0|\$\{BASH_SOURCE\[0\]\})"?'
+DIRNAME = rf'\$\(dirname\s+(?:--\s+)?{REF}\)'
+QUIET = r'(?:\s*(?:>\s*/dev/null(?:\s+2>&1)?|&>\s*/dev/null|2>\s*/dev/null))?'
+OWN_FOLDER = [
+    ("dirname", re.compile(DIRNAME)),
+    ("logical", re.compile(rf'\$\(cd\s+(?:--\s+)?"?{DIRNAME}"?{QUIET}\s*&&\s*pwd{QUIET}\)')),
+    ("physical", re.compile(rf'\$\(cd\s+(?:--\s+)?"?{DIRNAME}"?{QUIET}\s*&&\s*pwd\s+-P{QUIET}\)')),
+    ("physical", re.compile(rf'\$\((?:realpath|readlink\s+-f)\s+(?:--\s+)?"?{DIRNAME}"?\)')),
+    ("target", re.compile(rf'\$\(dirname\s+(?:--\s+)?"?\$\((?:realpath|readlink\s+-f)\s+(?:--\s+)?{REF}\)"?\)')),
+    ("top", re.compile(r'\$\(git\s+rev-parse\s+--show-toplevel\)')),
+]
 # Variables the shell sets itself, such as PWD after a cd or REPLY after a read: the guard's own environment says
 # nothing of them. Only an upper-case name may come from this computer's environment (zsh's path and cdpath are
 # PATH's and CDPATH's).
@@ -1708,7 +1729,7 @@ HARMLESS = {"CI", "NODE_ENV", "DEBUG", "VERBOSE", "FORCE_COLOR", "NO_COLOR", "TZ
 
 def steering(name: str) -> bool:
     """Whether binding `name` can change how a script reads its own lines (STEERS)."""
-    return name in STEERING or name.upper() in SEARCH_PATHS or name.startswith(("LD_", "DYLD_", "BASH_FUNC_"))
+    return name in STEERING or name.upper() in SEARCH_PATHS or name.startswith(("LD_", "DYLD_", "BASH_FUNC_", "GIT_"))
 
 
 def named_bindings(text: str) -> set[str] | None:
@@ -1743,13 +1764,65 @@ def only_read(name: str, text: str) -> bool:
     return mentions == reads + 1
 
 
-def script_variables(text: str, path: str | None) -> Variables:
+def own_folder(value: str, path: str | None, cwd: str, sourced: bool) -> str | None:
+    """The folder a value names when it is one of the idioms for a script's own folder (OWN_FOLDER), else None:
+    `$(dirname "$0")` or `$(dirname "${BASH_SOURCE[0]}")`, as dirname gives it; that inside `$(cd … && pwd)`, in
+    full, or `pwd -P`, `realpath` or `readlink -f`, with links followed; the folder of `$(realpath "$0")`; and
+    `$(git rev-parse --show-toplevel)`, the repo's top folder from `cwd`. `path` is the script's path as it was run
+    or sourced, and `cwd` the folder it starts in. A sourced file's $0 is the script's that sourced it, so only
+    ${BASH_SOURCE[0]} names its own folder; a typed line (`path` None) names none."""
+    if len(value) > 1 and value[0] == value[-1] == '"' and value[1:3] == "$(":
+        value = value[1:-1]
+    for kind, pattern in OWN_FOLDER:
+        found = pattern.fullmatch(value)
+        if not found:
+            continue
+        if kind == "top":
+            try:
+                run = subprocess.run(["git", "-C", cwd or ".", "rev-parse", "--show-toplevel"], capture_output=True,
+                                     text=True, timeout=time_left(5))
+            except (OSError, subprocess.SubprocessError):
+                return None
+            return run.stdout.strip() or None if run.returncode == 0 else None
+        if path is None or (sourced and found["ref"] == "$0"):
+            return None
+        if kind == "dirname":
+            return os.path.dirname(path) or "."
+        if not cwd and not os.path.isabs(path):
+            return None
+        full = os.path.join(cwd, path)
+        if kind == "logical":
+            return os.path.normpath(os.path.dirname(full))
+        if kind == "physical":
+            return os.path.realpath(os.path.dirname(full))
+        return os.path.dirname(os.path.realpath(full))  # target: the folder of the file the path links to
+    return None
+
+
+def quiet_source(word: str, folder: str, variables: Variables) -> Variables | None:
+    """What a file a script sources binds, when it can't change the script's values: the guard reads it, it names
+    none of them but as $name or ${name}, and it holds nothing SOURCED_REBINDS or STEERS matches. None when it may."""
+    path = expand(word, variables)
+    if not word or "$" in path or (not folder and not os.path.isabs(path)):
+        return None
+    status, text = script_text(path, folder, True)
+    if status != "text" or SOURCED_REBINDS.search(text) or STRAY.search(text) or STEERS.search(text):
+        return None
+    body = "\n".join(line for line in text.split("\n") if not line.lstrip(" \t").startswith("#"))
+    for name in variables.values:
+        if len(re.findall(rf"{name}(?!\w)", body)) != len(re.findall(rf"\${name}(?!\w)|\$\{{{name}\}}", body)):
+            return None
+    found = script_variables(text, None, folder)
+    return None if found.steers or named_bindings(text) is None else found
+
+
+def script_variables(text: str, path: str | None, cwd: str = "", sourced: bool = False) -> Variables:
     """The variables a text binds. A name has a value the guard follows only when the text sets it once, in its
     straight-line start, the lines before any other command (blank lines, comments and `set -eu` aside), and
-    otherwise names it only as $name or ${name} (only_read): to a plain word or a quoted one with no $, ` or \\, or,
-    in a script file run by `path` (its $0), to its own folder, `NAME=$(dirname "$0")` (through `echo "$0" | sed`
-    too). A typed line's $0 is the shell's, so `path` is None and no folder follows. A text REBINDS matches resolves
-    none."""
+    otherwise names it only as $name or ${name} (only_read): to a plain word or a quoted one with no $, ` or \\, or
+    to one of the idioms that name the script's own folder or its repo's top folder (own_folder; `path` is the script
+    as it was run or sourced, `cwd` the folder it starts in, and a typed line's `path` is None). A text REBINDS
+    matches resolves none, and so does one that sources a file that may change its values (quiet_source)."""
     counts: dict[str, int] = {}
     for match in re.finditer(r"(?<![\w$.\-/])([A-Za-z_][A-Za-z0-9_]*)\+?=", text):
         counts[match[1]] = counts.get(match[1], 0) + 1
@@ -1766,22 +1839,47 @@ def script_variables(text: str, path: str | None) -> Variables:
     opaque = bool(REBINDS.search(text) or STRAY.search(text)) or named is None
     steers = bool(STEERS.search(text)) or any(steering(name) for name in counts)
     lines = [line for line in text.split("\n") if not line.lstrip(" \t").startswith("#")]  # as the shell splits it
-    body, values = "\n".join(lines), {}
+    body, values, settled = "\n".join(lines), {}, set()
     for line in [] if opaque or steers else lines:
         line = line.strip(" \t")
         named = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
         if not line or SET_OPTIONS.fullmatch(line):
             continue
-        if not named or not (SCRIPT_FOLDER.fullmatch(named[2]) or PLAIN_VALUE.fullmatch(named[2])):
+        folder = own_folder(named[2], path, cwd, sourced) if named else None
+        if not named or not (folder or SCRIPT_FOLDER.fullmatch(named[2]) or PLAIN_VALUE.fullmatch(named[2])):
             break  # the straight-line start ends at the first other command
         name, value = named[1], named[2]
         if counts.get(name) != 1 or not only_read(name, body):
             continue
-        if not SCRIPT_FOLDER.fullmatch(value):
+        if folder:
+            values[name] = folder
+            settled.add(line)  # an idiom read in full: it runs nothing the script check needs to read
+        elif not SCRIPT_FOLDER.fullmatch(value):
             values[name] = value.strip("'\"")
-        elif path is not None:
+        elif path is not None and not sourced:
             values[name] = os.path.dirname(path) or "."
-    return Variables(values, frozenset(counts), opaque, steers=steers)
+    found = Variables(values, frozenset(counts), opaque, steers=steers, settled=frozenset(settled))
+    if opaque or not SOURCES.search(body):
+        return found
+    # Each file the text sources must leave its values be, and binds names of its own, which then never come from
+    # this computer; any source the guard can't place, such as one behind `builtin`, resolves nothing.
+    try:
+        segments = shell_segments(tokens(text), cwd)
+    except ValueError:
+        return found._replace(values={}, opaque=True)
+    placed = []
+    for words, _, _, here, _ in segments:
+        program = run_program(words)
+        if program and program[0] in SCRIPT_SOURCES:
+            placed.append((program[1] if len(program) > 1 else "", here))
+    if len(placed) < len(SOURCES.findall(body)):
+        return found._replace(values={}, opaque=True)
+    for word, folder in placed:
+        quiet = quiet_source(word, folder, found)
+        if quiet is None:
+            return found._replace(values={}, opaque=True)
+        found = found._replace(bound=found.bound | quiet.bound)
+    return found
 
 
 def within(outer: Variables, inner: Variables) -> Variables:
@@ -1929,14 +2027,15 @@ def node_launcher(text: str) -> str:
 
 
 def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built: bool = False,
-                    wrote: bool = False, variables: Variables = NO_VARIABLES) -> list[tuple[str, str]]:
+                    wrote: bool = False, variables: Variables = NO_VARIABLES,
+                    sourced: bool = False) -> list[tuple[str, str]]:
     """(kind, what) for each push, merge or kill a script holds, or a script it runs in turn holds: what follows the
     script's name in a reason, such as "holds a `git push`". Kind script is the script guard's: a script it can't
     read or find, a program run by its path that doesn't exist yet and that nothing earlier on the line (`built`)
     builds, and scripts nested deeper than DEPTH. A program it doesn't read still may not name a push, a merge or a
     kill in its text. An npm or pnpm launcher (node_launcher) whose own interpreter, such as "$basedir/node", isn't
     there runs the one on PATH, unless an earlier command on the line may write a file (`wrote`, writer) and none
-    builds. `variables` are the line's that ran it (within)."""
+    builds. `variables` are the line's that ran it (within), and `sourced` says a source or . reads it."""
     status, text = script_text(name, cwd, read_by_shell)
     if status == "program":
         return [(kind, f"holds {what}, in a program the guard doesn't read") for kind, pattern, what in HELD
@@ -1978,7 +2077,7 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
         return [("script", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
     return [(kind, f"runs {inner}, which {what}" if inner else f"runs a line where {what}")
             for kind, inner, what in scripts(text, cwd, depth + 1, variables=within(variables,
-                                             script_variables(text, name)), built=built, wrote=wrote)]
+                                             script_variables(text, name, cwd, sourced)), built=built, wrote=wrote)]
 
 
 def parsed_findings(text: str, cwd: str) -> list[tuple[str, str]]:
@@ -2023,12 +2122,14 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False, variabl
     script's own when this text is a script's); one the guard can't resolve is refused. `built` and `wrote` say a
     command before this text, on the line that ran it, may build or write a program. With `probe`, it only says
     whether the line runs any script or shell line at all."""
+    variables = variables if variables is not None else script_variables(command, None, cwd)
+    if variables.settled:  # an own-folder idiom, such as DIR="$(cd "$(dirname "$0")" && pwd)", read in full already
+        command = "\n".join(line for line in command.split("\n") if line.strip(" \t") not in variables.settled)
     try:
         line = tokens(command)
     except ValueError:
         return []
     found: list[tuple[str, str, str]] = []
-    variables = variables if variables is not None else script_variables(command, None)
     segments = shell_segments(line, cwd)
     for index, (words, given, before, here, _) in enumerate(segments):
         program = run_program(words)
@@ -2085,7 +2186,7 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False, variabl
                 continue
             found += [(kind, file, what)
                       for kind, what in script_findings(path, here, depth, read_by_shell, built_before, wrote_before,
-                                                        variables)]
+                                                        variables, sourced=name in SCRIPT_SOURCES)]
     return found
 
 
