@@ -161,7 +161,7 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 1. Start `colony wait` as a background command, and keep one running all session. When it exits, read the line it printed, start it again at once, unless it said a newer `colony wait` runs, then act on the line. A `start: this card` line on card `<n>` gives you that card: read it with `gh issue view <n>`, and run `colony board set <n> Last_update=now`.
 2. Make the change on its own branch, in its own worktree, inside the card's folders: run `colony take <n>`, then the command it prints, `git fetch origin && git worktree add {worktrees}/{project}-<name>-<n> -b <name>/<n> origin/{base}`, which starts from the card's image branch when it has one. Then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
-4. Run `colony fast-check` once, when the change and its tests are done, and fix what it reports; run it again only after a fix. It runs `{fast_check}` for the check areas your branch changes, and ends on one line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no check area, such as a docs-only card, or the output only says NOT RUN.
+4. Run `colony fast-check` once, when the change and its tests are done, and fix what it reports; run it again only after a fix. It runs `{fast_check}` for the check areas your branch changes, and ends on one line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no check area, such as a docs-only card, or the output only says NOT RUN. When it ends on `fast check: running in the background …`, keep working: run `colony check watch <run> --until-failure` as a background command, fix its first failure at once, and use its last line in the done line.
 5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`. A `not run` line goes in as it is: never call a check that ran nothing a pass.
 6. Take the next card at once.
 
@@ -196,6 +196,17 @@ The tester checks a release on the deployed app, the way a person would use it, 
 2. It reads the release's batches and their cards, and tests each card's done-when results on the deployed app. It changes no code.
 3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
 4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
+
+## Checks
+
+Every agent tests less and watches more:
+
+1. Run the smallest check that proves the change: `colony fast-check` for a builder, `colony check run` for a lead. In the related scope they run the tests for what changed and the guard tests, never the whole suite.
+2. Run the full suite, `--full`, only at release time or when the person asks.
+3. Never wait on a long check in the foreground. A check past its budget goes on in the background and says so: follow it with `colony check watch <run> --until-failure` as a background command, and start fixing at its first failure.
+4. Never run the same check on the same code twice. A pass is reused, and a run of the same check already going is joined. Use `--again` only when you have a reason to doubt the pass, and say the reason.
+5. To check CI on a commit, run `colony ci <ref> --until-failure` as a background command, never by hand. It starts CI only where none ran, cancels the runs the commit made pointless, and posts the result on the pull request.
+6. `colony check status` shows every check on this computer, and `colony status` the running ones.
 
 ## Hack
 
