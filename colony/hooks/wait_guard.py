@@ -1626,7 +1626,7 @@ class Variables(NamedTuple):
     """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`),
     whether it holds something that may bind any name unseen (`opaque`, REBINDS), whether a name it never binds
     may take this computer's value (`environment`), which a line that ran it may have bound unseen, and whether it
-    may change how a script it runs reads its own lines (`steers`, STEERS)."""
+    may change how it, or a script it runs, reads its own lines (`steers`, STEERS), when it follows no value."""
 
     values: dict
     bound: frozenset
@@ -1664,12 +1664,23 @@ ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 # Characters the shell reads as part of a word but Python's splitlines() and strip() read as a line break or a space,
 # such as a form feed or a Unicode line separator: a text that holds one resolves no variable.
 STRAY = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x85\u2028\u2029]")
-# What on a line can change how a script it runs reads its own lines: the programs its commands find (PATH), a file
-# bash or sh reads first (BASH_ENV, ENV, zsh's ZDOTDIR), how it splits words (IFS), its options, and functions
-# passed down in the environment (BASH_FUNC_, export -f). A script run from such a line follows no value of its own.
-STEERS = re.compile(r"\b(?:PATH|BASH_ENV|ENV|ZDOTDIR|IFS|SHELLOPTS|BASHOPTS|CDPATH)\+?=|BASH_FUNC_"
-                    r"|\bexport\b[^;\n|&]*\s-f\b")
-STEERING = {"PATH", "BASH_ENV", "ENV", "ZDOTDIR", "IFS", "SHELLOPTS", "BASHOPTS", "CDPATH"}
+# What in a text can change how a script reads its own lines, the script's own text or the line that runs it: the
+# programs its commands find (PATH), a file bash, sh or zsh reads first (BASH_ENV, ENV, ZDOTDIR, HOME), how it splits
+# words (IFS), its options, the libraries its programs load (LD_, DYLD_), functions passed down in the environment
+# (BASH_FUNC_, export -f), and env with options, such as env -u PATH. A text that holds any of them follows no value
+# of its own, and nor does a script it runs (within).
+STEERS = re.compile(r"\b(?:PATH|BASH_ENV|ENV|ZDOTDIR|HOME|XDG_CONFIG_HOME|IFS|SHELLOPTS|BASHOPTS|CDPATH|LD_\w+"
+                    r"|DYLD_\w+)\+?=|BASH_FUNC_|\bexport\b[^;\n|&]*\s-f\b|\benv\s+-")
+STEERING = {"PATH", "BASH_ENV", "ENV", "ZDOTDIR", "HOME", "XDG_CONFIG_HOME", "IFS", "SHELLOPTS", "BASHOPTS", "CDPATH"}
+# Names a line may set before it runs a script and still let the script follow its own values: they change no
+# shell's reading. Any other name the line binds may reach the script, so the script follows none (within).
+HARMLESS = {"CI", "NODE_ENV", "DEBUG", "VERBOSE", "FORCE_COLOR", "NO_COLOR", "TZ", "RUST_BACKTRACE",
+            "PYTHONUNBUFFERED"}
+
+
+def steering(name: str) -> bool:
+    """Whether binding `name` can change how a script reads its own lines (STEERS)."""
+    return name in STEERING or name.startswith(("LD_", "DYLD_", "BASH_FUNC_"))
 
 
 def only_read(name: str, text: str) -> bool:
@@ -1699,9 +1710,10 @@ def script_variables(text: str, path: str | None) -> Variables:
     for match in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\b", text):
         counts[match[1]] = counts.get(match[1], 0) + 2
     opaque = bool(REBINDS.search(text) or STRAY.search(text))
+    steers = bool(STEERS.search(text)) or any(steering(name) for name in counts)
     lines = [line for line in text.split("\n") if not line.lstrip(" \t").startswith("#")]  # as the shell splits it
     body, values = "\n".join(lines), {}
-    for line in [] if opaque else lines:
+    for line in [] if opaque or steers else lines:
         line = line.strip(" \t")
         named = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
         if not line or SET_OPTIONS.fullmatch(line):
@@ -1715,14 +1727,14 @@ def script_variables(text: str, path: str | None) -> Variables:
             values[name] = value.strip("'\"")
         elif path is not None:
             values[name] = os.path.dirname(path) or "."
-    return Variables(values, frozenset(counts), opaque, steers=bool(STEERS.search(text)))
+    return Variables(values, frozenset(counts), opaque, steers=steers)
 
 
 def within(outer: Variables, inner: Variables) -> Variables:
     """The variables a script run from a line sees: its own values, unless the line may steer how the script reads
-    its lines (STEERS, or a line that may bind any name unseen), and none from this computer for a name the line
-    binds or exports, nor for any name when the line may bind one unseen."""
-    steered = outer.opaque or outer.steers or bool(outer.bound & STEERING)
+    its lines (STEERS, a name it binds that HARMLESS doesn't list, or a line that may bind any name unseen), and none
+    from this computer for a name the line binds or exports, nor for any name when the line may bind one unseen."""
+    steered = outer.opaque or outer.steers or bool(outer.bound - HARMLESS)
     return inner._replace(values={} if steered else inner.values, bound=inner.bound | outer.bound,
                           environment=inner.environment and outer.environment and not outer.opaque,
                           steers=inner.steers or steered)

@@ -1075,6 +1075,38 @@ def test_a_variable_follows_the_shells_lines_glued_names_and_lines_that_steer_a_
     assert run.returncode == 2, (command, text, run.stderr)
 
 
+@pytest.mark.parametrize("command, text", [
+    # The script steers its own reading: a dirname of its own on PATH, set before its folder.
+    ("bash launch.sh", 'PATH={evil}/bin\nhere=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    # The line that runs it sets a name the guard didn't list, or runs env with options.
+    ("LD_PRELOAD={evil}/x.so bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("DYLD_INSERT_LIBRARIES={evil}/x.dylib bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("env -u PATH bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+    ("SOMETHING={evil} bash launch.sh", 'here=$(dirname "$0")\nbash "$here/run.sh"\n'),
+])
+def test_a_script_that_steers_itself_or_is_run_from_a_steering_line_follows_no_value(command, text, on_feature):
+    """Regression (security review of 5163747): the names that steer a script were a short list, so LD_PRELOAD, DYLD_,
+    env -u PATH and the like passed; and a script that set PATH itself before its own folder still followed it. Now
+    any name the running line binds steers but a few harmless ones, and a script that steers itself follows none."""
+    evil = on_feature / "evil"
+    executable(evil / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(evil / "bin" / "dirname", f"#!/bin/sh\necho {evil}\n")
+    executable(on_feature / "run.sh", "#!/bin/sh\necho harmless\n")  # the launch folder's own
+    executable(on_feature / "launch.sh", text.format(evil=evil))
+    run = push_guard(command.format(evil=evil), on_feature)
+    assert run.returncode == 2, (command, text, run.stderr)
+
+
+def test_a_harmless_name_on_the_line_leaves_a_scripts_own_folder_followed(on_feature):
+    """CI=1 and the like change no shell's reading, so the script's own folder still resolves and its script is read."""
+    executable(on_feature / "launch.sh", '#!/bin/sh\nhere=$(dirname "$0")\nbash "$here/run.sh"\n')
+    executable(on_feature / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    run = push_guard("CI=1 NODE_ENV=test bash launch.sh", on_feature)
+    assert run.returncode == 2 and "holds a `git push`" in run.stderr, run.stderr
+    executable(on_feature / "run.sh", "#!/bin/sh\necho harmless\n")
+    assert push_guard("CI=1 NODE_ENV=test bash launch.sh", on_feature).returncode == 0
+
+
 def test_a_launcher_is_npms_or_pnpms_only_as_the_shell_splits_its_lines():
     """Regression (security review of 03292d1): node_launcher split lines as Python does, where a form feed or a
     Unicode line separator ends a line, though the shell reads it as part of a word."""
