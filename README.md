@@ -75,7 +75,7 @@ Every session you type into is a lead, over its own folders when another lead is
 - **A team, not one helper.** Claude Code plans, builds in parallel, checks its own work, and hands you one PR.
 - **You make the decisions, not the chores.** The lead asks you only what it can't decide, each time with a default.
 - **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop of up to 3 rounds, each checking only what changed. A failing test always blocks, and a finding still open becomes a card.
-- **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, subagents split each card into pieces that run at the same time, and every minute and dollar is measured.
+- **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, each on an account with room and a forecast of when it runs out, and every minute and dollar is measured.
 - **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
 - **Nothing new to run.** No servers, standard-library Python, on your own machine and your own Claude accounts.
 

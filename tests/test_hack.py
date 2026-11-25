@@ -452,10 +452,12 @@ def test_the_docs_say_board_unread_prints_every_new_post_and_marks_yours():
         assert "Prints the posts for you that you haven't seen" not in text, doc
 
 
-def test_the_playbook_says_subagents_are_for_speed_searches_and_browser_checks():
+def test_the_playbook_says_builders_are_helpers_and_subagents_only_search_or_check_a_browser():
     section = playbook_section("Subagents")
-    for use in ("**Speed.**", "in parallel", "**Searches.**", "**Browser checks.**"):
-        assert use in section, use
+    for rule in ("Builders run only as helpers, never as subagents.", "a quick search", "a browser check",
+                 "`colony helpers <n> --open`", "[subagents] max_running"):
+        assert rule in section, rule
+    assert "**Speed.**" not in section and "in parallel" not in section
     builder = (PACKAGE / "skills" / "colony-builder" / "SKILL.md").read_text()
     assert "start no subagents" not in builder and "Subagents section" in builder
 

@@ -2,7 +2,7 @@
 
 A team runs many sessions at once, on one or more AI accounts and one or more computers. This page says how Colony shares that out: which account each session uses, how many helpers open at once, what happens when an account hits its usage limit, how the team hears about expired sign-ins, how much one computer runs at once, how runs share a thing only one can use, and what happens after a computer sleeps. Every setting here is in [configuration.md](configuration.md), and every command in [commands.md](commands.md#capacity).
 
-`colony capacity` shows all of it in one place: this computer's cores, memory, free disk and load, how many helpers, test runs and builds it runs at once, each account's room and helpers, the sessions waiting for a limit to reset, and the locks held. `--json` prints the same for a script or another command.
+`colony capacity` shows all of it in one place: this computer's cores, memory, free disk and load, how many helpers, test runs and builds it runs at once, each account's room with how old its reading is, its helpers and its forecast, the accounts kept for a live lead, the sessions waiting for a limit to reset, and the locks held. It takes a live reading of every account first. `--json` prints the same for a script or another command. `colony accounts` lists every account on each computer; see [Finding accounts](#finding-accounts).
 
 ## The account pool
 
@@ -22,6 +22,61 @@ Any provider can be in the pool. A Claude Code account's usage comes from its se
 `colony helpers <n> --open` opens `[pool] wave` helpers now (3 by default). It starts the rest in the background, as `colony open-later`, which opens one more wave every `wave_seconds` (60). Each helper opens on the person's best account that is under its `max_busy`, and only while this computer has room for another helper. When no account is under its cap, or the computer is busy, the next wave waits. After an hour with no room, the lead gets one line saying how many helpers didn't open. The waves log to `~/.colony/<project>/helpers-waves.log`.
 
 `colony open <name>` and `colony join` follow the same caps for one helper. When every account is at its cap, they refuse and say so. `--account` always opens on the account you name.
+
+A wave never opens a helper on an account where it would run the account out before its reset ([Plan around resets](#plan-around-resets)), and on a live lead's own account only when no other account has room ([The lead's own account](#the-leads-own-account)). When no account can take one more helper before its reset, the wave opens fewer, and the background run starts the rest right after the soonest reset, without counting that wait against its hour of patience.
+
+## Builders are helpers, never subagents
+
+Every builder runs as a helper Colony opens, with `colony helpers <n> --open` or `colony open <name>`, so it gets an account with room, a place in a wave and a slot under its account's cap. A subagent runs inside the session that starts it, on that session's own account, where none of this applies and the watch can't count it. When a lead builds through subagents, they all drain the lead's own 5-hour window, and when it runs out, the lead and every builder stop at once.
+
+So a lead or an orchestrator never starts a subagent to build, and a helper starts one only for a quick search or a browser check. The subagent guard holds every Colony session to `[subagents] max_running` (2) at once, and tells a lead past it how to open helpers instead; see [safety.md](safety.md#the-subagent-guard).
+
+## The lead's own account
+
+While another account has room, no helper opens on the account a live lead or orchestrator runs on, so the coordinator is never cut off by its own team. Colony knows those accounts from the lead that runs the command, each lead's heartbeat on this computer, and each live lead's status comment, on any computer, since an account's window is the same wherever it is signed in.
+
+Most people have one AI account, so a lead's account is not closed to helpers for good. When it is the only account with room, or the only account at all, `colony helpers --open`, `colony open` and `colony join` let helpers share it, with two limits that leave the lead room:
+
+- **A lower cap:** at most one fewer helper than the account's cap, and at least one. With the default `max_busy` of 3, two helpers share the lead's account.
+- **The lead's share of each window:** the fit check ([Plan around resets](#plan-around-resets)) counts the lead as one more busy session while no rate is measured, and opens a helper there only while the lead keeps 10% of each window until the window resets. A lead's account that is out of room takes no helper.
+
+When that starts, Colony prints one plain warning, such as `Warning: account main is ana-main-lead's own, and no other account has room, so helpers share it: at most 2 at once, one fewer than its cap, and only while the lead keeps 10% of each window until it resets.` Past the lower cap, a new helper is refused, with why.
+
+`--account <name>` still opens where you say. `[pool] share_lead_accounts = true` treats a lead's account as any other, with its full cap. To keep helpers off an account always, the lead's or any other, put it in `[pool] reserve`, which stays strict. `colony capacity` marks each account kept for a lead.
+
+## Fresh readings
+
+A usage reading is a copy saved when it was fetched, and an old copy looks just like a new one. So Colony fetches a live reading before it places a session, and every room line says how old its reading is, such as `main: 5h 40% (resets 23:50 UTC), week 63% (resets Sat 10:00 UTC), read 3 min ago`. That line shows in `colony who`, in every status comment, in the briefing, in `colony capacity`, in `colony watch` and on the status page.
+
+A reading older than `[pool] stale_minutes` (15) never places a session. When a live fetch fails, such as for an account signed out or a computer offline, the account's room counts as unknown, its old numbers are not used, and it comes after every account with a fresh reading. A reading is fetched again once it is 10 minutes old, so `stale_minutes` is 10 at the least.
+
+The lead runs `colony capacity` before it opens helpers and at least every 30 minutes while they run, and quotes an account's usage only with how old its reading is. Its wait also takes a live reading of every account on its computer every 10 minutes.
+
+## Plan around resets
+
+Each fresh reading of an account on this computer is kept for a day, with how many helpers ran on the account then, in `~/.colony/<project>/usage-history.json`. From them Colony works out each window's **burn rate**: how many percent its use rose an hour over the last hour of the 5-hour window, or the last day of the weekly one, and that rate divided by the helpers it ran, the **rate per busy helper**. Two readings of one window make a rate when they are at least 15 minutes apart for the 5-hour window, or 3 hours for the weekly one: usage comes in whole percents, so a shorter span of the slow weekly window would read one step as a fast pace.
+
+At that pace, the **forecast** says when each window reaches `[pool] out_at`, and whether that comes before the window resets. `colony capacity` and `colony accounts` show it beside each account's reset times, such as `5-hour: runs out around 07:10 UTC, before it resets at 09:39 UTC (18.0% an hour); 6.0% an hour per busy helper, over 3.0 helpers`.
+
+**Before a helper opens,** Colony checks it fits: the account's pace with one more helper there, from the account's own rate per helper, else the pool's average, else `[pool] helper_rate` (10% of the 5-hour window an hour), a guess used only until readings show the real rate. When the account would run out more than 15 minutes before a reset, the helper goes to the next account where it fits. When none fits, it waits, and the background run opens it right after the soonest reset. Set `helper_rate = 0` to check only against measured rates. `--account` opens where you say.
+
+**The lead's wait warns ahead,** in plain words, once when the forecast first shows an account running out before its reset, and once more, as `urgent:`, when that is under 30 minutes away. It names the fewest helpers to move and the account with room for them, such as:
+
+```
+account main runs out around 07:10 UTC at its pace (30% of its 5-hour window an hour, with 3 helpers here), and that window resets at 09:39 UTC: move 2 helpers to team, which has room for them: as each finishes its card, stop it with `colony stop <name>`, and open the next one with `colony open <name> --account team`
+```
+
+When no account has room, it says to open no more helpers there and let the ones there finish. The warning counts the helpers on the lead's computer. The briefing names any account that runs out before its reset too.
+
+## Finding accounts
+
+`colony accounts` lists every account in the pool. Each one on this computer shows whether it is signed in, its live usage and reset times, how old the reading is, its helpers against its cap, and its forecast. An account whose folder is missing here says so. The accounts on other computers show as their sessions' status comments last showed them, with how long ago. New signed-in settings folders here come last.
+
+`colony accounts scan` looks where `[pool] scan_folders` says (`~/.claude`, `~/.claude-*` and `~/.claude_*` by default) for signed-in settings folders that no `[accounts.<name>]` table names, and offers to add each one, named after its folder, such as `work` for `~/.claude-work`. In a terminal it asks for each; elsewhere it prints the command; `--add` adds them all. It finds Claude Code folders: an account of another provider is added by hand, with its `usage_command` and `auth_command`.
+
+`colony accounts add <name> --dir <folder> [--person <person>]` writes the account into this computer's own layer, `.colony/colony.local.toml`, never the shared `.colony/colony.toml`, since a folder's path belongs to one computer. For an account the team's file already names, it writes only this computer's folder for it. The config must still load with it, or nothing changes. When `[people.<person>] accounts` lists that person's accounts by name, add the new one there too.
+
+The briefing flags any of your accounts that is missing on this computer or signed out, and any new signed-in folder not yet in the pool. The lead's wait flags, in its digest, an account whose folder leaves this computer and a new folder that appears. An expired sign-in is the service check's to flag, as an `urgent:` line; with `[services] builtin = false`, the wait flags that too.
 
 ## When a usage limit resets
 

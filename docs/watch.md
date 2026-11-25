@@ -49,7 +49,7 @@ The report goes out in its status comment, sets its intent to `working` when it 
 
 ## Helper agents
 
-A helper may start helper agents of its own, such as Claude Code's subagents. The watch finds each one that runs, from the helper's transcript folder: what it does, when it started and when it last moved. They show in the helper's status comment, in `colony watch` and on the status page.
+A helper may start helper agents of its own, such as Claude Code's subagents, for a quick search or a browser check alone: builders run as helpers, never as subagents, and the subagent guard caps each session at `[subagents] max_running` (see [safety.md](safety.md#the-subagent-guard)). The watch finds each one that runs, from the helper's transcript folder: what it does, when it started and when it last moved. They show in the helper's status comment, in `colony watch` and on the status page.
 
 When one runs past `agent_minutes` (45), the helper's own wait tells it with one `urgent:` line, and again past twice that: the helper reads the agent's output and stops it unless it is about to finish. Past twice the limit, the lead hears an `agent:` line too. Colony can't stop an agent inside another session itself, so the helper stops it with its own agent tool.
 
@@ -87,7 +87,7 @@ For a watchdog the computer keeps running across restarts and logins, run `colon
 
 ## The status page
 
-The status page is one pinned issue, `Colony: status`, whose body the watchdog keeps current: a link the person can open on a phone. It shows what is worth a look, the cards' progress with their predictions and when the work left ends, and each lead and helper with what it does and why, its last report and its helper agents.
+The status page is one pinned issue, `Colony: status`, whose body the watchdog keeps current: a link the person can open on a phone. It shows what is worth a look, the cards' progress with their predictions and when the work left ends, each account read on the watchdog's computer with when it was read and its forecast, and each lead and helper with what it does and why, its last report and its helper agents. A reading past `[pool] stale_minutes` says so, so an old number is never taken for today's; `colony watch` shows the same accounts with how long ago each was read. See [capacity.md](capacity.md#fresh-readings).
 
 The watchdog writes it at most every `page_minutes` (5), only when something changed, and at least every 30 minutes so a reader sees it is alive. `colony watch --page` writes it at once and prints its link. Colony makes the issue the first time, and pins it when the repo has room for one more pinned issue. Set `[watch] page = false` to keep no page.
 

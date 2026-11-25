@@ -1212,7 +1212,9 @@ def capacity_part(config: dict, person: str) -> list[str]:
              if name in config["accounts"]]
     if rooms:
         lines.append("Accounts: " + "; ".join(rooms) + ".")
-    return lines
+    from colony import accounts, forecast  # accounts missing, signed out or new, and any that runs out before a reset
+
+    return lines + accounts.briefing_lines(config, names) + forecast.risk_lines(config, names)
 
 
 def handover_part(config: dict, lead: str) -> str:
