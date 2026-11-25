@@ -1795,6 +1795,10 @@ def run_batch(config: dict, args) -> int:
     if b.wt.exists() or _git(b.root, "branch", "--list", b.branch):
         print(f"colony batch {b.name}: {b.branch} or {b.wt} already exists; pick another --name")
         return 1
+    if not b.demo:
+        from colony import freeze
+
+        freeze.guard_batch(config, b.root, b.project["base"], b.cards)  # a merge freeze pauses all but named fixes
     replaced = stop_on_signal(b) if threading.current_thread() is threading.main_thread() else {}
     try:
         result = review_demo(b) if b.demo else run_rounds(b)

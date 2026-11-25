@@ -697,6 +697,9 @@ def run(config: dict, args) -> int:
         for branch in branches:
             print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
+    from colony import freeze
+
+    freeze.guard_merge(config, root, base, branches)  # a merge freeze or a red base pauses every lead's landing
     results: list[tuple[str, Landed]] = []
     with one_at_a_time(config), team_turn(config, root, branches):
         if len(branches) > 1:
