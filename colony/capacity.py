@@ -371,6 +371,7 @@ def full_accounts(config: dict, counts: dict[str, set[str]], pool: Policy) -> se
 AT_CAP = "every account is at its cap of busy helpers"
 NO_FIT = "no account has room for one more helper before its window resets"
 SHARED = "it is the only account, so it shares the own account of"  # a why's start when a helper shares a lead's
+EVERY_LEAD = "every account of yours runs a lead or the orchestrator"  # a why's start when no account is free of leads
 
 
 def lead_accounts(config: dict, alive: list | None = None) -> dict[str, list[str]]:
@@ -434,6 +435,30 @@ def agent_account(config: dict, args) -> tuple[str, str, str]:
     return cli.pick(config, person)
 
 
+def group_lead_account(config: dict, person: str, placed: dict[str, list[str]]) -> tuple[str, str, str]:
+    """The account an orchestrator's next group lead opens on, as (name, config_dir, why). While the person has more
+    than one account, a group lead takes an account no lead runs on only when another such account stays free;
+    otherwise it shares an account that already runs a lead, the orchestrator's or another group lead's, with room,
+    so the last account free of leads stays free for helpers, which a lead's own account never takes (place). The
+    leads are lead_accounts' and `placed`, the group leads this start already opened, by account. With one account,
+    with [pool] share_lead_accounts = true, or when no lead's account has room, the plain pick (cli.pick)."""
+    order, last = cli.person_accounts(config, person)
+    if policy(config).share_lead_accounts or len(dict.fromkeys(order + last)) <= 1:
+        return cli.pick(config, person)
+    leads = lead_accounts(config)
+    for name, opened in placed.items():
+        leads[name] = [*leads.get(name, []), *opened]
+    free = [name for name in dict.fromkeys(order + last) if name not in policy(config).reserve and name not in leads]
+    if len(free) > 1 and (found := cli.pick_with_room(config, person, skip=set(leads))):
+        return found
+    shared = cli.pick_with_room(config, person, skip=set(config["accounts"]) - set(leads))
+    if shared:
+        name, folder, why = shared
+        return name, folder, (f"{why}; it already runs {' and '.join(leads[name])}, so the last account no lead runs "
+                              "on stays free for helpers")
+    return cli.pick(config, person)
+
+
 def lead_cap(config: dict, name: str, pool: Policy) -> int:
     """The most helpers a lead's own account takes when they share it: one fewer than its cap, at least one, so the
     lead keeps room."""
@@ -457,6 +482,11 @@ def refusal(config: dict, names: list[str], full: set[str], leads: dict[str, lis
     held = [name for name in names if name in leads]
     if not held:
         return AT_CAP
+    if not alone and len(held) == len(names):
+        runs = "; ".join(f"{name} runs {' and '.join(leads[name])}" for name in held)
+        return (f"{EVERY_LEAD} ({runs}), and a lead's own account takes no helper while you have more than one: set "
+                f"[pool] share_lead_accounts = true to let helpers share them, or add an account with `{cli.NAME} "
+                "accounts scan`")
     if not alone:
         kept = "; ".join(f"{name} is kept for {' and '.join(leads[name])}, its own account" for name in held)
         return (f"every other account is at its cap of busy helpers, and {kept}: wait for a helper to finish, add an "

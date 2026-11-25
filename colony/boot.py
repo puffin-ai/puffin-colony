@@ -885,10 +885,16 @@ def plan_start(config: dict, args, lead: str) -> int:
         merged = profile.load(config=config)
         running = len([g for g in held["groups"] if g.get("started") and not g.get("done_at")])
         room = max(0, merged.value("team.max_leads", 3) - running)
-        opened = 0
+        opened, placed = 0, {}
         for group in waiting[:room]:
             title = f"{config['project']['name']}-{group['name']}-lead"
             ns = argparse.Namespace(person=args.person, account=args.account, here=False, dry_run=args.dry_run)
+            if not args.account:  # group leads share lead accounts before taking the last one free of leads
+                from colony import capacity
+
+                ns.account, _, ns.account_why = capacity.group_lead_account(config, cli.person_of(config, args),
+                                                                            placed)
+                placed.setdefault(ns.account, []).append(title)
             cli.launch(config, ns, cli.LEAD, "lead", lead_brief(config, held, group), title=title)
             if not args.dry_run:
                 group["started"] = time.time()

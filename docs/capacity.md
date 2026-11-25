@@ -33,7 +33,9 @@ So a lead or an orchestrator never starts a subagent to build, and a helper star
 
 ## The lead's own account
 
-While you have other accounts, no helper opens on the account a live lead or orchestrator runs on, so the coordinator is never cut off by its own team. When the others are at their caps, a new helper waits for one to finish; when they are out of room, it waits for the soonest reset. Colony knows those accounts from the lead that runs the command, each lead's heartbeat on this computer, and each live lead's status comment, on any computer, since an account's window is the same wherever it is signed in.
+While you have other accounts, no helper opens on the account a live lead or orchestrator runs on, so the coordinator is never cut off by its own team. When the others are at their caps, a new helper waits for one to finish; when they are out of room, it waits for the soonest reset. When every account you have runs a lead or the orchestrator, no helper opens, and Colony says so and names the two ways out: set `[pool] share_lead_accounts = true`, or add an account with `colony accounts scan`.
+
+In orchestrator mode, `colony plan start` places the group leads so one account stays free of leads for helpers: a group lead takes an account no lead runs on only while another such account stays free, and otherwise shares an account that already runs a lead, the orchestrator's or another group lead's, with room. With two accounts, the orchestrator and every group lead share the first, and helpers open on the second. With one account, `--account`, or `[pool] share_lead_accounts = true`, group leads take the plain pick. Colony knows those accounts from the lead that runs the command, each lead's heartbeat on this computer, and each live lead's status comment, on any computer, since an account's window is the same wherever it is signed in.
 
 Most people have one AI account, so a lead's account is not closed to helpers for good. When it is your only account, `colony helpers --open`, `colony open` and `colony join` let helpers share it, with two limits that leave the lead room:
 

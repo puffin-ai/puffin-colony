@@ -210,6 +210,48 @@ def test_a_helper_never_opens_on_a_live_leads_own_account_unless_the_config_allo
     assert capacity.helper_account(config, ana("main"), counts, leads)[0] == "main"  # --account still wins
 
 
+def test_when_every_account_runs_a_lead_or_the_orchestrator_the_why_says_so_and_names_the_ways_out(host):
+    """Regression (audit, Job B finding 4): with the orchestrator and its group leads on every account, no helper
+    opened, and the why said every other account was at its cap of busy helpers, so a lead waited for nothing."""
+    for name in ("main", "team", "spare"):
+        reading(host.parent / name, five=10, week=10)
+    config = load('[pool]\norder = "listed"\n')
+    kept = {"main": ["ana-orchestrator"], "team": ["ana-auth-lead"], "spare": ["ana-ui-lead"]}
+    found, why = capacity.place(config, ana(), {}, kept)
+    assert found is None and why.startswith(capacity.EVERY_LEAD), why
+    assert "main runs ana-orchestrator; team runs ana-auth-lead; spare runs ana-ui-lead" in why
+    assert "set [pool] share_lead_accounts = true" in why and "`colony accounts scan`" in why
+    assert "at its cap" not in why and "wait for a helper" not in why
+
+
+@pytest.mark.parametrize("extra, took, free", [
+    ("", ["team", "main", "main"], "spare"),  # three accounts: one group lead takes team, the rest share
+    ('reserve = ["spare"]\n', ["main", "main", "main"], "team"),  # two accounts helpers may use
+])
+def test_an_orchestrators_group_leads_share_lead_accounts_before_the_last_one_free_of_leads(host, monkeypatch, extra,
+                                                                                          took, free):
+    """Regression (audit, Job B finding 4): group leads took accounts by the plain pick, so with the orchestrator on
+    one account they could take every other one, and then no helper could open anywhere. They take an account no
+    lead runs on only while another stays free, and otherwise share an account that runs a lead."""
+    for name in ("main", "team", "spare"):
+        reading(host.parent / name, five=10, week=10)
+    config = load(f'[pool]\norder = "listed"\n{extra}')
+    monkeypatch.setenv(cli.SESSION_ENV, "ana-main-lead")  # the orchestrator, a lead, runs plan start on main
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host.parent / "main"))
+    placed, names = {}, []
+    for group in ("auth", "ui", "api"):
+        name, _, why = capacity.group_lead_account(config, "ana", placed)
+        placed.setdefault(name, []).append(f"demo-{group}-lead")
+        names.append(name)
+    assert names == took, names
+    assert "so the last account no lead runs on stays free for helpers" in why
+    leads = {**placed, "main": ["ana-main-lead", *placed.get("main", [])]}
+    found, why = capacity.place(config, ana(), {}, leads)
+    assert found is not None and found[0] == free, why  # a helper still opens on the account left free
+    shared = load(f'[pool]\norder = "listed"\nshare_lead_accounts = true\n{extra}')
+    assert capacity.group_lead_account(shared, "ana", {})[0] == "main"  # sharing allowed: the plain pick
+
+
 def test_the_lead_that_runs_the_command_keeps_its_own_account(host, monkeypatch):
     config = load()
     monkeypatch.setenv(cli.SESSION_ENV, "lead")
