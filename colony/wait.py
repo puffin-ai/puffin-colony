@@ -89,7 +89,7 @@ CARRIED = "carried: "  # before a line a board move copied into its closing note
 REDIRECTED = "redirected: "  # before a line for one of the lead's helpers that the lead didn't sign
 AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
 ATTACHED = f"{cli.NAME}-attachment"  # the markers around a comment's attached file (transport.attachment)
-ATTACHMENT = re.compile(rf"<!--\s*{ATTACHED}\s*-->.*?(?:<!--\s*/{ATTACHED}\s*-->|\Z)", re.S)
+ATTACHMENT = re.compile(rf"<!--\s*{ATTACHED}\s*-->")  # where a comment's attachment starts: no line comes after it
 NOTE = f"{cli.NAME}-sent"  # the sender's hidden note after a comment's lines (transport.sender_note)
 NOTE_TEXT = re.compile(rf"<!--\s*{NOTE}\s+(\{{.*?\}})\s*-->", re.S)
 REPLACED = "{name} wait: a newer {name} wait for {me} runs, so this one stopped: start no other"
@@ -211,21 +211,38 @@ def claim_of(token: str) -> str:
 
 
 def strip_extras(body: str) -> str:
-    """A comment's lines alone, without its attached file and its sender's note, which no wait reads as a line."""
-    return NOTE_TEXT.sub("", ATTACHMENT.sub("", body or ""))
+    """A comment's lines alone, without its attached file and its sender's note, which no wait reads as a line.
+    Everything from the attachment's start marker on is cut, so nothing an attached file holds can end the attachment
+    early and pass for a line."""
+    body = body or ""
+    start = ATTACHMENT.search(body)
+    return NOTE_TEXT.sub("", body[:start.start()] if start else body)
 
 
 def note_of(body: str) -> dict:
     """The sender's note a comment carries, as {from, session, computer, claim, ack, resent}, or {} when it has none or
-    a broken one. On a public repo anyone can write one, so a reader uses it only to warn or to acknowledge."""
-    found = NOTE_TEXT.search(body or "")
-    if not found:
+    a broken one. The note counts only as the comment's very end, where transport.sender_note puts it, so a note
+    inside an attached file or among the lines is never read. On a public repo anyone can write one, so a reader uses
+    it only to warn or to acknowledge."""
+    body = body or ""
+    found = None
+    for found in NOTE_TEXT.finditer(body):
+        pass
+    if found is None or body[found.end():].strip():
         return {}
     try:
         data = json.loads(found[1])
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def without_note(body: str) -> str:
+    """A comment without its sender's note at its end: its lines and its attachment."""
+    found = None
+    for found in NOTE_TEXT.finditer(body or ""):
+        pass
+    return body[:found.start()].rstrip() if found is not None and not body[found.end():].strip() else body
 
 
 def attached_hint(repo: str, comment: dict) -> str:
@@ -1098,7 +1115,7 @@ def say(config: dict, args) -> int:
     if getattr(args, "private", False):
         from colony import private
 
-        return private.send(config, to, lines, me)
+        return private.send(config, to, lines, me, attached=messages.attached(config, args))
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
     body = messages.body(config, args, "\n".join(lines), me, starts=False)
@@ -1275,3 +1292,6 @@ def line_options(p) -> None:
                         "was submitted ([messages] nudge sets when it happens by itself)")
     p.add_argument("--allow-unknown", action="store_true",
                    help="send to a name no live or registered session has, such as a helper opening right now")
+    p.add_argument("--public", action="store_true",
+                   help="attach the file though the repo is public, so anyone can read it: only when your person "
+                        "says it may be public")

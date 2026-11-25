@@ -102,14 +102,17 @@ ATTACH_MAX = 60000  # an attachment's characters, so the comment stays under Git
 
 
 def attachment(name: str, text: str) -> str:
-    """A file's text as a comment's folded attachment: between the markers wait.strip_extras takes out, so no line in
-    the file ever reaches a wait as a line, and in a fence longer than any run of tildes in the text."""
+    """A file's text as a comment's folded attachment: after the marker wait.strip_extras cuts at, so no line in the
+    file ever reaches a wait as a line, and in a fence longer than any run of tildes in the text. The text's `<!--`
+    and `-->` become `&lt;!--` and `--&gt;`, so it can never open or close a hidden part of the comment, such as a
+    marker or a sender's note."""
     if len(text) > ATTACH_MAX:
         raise cli.ColonyError(f"an attachment holds at most {ATTACH_MAX} characters, and {name} has {len(text)}: "
                               "attach a part of it, or share it with a link")
+    text = text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
     runs = re.findall(r"~{4,}", text)
     fence = "~" * max([4, *(len(run) + 1 for run in runs)])
-    label = " ".join(name.split())[:80] or "a file"
+    label = re.sub(r"[<>&]", "_", " ".join(name.split())[:80]) or "a file"
     return (f"<!-- {wait.ATTACHED} -->\n<details><summary>attached: {label}</summary>\n\n{fence}text\n{text}\n"
             f"{fence}\n\n</details>\n<!-- /{wait.ATTACHED} -->")
 

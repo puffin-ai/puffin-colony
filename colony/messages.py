@@ -87,15 +87,18 @@ def kind_of(name: str) -> str:
 
 
 def learn_names(comments: list, people: frozenset[str] = frozenset()) -> dict[str, str]:
-    """The session names these comments show, each with its kind: a status comment's name and its lead, from the
-    team's own logins, and each line's `(from <name>)`."""
+    """The session names these comments show, each with its kind: a status comment's name and its lead, and each
+    line's `(from <name>)`, from the team's own comments alone (presence.by_team), so on a public repo no stranger can
+    make a name look real."""
     from colony import presence, wait
 
     found: dict[str, str] = {}
     for comment in comments:
+        if not presence.by_team(comment, people):
+            continue
         body = comment.get("body") or ""
         status = presence.parse(body) if presence.MARK in body else None
-        if status and presence.by_team(comment, people):
+        if status:
             found[status.name.lower()] = status.kind
             if status.lead and cli.SESSION_NAME.fullmatch(status.lead.lower()):
                 found.setdefault(status.lead.lower(), "lead")
@@ -244,22 +247,65 @@ def check_lines(config: dict, args, me: str, sender: str, to: str, said: list[st
 # The comment: lines, attachment and the sender's note
 
 
+ATTACH_BYTES = 1_000_000  # a file over this is refused before it is read
+
+
 def read_attachment(given: str) -> tuple[str, str]:
-    """An attachment's name and text: a file, or stdin for `-`. A kind of file that holds secrets, such as .env or a
-    .pem, is refused, and so is one that isn't text."""
-    from colony import share
+    """An attachment's name and text: a file, or stdin for `-`, with share.py's checks. A link is refused, since its
+    name can hide a secret file; so is a file whose resolved path passes through a folder or a name that holds
+    secrets, such as ~/.ssh or .env, a file that isn't UTF-8 text, and text that holds a secret's shape, in UTF-8 or
+    UTF-16."""
+    from colony import share, transport
 
     if given == "-":
-        return "stdin", sys.stdin.read()
-    path = Path(given).expanduser()
-    if share.SECRET_FILES.match(path.name) or share.SECRET_FOLDERS & {part.lower() for part in path.parts[:-1]}:
-        raise cli.ColonyError(f"{given} is a kind of file that holds secrets, so it is never attached")
+        name, data = "stdin", sys.stdin.read().encode("utf-8", "replace")
+    else:
+        path = Path(given).expanduser()
+        if path.is_symlink():
+            raise cli.ColonyError(f"{given} is a link, and colony never attaches one: a link's name can hide a secret "
+                                  "file; attach the file itself")
+        source = path.resolve()
+        if not source.is_file():
+            raise cli.ColonyError(f"{given} is not a file")
+        if share.SECRET_FOLDERS & {part.lower() for part in source.parts} or \
+                any(share.SECRET_FILES.match(part) for part in source.parts):
+            raise cli.ColonyError(f"{given} is a kind of file that holds secrets, or sits in a folder that does, so "
+                                  "it is never attached")
+        if source.stat().st_size > ATTACH_BYTES:
+            raise cli.ColonyError(f"{given} is over {ATTACH_BYTES // 1_000_000} MB: attach a part of it, or share it "
+                                  "with a link")
+        try:
+            name, data = source.name, source.read_bytes()
+        except OSError as e:
+            raise cli.ColonyError(f"{given} can't be read: {e}") from None
+    texts = [data.decode("utf-8", "replace")]
+    utf16 = data[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in data[:4096]
+    if utf16:
+        texts.append(data.decode("utf-16", "replace"))  # a secret in UTF-16 has a NUL between its letters
+    if any(transport.holds_secret(text) for text in texts):
+        raise cli.ColonyError(f"{given} holds a secret's shape, and a line never carries a secret")
     try:
-        return path.name, path.read_text(encoding="utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError:
-        raise cli.ColonyError(f"{given} is not text, so it can't be attached: share it with a link") from None
-    except OSError as e:
-        raise cli.ColonyError(f"{given} can't be read: {e}") from None
+        text = None
+    if text is None or utf16:
+        raise cli.ColonyError(f"{given} is not text, so it can't be attached: share it with a link")
+    return name, text
+
+
+def attached(config: dict, args) -> str:
+    """The comment's attached file for --attach, or "". On a public repo, where anyone can read the comment, it is
+    refused unless --public says the file may be public, or `say --private` sends it to the private board."""
+    from colony import private, transport
+
+    if not getattr(args, "attach", None):
+        return ""
+    name, text = read_attachment(args.attach)
+    if not getattr(args, "public", False) and not getattr(args, "private", False) and private.is_public(config):
+        raise cli.ColonyError(f"{config['project']['repo']} is public, so anyone could read {name}: add --public to "
+                              f"attach it anyway, only when your person says it may be public, or send it with "
+                              f"`{cli.NAME} say --private`")
+    return transport.attachment(name, text)
 
 
 def sender_note(config: dict, sender: str, starts: bool) -> dict | None:
@@ -283,9 +329,7 @@ def body(config: dict, args, text: str, sender: str, starts: bool) -> str:
     """A post's comment: its lines, then the attached file (--attach), then the sender's note."""
     from colony import transport
 
-    parts = [text]
-    if getattr(args, "attach", None):
-        parts.append(transport.attachment(*read_attachment(args.attach)))
+    parts = [text, *filter(None, [attached(config, args)])]
     note = sender_note(config, sender, starts)
     if note:
         parts.append(transport.sender_note(note))
@@ -321,7 +365,7 @@ def record_start(config: dict, sent, to: str, body: str) -> None:
 
     project, name = config["project"]["name"], wait.state_name(cli.LEAD)
     note = wait.note_of(body)
-    text = wait.NOTE_TEXT.sub("", body).rstrip()
+    text = wait.without_note(body)
     item = {"comment": sent.comment, "card": int(sent), "to": to, "text": text, "note": note, "at": time.time(),
             "first": time.time(), "sends": 1}
     try:
@@ -349,14 +393,39 @@ def read_starts(project: str, name: str) -> list[dict]:
         if isinstance(items, list) else []
 
 
-def acknowledged(repo: str, comment: int) -> bool:
-    """Whether a start line's comment has a reaction, which is how a helper's wait acknowledges it."""
+def team_check(config: dict):
+    """Whether a GitHub login is the team's: one of [people] logins, or with none listed, a collaborator on the repo,
+    as GitHub says. Each login is asked once per check."""
+    from colony import wait
+
+    logins = {str(login).lower() for login in (config.get("people") or {}).get("logins", [])}
+    repo, asked = config["project"]["repo"], {}
+
+    def check(login: str) -> bool:
+        login = login.lower()
+        if logins or not login:
+            return login in logins
+        if login not in asked:
+            try:
+                wait.gh("api", f"repos/{repo}/collaborators/{login}")
+                asked[login] = True
+            except wait.GhError:
+                asked[login] = False  # GitHub answers 404 for anyone who isn't one
+        return asked[login]
+    return check
+
+
+def acknowledged(repo: str, comment: int, team) -> bool:
+    """Whether a start line's comment has a reaction from the team (`team`, team_check), which is how a helper's wait
+    acknowledges it. Agents react through their person's login, so a stranger's reaction on a public repo never
+    counts."""
     import json
 
     from colony import wait
 
-    data = json.loads(wait.gh("api", f"repos/{repo}/issues/comments/{comment}") or "{}")
-    return int(((data.get("reactions") or {}) if isinstance(data, dict) else {}).get("total_count") or 0) > 0
+    reactions = json.loads(wait.gh("api", f"repos/{repo}/issues/comments/{comment}/reactions?per_page=100") or "[]")
+    return any(team(str(((reaction.get("user") or {}).get("login")) or ""))
+               for reaction in (reactions if isinstance(reactions, list) else []) if isinstance(reaction, dict))
 
 
 def start_check(config: dict, project: str, name: str):
@@ -379,13 +448,13 @@ def start_check(config: dict, project: str, name: str):
         if now - last[0] < START_CHECK_EVERY or not starts_path(project, name).exists():
             return []
         last[0] = now
-        lines, settled, kept = [], set(), []
+        lines, settled, kept, team = [], set(), [], team_check(config)
         for item in read_starts(project, name):
             if now - float(item.get("at", 0)) < minutes * 60:
                 continue
             settled.add(item["comment"])
             try:
-                if acknowledged(repo, item["comment"]):
+                if acknowledged(repo, item["comment"], team):
                     continue
             except (cli.ColonyError, OSError, ValueError):
                 if now - float(item.get("first", item.get("at", 0))) < START_DROP:

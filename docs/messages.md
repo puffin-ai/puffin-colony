@@ -101,7 +101,7 @@ Each of these keeps a line from going astray. They work on any computer, through
 
 ### Names that exist
 
-Every wait learns the session names it reads: each status comment's name and lead, and each line's `(from <name>)`. It keeps them in `~/.colony/<project>/names.json`. `colony post` and `colony say` refuse a line for a name that no learned, live or registered session has, and name the nearest ones, such as `did you mean ana-engine-lead?`. Besides the learned names, a name counts when this computer has its heartbeat, its wait, or a helper the lead just opened, or when `.colony/leads.toml` holds it. `lead`, your own lead, `@<login>` and `@all` always pass.
+Every wait learns the session names it reads in the team's own comments, those from `[people] logins` or, with none listed, from people GitHub says have access to the repo: each status comment's name and lead, and each line's `(from <name>)`. A stranger's comment on a public repo teaches no name. It keeps them in `~/.colony/<project>/names.json`. `colony post` and `colony say` refuse a line for a name that no learned, live or registered session has, and name the nearest ones, such as `did you mean ana-engine-lead?`. Besides the learned names, a name counts when this computer has its heartbeat, its wait, or a helper the lead just opened, or when `.colony/leads.toml` holds it. `lead`, your own lead, `@<login>` and `@all` always pass.
 
 Until a wait on the computer has learned a name, nothing is refused. `--allow-unknown` sends to a session that is opening right now, and `[messages] check_names = false` turns the check off. A name a status comment gives as a lead, such as an orchestrator's, counts as a lead for `colony say`, even without `-lead` at its end.
 
@@ -115,7 +115,7 @@ The lead's wait reads the notes. When a line signed with its own name, posted si
 
 ### Start lines that need an acknowledgement
 
-A lead's `start:` line from an agent session asks for an acknowledgement in its note. The helper's wait gives it as soon as it prints the line, or once the prompt hook showed it: an `eyes` reaction on the comment, which wakes no one. The lead's wait checks each start line it sent, at most once a minute. One that has no reaction after `[messages] start_ack_minutes` (10) goes again, the same line in a new comment, up to `start_resends` times (2). After that the lead hears it at once: `urgent: builder-2 has not acknowledged the start line on #41 after 3 sends in 30 minutes: …`. A helper that already printed a start shows a repeat of it no second time, and acknowledges it again. `start_ack_minutes = 0` asks for no acknowledgement.
+A lead's `start:` line from an agent session asks for an acknowledgement in its note. The helper's wait gives it as soon as it prints the line, or once the prompt hook showed it: an `eyes` reaction on the comment, which wakes no one. The lead's wait checks each start line it sent, at most once a minute, and counts only a reaction from the team: from a login in `[people] logins`, or with none listed, from someone GitHub says collaborates on the repo. Agents react through their person's login, so a stranger's reaction never counts. One that has no such reaction after `[messages] start_ack_minutes` (10) goes again, the same line in a new comment, up to `start_resends` times (2). After that the lead hears it at once: `urgent: builder-2 has not acknowledged the start line on #41 after 3 sends in 30 minutes: …`. A helper that already printed a start shows a repeat of it no second time, and acknowledges it again. `start_ack_minutes = 0` asks for no acknowledgement.
 
 ### A nudge for an idle session
 
@@ -129,7 +129,16 @@ Each wait notes the lines it printed in `~/.colony/<project>/<session>-delivered
 
 ### Attached files
 
-`colony post` and `colony say` take `--attach <file>`, or `--attach -` for stdin. The file's text goes in the same comment, under the lines, in a folded block, so a note too long for a line reaches every computer through GitHub. A wait never reads a line inside an attachment, and adds to the line it prints how to read the file: `[attached file: gh api repos/<repo>/issues/comments/<id> --jq .body]`. An attachment holds at most 60,000 characters, a secret's shape is refused as in any line, and so is a kind of file that holds secrets, such as `.env` or a `.pem`, and a file that isn't text.
+`colony post` and `colony say` take `--attach <file>`, or `--attach -` for stdin. The file's text goes in the same comment, under the lines, in a folded block, so a note too long for a line reaches every computer through GitHub. A wait never reads a line after the attachment starts, and adds to the line it prints how to read the file: `[attached file: gh api repos/<repo>/issues/comments/<id> --jq .body]`. The sender's note counts only at the comment's very end, so a note inside a file is never read.
+
+An attachment is checked as `colony share` checks a file:
+
+- a link is refused, since its name can hide a secret file;
+- so is a file whose real path passes through a folder or a name that holds secrets, such as `~/.ssh`, `.env` or a `.pem`;
+- so is text that holds a secret's shape, in UTF-8 or UTF-16, a file that isn't UTF-8 text, and one over 1 MB or 60,000 characters;
+- on a public repo, where anyone can read the comment, a file is refused unless `--public` says it may be public, which you add only when your person says so; `colony say --private --attach <file>` sends it to the private board instead.
+
+The file's `<!--` and `-->` arrive as `&lt;!--` and `--&gt;`, so nothing in it can open or close a hidden part of the comment.
 
 ### Leads on many computers
 
