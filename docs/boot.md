@@ -12,7 +12,7 @@ It reads, side by side and within 12 seconds:
 2. **The last handover**: the automatic one this computer saved, and the last one posted on `Colony: coordination` for this lead.
 3. **The project summary**, refreshed from what changed since it was built, and what changed since this session last started.
 4. **The live leads on every computer**, from their status comments, and your helpers.
-5. **The open pull requests** and **your open cards** on the board.
+5. **The open pull requests** and **your open cards** on the board. A pull request from outside the team, someone not in `[people] logins`, or with no logins named, someone without access to the repo, shows as its number alone, `#57 from outside the team`: a title is anyone's text, and the briefing goes into the lead's context.
 6. **The plan**, when one is open, and **the decisions that wait on you**.
 7. **This computer's room** for helpers, and **each of your accounts' room**, with how old each reading is, from [capacity](capacity.md). It flags any of your accounts that is missing on this computer or signed out, any new signed-in folder not yet in the pool, and any account whose forecast runs out before its reset.
 

@@ -1167,12 +1167,24 @@ def leads_part(config: dict, lead: str) -> list[str]:
 
 
 def prs_part(config: dict) -> list[str]:
-    listed = json.loads(wait.gh("pr", "list", "--repo", config["project"]["repo"], "--state", "open", "--json",
-                                "number,title,headRefName,isDraft", "--limit", "20") or "[]")
+    """The open pull requests, newest first. One from outside the team shows as its number alone, never its title:
+    a title is anyone's text, and the briefing goes into the lead's context. The team is [people] logins when it
+    names any, else whoever has access to the repo (presence.TRUSTED), as decisions.teammates reads it."""
+    from colony import presence
+
+    listed = json.loads(wait.gh("api", f"repos/{config['project']['repo']}/pulls?state=open&per_page=20") or "[]")
+    listed = [pr for pr in listed if isinstance(pr, dict)] if isinstance(listed, list) else []
     if not listed:
         return ["Open pull requests: none."]
-    shown = "; ".join(f"#{pr['number']} {clean(pr.get('title', ''), 60)}{' (draft)' if pr.get('isDraft') else ''}"
-                      for pr in listed[:5])
+    logins = frozenset(str(login).lower() for login in config.get("people", {}).get("logins", []))
+
+    def shown_pr(pr: dict) -> str:
+        author = str((pr.get("user") or {}).get("login") or "").lower()
+        team = author in logins if logins else pr.get("author_association") in presence.TRUSTED
+        if not team:
+            return f"#{pr.get('number')} from outside the team"
+        return f"#{pr.get('number')} {clean(pr.get('title', ''), 60)}{' (draft)' if pr.get('draft') else ''}"
+    shown = "; ".join(shown_pr(pr) for pr in listed[:5])
     more = f"; and {len(listed) - 5} more" if len(listed) > 5 else ""
     return [f"Open pull requests ({len(listed)}): {shown}{more}."]
 
