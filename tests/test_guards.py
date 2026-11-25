@@ -901,8 +901,38 @@ def test_a_file_whose_shebang_names_a_shell_is_read_and_another_interpreter_is_a
         executable(on_feature / "x", f"{shebang}\ngit push origin HEAD:refs/heads/main\n".lstrip("\n"))
         assert push_refused(push_guard("./x", on_feature)), shebang
     for shebang in ("#!/usr/bin/env node", "#!/usr/bin/python3", "#!/usr/bin/env ruby"):
-        executable(on_feature / "x", f"{shebang}\nconsole.log('git push origin main')\n")
+        executable(on_feature / "x", f"{shebang}\nconsole.log('hello')\n")
         assert push_guard("./x", on_feature).returncode == 0, shebang  # a program, which the guard doesn't read
+        executable(on_feature / "x", f"{shebang}\nrun('git push origin main')\n")
+        assert push_refused(push_guard("./x", on_feature)), shebang  # but its text still may not name a push
+
+
+@pytest.mark.parametrize("name, text, command", [
+    # A variable the script sets is followed, and a launcher's path still reaches the file it names.
+    ("launch.sh", 'X=.\nexec "$X/node" run\n', "bash launch.sh"),
+    ("launch.sh", 'exec "$NO_SUCH_VARIABLE/node" run\n', "bash launch.sh"),  # one it can't resolve is refused
+    # A script that writes the interpreter it then runs can't pass it off as a launcher's missing interpreter.
+    ("launch.sh", 'basedir=$(dirname "$0")\ncp push.sh "$basedir/node"\nexec "$basedir/node" run\n',
+     "bash launch.sh"),
+    ("", "", "cp push.sh python && ./python"),  # a program a copy makes is no build
+    # A #! the guard doesn't know, or env with options, is read as shell commands, never skipped.
+    ("x", "#!/usr/bin/env -u FOO bash\ngit push origin HEAD:refs/heads/main\n", "./x"),
+    ("x", "#!/usr/local/bin/myshell\ngit push origin HEAD:refs/heads/main\n", "./x"),
+    # A cd the guard can't follow as the shell does leaves the folder unknown.
+    ("", "", "CDPATH=/tmp cd sub && ./run.sh"), ("", "", "cd && ./run.sh"), ("", "", "cd ~ && ./run.sh"),
+])
+def test_the_script_checks_reading_of_variables_shebangs_and_cds_fails_closed(name, text, command, on_feature):
+    """Regression (security review of b9f5960): a launcher's interpreter by a variable path was skipped unread, a
+    missing interpreter-named file passed though the line made it, a #! the guard didn't know ran unread, and a cd
+    with CDPATH, no operand or ~ was followed to the wrong folder."""
+    executable(on_feature / "push.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "node", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "sub" / "run.sh", "#!/bin/sh\necho harmless\n")
+    executable(on_feature / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    if name:
+        executable(on_feature / name, text)
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2, (command, run.stderr)
 
 
 @pytest.mark.parametrize("command, which", [
