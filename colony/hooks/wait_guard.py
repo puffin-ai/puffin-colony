@@ -74,6 +74,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path, PurePath
@@ -1234,26 +1235,33 @@ def api_merge(arguments: list[str], cwd: str = "") -> str:
 SCRIPT_SOURCES = {"source", "."}  # the shell's own commands that run a file's lines
 SHELL_VALUE_OPTIONS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}  # a shell's options that take a value
 STDIN_NAMES = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}  # a shell's script read from standard input
-# The first bytes of a real program, which runs as no script: ELF, Mach-O (both byte orders, 32 and 64 bit, and fat),
-# and Windows' PE.
+PIPES = {"|", "|&"}  # the operators that feed a command's standard input from the one before
+SPECIAL_FILES = ("/dev/", "/proc/")  # files that read a stream, never a script the guard can read in full
+# The first bytes of a real program: ELF, Mach-O (both byte orders, 32 and 64 bit, and fat), and Windows' PE. A file
+# counts as one only with a zero byte on its first line too, as bash's own check asks before it runs a file as a
+# script when the system can't run it as a program.
 PROGRAM_MAGIC = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
                  b"\xca\xfe\xba\xbe", b"MZ")
+SHELL_NO_SCRIPT = {"--version", "--help"}  # a shell asked only to describe itself runs no script
 HELD = (("push", RAW_PUSH, "a `git push`"), ("merge", RAW_MERGE, "a gh merge"), ("kill", RAW_KILL, "a kill"))
 # In a script's text the guard can't read as commands, what may run another script.
 RAW_SCRIPT = re.compile(r"(?<![\w.-])(?:bash|sh|zsh|dash|source|eval)(?![\w-])|(?:^|[\s;&|(])\.\s|(?:^|[\s;&|(])\.{0,2}/")
 NESTED = "nests shells, evals or scripts deeper than the guard follows, so run them plainly"
+STDIN_REFUSAL = ("a shell on this line reads its script on standard input from something the guard can't read: save "
+                 "the script to a file, read it, and run it as `sh <file>`")
 
 
 def shell_segments(line: list[str]) -> list[tuple[list[str], str, str]]:
-    """A line's simple commands as sequence() splits them, each with the file a `<` gives it on standard input, or
-    "", and the operator before it, such as | for a command fed by a pipe."""
+    """A line's simple commands as sequence() splits them, each with what a redirection gives its standard input,
+    the file after a `<`, or "<<" for a here-document or here-string, else "", and the operator before it, such as |
+    for a command fed by a pipe."""
     found: list[tuple[list[str], str, str]] = []
     words: list[str] = []
     given, before, skip = "", "", ""
     for token in line:
         if skip:
-            given, skip = (token if skip == "<" else given), ""
-        elif token in REDIRECTIONS:
+            given, skip = (token if skip == "<" else "<<" if skip.startswith("<<") else given), ""
+        elif token in REDIRECTIONS or token.startswith("<<"):
             skip = token
             if words and words[-1].isdigit():
                 words.pop()
@@ -1279,23 +1287,27 @@ def folder_move(line: list[str]) -> str:
     return ""
 
 
-def script_named(program: list[str], given: str) -> tuple[str, bool]:
+def script_named(program: list[str]) -> tuple[str, bool]:
     """The file a simple command runs as a script, and whether a shell or source reads it rather than a program run by
-    its path: a shell's first operand (`bash f`, `sh -e f`) or `-` for its standard input, the file a `<` gives a shell
-    with no operand, the file `source f` or `. f` reads, or a program named by its path (`./f`). ("", False) for
-    none."""
+    its path: a shell's first operand (`bash f`, `sh -e f`), `-` when it reads its script on standard input (no
+    operand, `-`, or -s in its options), the file `source f` or `. f` reads, or a program named by its path (`./f`).
+    ("", False) for none."""
     if not program:
         return "", False
     if PurePath(program[0]).name in SHELLS:
-        skip = False
+        if SHELL_NO_SCRIPT & set(program[1:]):
+            return "", True
+        skip, operand = False, ""
         for word in program[1:]:
             if skip:
                 skip = False
             elif word in SHELL_VALUE_OPTIONS:
                 skip = True
-            elif not word.startswith(("-", "+")) or word == "-":
-                return (given if word in STDIN_NAMES and given else word), True
-        return (given or "-"), True
+            elif word.startswith("-") and not word.startswith("--") and "s" in word[1:]:
+                return "-", True  # -s: the script is standard input, and the operands only its arguments
+            elif not operand and (not word.startswith(("-", "+")) or word == "-"):
+                operand = word
+        return ("-" if not operand or operand in STDIN_NAMES else operand), True
     if program[0] in SCRIPT_SOURCES:
         return (program[1] if len(program) > 1 else ""), True
     return (program[0], False) if "/" in program[0] else ("", False)
@@ -1303,15 +1315,20 @@ def script_named(program: list[str], given: str) -> tuple[str, bool]:
 
 def script_text(name: str, cwd: str, read_by_shell: bool) -> str | None:
     """A script's text, read from the call's folder as the shell finds it, its zero bytes dropped; "" for a program
-    run by its path that starts as a real program does (PROGRAM_MAGIC); None when it can't be read or is longer than
-    FILE_LIMIT. A file a shell or source reads is always text to the guard, as it is to the shell."""
+    run by its path that starts as a real program does (PROGRAM_MAGIC, with a zero byte on its first line); None when
+    it is no regular file, can't be read, or is longer than FILE_LIMIT. A file a shell or source reads is always text
+    to the guard, as it is to the shell, and so is a #! file."""
     path = Path(os.path.expandvars(os.path.expanduser(name)))
+    path = path if path.is_absolute() else Path(cwd or ".") / path
     try:
-        with open(path if path.is_absolute() else Path(cwd or ".") / path, "rb") as handle:
+        if name in STDIN_NAMES or str(path).startswith(SPECIAL_FILES) or not stat.S_ISREG(os.stat(path).st_mode):
+            return None
+        with open(path, "rb") as handle:
             data = handle.read(FILE_LIMIT + 1)
     except OSError:
         return None
-    if not read_by_shell and data.startswith(PROGRAM_MAGIC):
+    first = data.split(b"\n", 1)[0]
+    if not read_by_shell and not data.startswith(b"#!") and data.startswith(PROGRAM_MAGIC) and b"\0" in first:
         return ""
     if len(data) > FILE_LIMIT:
         return None
@@ -1326,8 +1343,8 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool) -> lis
     if text == "":
         return []
     if text is None:
-        return [("merge", "can't be read from this folder, so the guard can't check that it pushes, merges or kills "
-                          "nothing: run it by a path the guard can read")]
+        return [("merge", "can't be read from this folder as a regular file, so the guard can't check that it pushes, "
+                          "merges or kills nothing: run it by a path the guard can read")]
     held = [(kind, f"holds {what}, which the guard can't check inside a script") for kind, pattern, what in HELD
             if pattern.search(text)]
     if held:
@@ -1343,12 +1360,28 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool) -> lis
             for kind, inner, what in scripts(text, cwd, depth + 1)]
 
 
+def fed_files(segments: list[tuple[list[str], str, str]], index: int, given: str, before: str) -> list[str] | None:
+    """The files a shell reads its script from on standard input: the regular file a `<` gives it, or the files a
+    plain `cat` before a pipe gives it. None when anything else feeds it: a here-document or here-string, which can
+    expand to a file's text, process substitution, another program, or a cat of its own standard input."""
+    if given:
+        return None if given == "<<" else [given]
+    if before not in PIPES or not index:
+        return None
+    words, cat_given, _ = segments[index - 1]
+    feeder = run_program(words)
+    files = [word for word in feeder[1:] if not word.startswith("-") or word == "-"]
+    if not feeder or PurePath(feeder[0]).name != "cat" or cat_given or not files:
+        return None
+    return None if any(word in STDIN_NAMES or word.startswith(SPECIAL_FILES) for word in files) else files
+
+
 def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False) -> list[tuple[str, str, str]]:
     """(kind, script, what) for each script the line runs, through a shell's -c and eval too, that holds a push, a
     merge or a kill, or runs a script that does; script is "" when the reason names no file. Kind is push, merge or
-    kill: the guard whose refusal it joins. A shell fed through a pipe is read from the files `cat` gives it, and
-    refused when fed by anything else; a relative script after a folder change is refused. With `probe`, it only
-    says whether the line runs any script or shell line at all."""
+    kill: the guard whose refusal it joins. A shell that reads its script on standard input is read from the regular
+    files a `<` or a plain `cat` gives it, and refused when fed by anything else; a relative script after a folder
+    change is refused. With `probe`, it only says whether the line runs any script or shell line at all."""
     try:
         line = tokens(command)
     except ValueError:
@@ -1369,29 +1402,23 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False) -> list
                 else:
                     found += [item for text in inner for item in scripts(text, cwd, depth + 1)]
                 continue
-        script, read_by_shell = script_named(program, given)
+        script, read_by_shell = script_named(program)
         if script and probe:
             return [("merge", "", NESTED)]
-        if script in STDIN_NAMES:
-            if before != "|":
-                continue  # no pipe feeds it: a shell with nothing to read
-            feeder = run_program(segments[index - 1][0]) if index else []
-            files = [word for word in feeder[1:] if not word.startswith("-")]
-            if not (feeder and PurePath(feeder[0]).name == "cat" and files):
-                found.append(("merge", "", "a shell on this line reads its script from a pipe, which the guard can't "
-                                           "read: save the script to a file, read it, and run it as `sh <file>`"))
+        files = [script] if script and script != "-" else []
+        if script == "-":
+            fed = fed_files(segments, index, given, before)
+            if fed is None:
+                found.append(("merge", "", STDIN_REFUSAL))
                 continue
-            for file in files:
-                found += [(kind, file, what) for kind, what in script_findings(file, cwd, depth, True)]
-            continue
-        if not script:
-            continue
-        if moved and not Path(os.path.expandvars(os.path.expanduser(script))).is_absolute():
-            found.append(("merge", script, f"runs from another folder: this line changes folder before it runs "
-                                           f"({moved}), so the guard can't tell which file that is. Run the script by "
-                                           "its full path, or run the cd as a command of its own first"))
-            continue
-        found += [(kind, script, what) for kind, what in script_findings(script, cwd, depth, read_by_shell)]
+            files = fed
+        for file in files:
+            if moved and not Path(os.path.expandvars(os.path.expanduser(file))).is_absolute():
+                found.append(("merge", file, f"runs from another folder: this line changes folder before it runs "
+                                             f"({moved}), so the guard can't tell which file that is. Run the script "
+                                             "by its full path, or run the cd as a command of its own first"))
+                continue
+            found += [(kind, file, what) for kind, what in script_findings(file, cwd, depth, read_by_shell)]
     return found
 
 

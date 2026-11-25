@@ -630,6 +630,46 @@ def test_a_shell_fed_a_script_through_a_pipe_or_stdin_is_read_or_refused(command
     assert push_guard("cat fine.sh | sh", on_feature).returncode == 0
 
 
+@pytest.mark.parametrize("command", [
+    "cat push.sh |& sh",  # a pipe of stderr too
+    "cat - < push.sh | sh", "cat /dev/stdin < push.sh | sh", "cat < push.sh | sh",  # cat reading its own stdin
+    "cd sub && cat push.sh | sh", "cd sub && sh < push.sh",  # a file read after a folder change
+    "cat push.sh | bash -s harmless.sh", "bash -es < push.sh", "cat push.sh | bash -xs",  # -s: the script is stdin
+    "sh <(cat push.sh)", "sh < <(cat push.sh)",  # process substitution
+    "bash <<EOF\n$(cat push.sh)\nEOF", "sh <<< \"$(cat push.sh)\"",  # text that expands to the file
+])
+def test_a_shell_reading_its_script_from_anything_the_guard_cant_read_is_refused(command, on_feature):
+    """Regression: a shell that reads its script on standard input was let through when that input came through a
+    `|&` pipe, a cat of its own stdin, a file after a cd, -s with an operand, process substitution or a here-string.
+    It runs only from a regular file the guard reads, given with `<` or by `cat <file> |`."""
+    (on_feature / "harmless.sh").write_text("echo hi\n")
+    (on_feature / "push.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    (on_feature / "sub").mkdir()
+    (on_feature / "sub" / "push.sh").write_text("git push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2, (command, run.stderr)
+
+
+@pytest.mark.parametrize("content", [b"MZ=1\ngit push origin HEAD:refs/heads/main\n",  # no real program: a script
+                                     b"\x7fELF=1\ngit push origin HEAD:refs/heads/main\n",
+                                     b"#!/bin/sh\0\ngit push origin HEAD:refs/heads/main\n"])  # dash runs it
+def test_a_file_that_only_looks_like_a_program_is_read_as_a_script(content, on_feature):
+    """Regression: a file that starts with a program's magic but isn't one fails to run as a program, and the shell
+    then runs it as a script. The guard skips only a file that starts as a program does and holds a zero byte on its
+    first line, as bash's own check does, and never a #! file."""
+    (on_feature / "tool").write_bytes(content)
+    (on_feature / "tool").chmod(0o755)
+    run = push_guard("./tool", on_feature)
+    assert run.returncode == 2 and "holds a `git push`" in run.stderr, run.stderr
+
+
+def test_a_shell_that_reads_no_script_runs(on_feature):
+    (on_feature / "fine.sh").write_text("npm test\n")
+    for command in ("bash --version", "sh -c 'npm test'", "cat fine.sh | sh", "sh < fine.sh", "bash -s < fine.sh"):
+        run = push_guard(command, on_feature)
+        assert (run.returncode, run.stderr) == (0, ""), command
+
+
 def test_a_script_without_a_push_merge_or_kill_runs_and_a_program_is_never_read_as_one(on_feature):
     (on_feature / "test.sh").write_text("#!/bin/sh\nnpm test\ngit status\n")
     for command in ("bash test.sh", "sh -c 'git status'", f"{sys.executable} -c pass", "git status"):
