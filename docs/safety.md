@@ -23,8 +23,8 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 | Hook | When it runs | What it does |
 | --- | --- | --- |
 | The wait guard | Before every Bash call | Refuses a foreground sleep over 10 seconds, a loop that sleeps, an endless loop, `watch`, `gh run watch` and `gh pr checks --watch`. Its message says to use `run_in_background` or `colony wait`. A command sent to the background passes. |
-| The push guard | Before every Bash call, in the background too | Refuses a push that force-pushes, deletes or mirrors a protected branch: the base, the repo's default branch, and `[safety] protect`. |
-| The merge guard | Before every Bash call, and before a GitHub tool merges a pull request or commits onto a branch | Refuses what lands work on a branch without your yes. See [The merge guard](#the-merge-guard). |
+| The push guard | Before every Bash call, in the background too | Lets a push run in two forms alone, onto a branch of the agent's own, and refuses every other. See [The push guard](#the-push-guard). |
+| The merge guard | Before every Bash call, and before a GitHub tool merges a pull request or commits onto a branch | Refuses a merge you haven't allowed. See [The merge guard](#the-merge-guard). |
 | The kill guard | Before every Bash call, in the background too | Refuses a kill by name or pattern. See [The kill guard](#the-kill-guard). |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
@@ -37,14 +37,28 @@ A posting hook's line that `gh` can't post waits in `~/.colony/<project>/outbox.
 
 The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3` from 3.9 on. The push, merge and kill guards live in the same script, and run in every session in the repo, your own among them. The other hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
 
+### The push guard
+
+Working out exactly where git will push, through remotes, push URLs, URL rewrites, config and environment variables, is a game a guard loses. So the push guard allows two forms of push, and refuses every other:
+
+```
+git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>
+git push [-u] [--force-with-lease] [--dry-run] <remote> HEAD:<branch>
+```
+
+- **The remote** is a plain name this clone's `git remote` lists, never a URL or a path, and its push address, after its `pushurl` and git's `pushInsteadOf`, is the repo it fetches from.
+- **The branch** is a plain branch name, never a protected one: the base, the repo's default branch (origin's `HEAD`), or a branch or pattern in `[safety] protect`. For `HEAD:<branch>`, the branch checked out must not be protected either, and nothing earlier on the line may change it.
+- **Nothing else** joins them but `-q` and `-v`, which change only what git prints. A push is refused whatever its words when its line sets a `GIT_`, `HOME` or `XDG_CONFIG_HOME` variable, moves to another folder (`cd`, `git -C`, `env -C`, `sudo -D`), or points git elsewhere (`git -c`, `--config-env`, `--git-dir`, `--work-tree`).
+
+So `git push --force`, `git push` alone, `--all`, `--tags`, `--delete`, a `+` refspec and a push to a URL are all refused, and the message names the two forms. Work reaches a protected branch through a pull request, which you merge, or which an agent merges under the merge guard's rules. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
+
 ### The merge guard
 
-No agent merges into any branch, or pushes into a protected one, without your yes. By default agents open pull requests, and you merge them. The guard refuses:
+No agent merges into any branch without your yes. By default agents open pull requests, and you merge them. The guard refuses:
 
 - `gh pr merge`, including `--auto`, unless the pull request is in this repo and its base branch is one `[safety] merge_into` allows. To check, it asks `gh pr view` for the base and the pull request's address. With `merge_into` empty, the default, it refuses every one without asking.
 - A GitHub tool that merges a pull request, such as the GitHub MCP server's `merge_pull_request`, by the same rule.
 - A `gh api` call that merges: a `PUT` to `pulls/<n>/merge`, a `POST` to `merges`, or a GraphQL `mergePullRequest`. Only `gh pr merge` may merge, because the guard can check its base.
-- A plain `git push` that updates a protected branch, such as `git push origin main`, `git push` with `main` checked out, or `git push origin HEAD:main`, unless `merge_into` allows that branch. A push of your own branch, a tag or a dry run passes.
 - A GitHub tool that commits straight onto a protected branch name, such as `push_files` or `create_or_update_file` with `branch` set to the base, or with no branch at all. In another repo than origin's, a protected branch name gets no yes.
 - A command that changes what the guard reads as origin: `git update-ref` or `git symbolic-ref` on `refs/remotes/`, a fetch into `refs/remotes/` by hand, `git remote set-head` with a branch, `git remote set-url`, `rename` or `remove` of `origin`, `git config --edit`, and `git config` that changes a remote's URL, a fetch refspec, a URL rewrite or an include, and a `git -c` that reroutes a push. Ask the person to run these.
 
@@ -52,11 +66,11 @@ The protected branches are the base, the repo's default branch (origin's `HEAD`)
 
 **Where the yes comes from.** To let agents merge into a branch, such as an integration branch `dev`, add it to `[safety] merge_into` in `.colony/colony.toml`, and merge that change into the repo's default branch on GitHub. The guard counts a branch only when both the working copy and the copy on GitHub's default branch name it, and it reads GitHub's copy with `gh api`, never from a file or a ref on this computer, which an agent could edit. No other branch's copy counts, not even the base's, since an agent allowed to push there could write its own yes. When GitHub can't be read, as with `gh` signed out or offline, nothing is allowed. A branch you take out of your working copy is refused at once.
 
-**Where a push really goes.** The guard reads where git will send each push, after the remote's `pushurl` and git's URL rewrites, with `git remote get-url --push` or `git ls-remote --get-url`. A yes holds only when that is origin's repo, and it comes from that repo's own default branch. So a push of a protected branch name to any other URL or remote is refused, and so is one that git config, edited by hand, sends somewhere else. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
+**Where origin is.** The guard knows this repo by where git says origin is, after git's URL rewrites, never by `[project] repo`. A yes holds only for a pull request in origin's repo, and comes from that repo's own default branch.
 
-**Where a line hides a push or a merge.** The guard follows `sh -c`, `eval`, `sudo`, and git and gh aliases to the command they run, and refuses an `xargs` or a shell alias that builds a push or a merge. A `cd` or a `git checkout -b` on the same line counts only while `&&` joins it to the push, with no `||` or pipe before it: then the push runs in that folder, on that branch, or not at all. Joined any other way, or after `git -C`, `--git-dir`, `--work-tree` or `env -C`, the guard refuses a push of `HEAD`, or with no refspec, and names the branch to push instead. A `gh pr merge` that shares its line with a `cd`, a wrapper that moves it, such as `env -C` or `sudo -D`, or a `GH_` or `GIT_` variable is refused: run it on a line of its own, with `--repo` for another repo.
+**Where a line hides a merge.** The guard follows `sh -c`, `eval`, `sudo`, and git and gh aliases to the command they run, and refuses an `xargs` or a shell alias that builds a push or a merge. A `gh pr merge` that shares its line with a `cd`, a wrapper that moves it, such as `env -C` or `sudo -D`, or a `GH_` or `GIT_` variable is refused: run it on a line of its own, with `--repo` for another repo.
 
-**What it costs.** A merge into an allowed branch makes one `gh api` call, and a push of an agent's own branch makes none. The protected list itself comes from this computer: the working copy, origin's `HEAD` and origin's copy of colony.toml, so an agent that edits the working copy's `base` or `protect` can narrow it, though never below the default branch.
+**What it costs.** A merge into an allowed branch makes one `gh api` call, and a push makes none. The protected list itself comes from this computer: the working copy, origin's `HEAD` and origin's copy of colony.toml, so an agent that edits the working copy's `base` or `protect` can narrow it, though never below the default branch.
 
 ### What a hook can't do
 

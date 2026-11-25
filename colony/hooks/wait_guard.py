@@ -17,18 +17,17 @@ and merge guards below read bodies as commands, so no here-document the guard mi
 quoting Python's shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell reads
 fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
-It also refuses, in every mode and even in the background, a `git push` that force-pushes or deletes the base branch,
-`[project] base` in .colony/colony.toml (main when unset), or the repo's default branch, origin's HEAD (main when git
-can't say): `--force`, `-f`, `--force-with-lease`, `--mirror`, a `+` refspec, a deletion, or `--prune` with a pattern
-such as refs/heads/*, which it matches against those branches. It reads options as git does, so a prefix git accepts,
-such as `--del`, counts as the whole option. A forced or deleting push that names no refspec updates what git config
-says, `remote.<name>.push` or `push.default` with the line's own `-c` values, so with push.default=matching it
-rewrites the base too; when git config can't say, such a push is refused. A plain push that names no refspec
-rewrites a protected branch only when git config forces, deletes or mirrors it through it. The guard reads git config
-before the line runs, so after a command on the same line that can change it or the branch checked out, such as `git
-checkout` or `cd`, a forced push names its branch. `@` is HEAD, the branch checked out. A force push rewrites the
-branch every teammate builds on, and makes each of them rebase. A forced push of tags alone passes. A line whose
-quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
+The push guard lets a `git push` run, in every mode and even in the background, only in one of two forms, and
+refuses every other: `git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>`, and the same with
+`HEAD:<branch>` (-q and -v may join them, since they change only what git prints). The remote is a plain name this
+clone's `git remote` lists, whose push address, after its pushurl and git's pushInsteadOf, is the repo it fetches from.
+The branch is a plain branch name, never a protected one: the base, `[project] base` in .colony/colony.toml (main when
+unset), the repo's default branch, origin's HEAD (main when git can't say), and `[safety] protect`. For HEAD, the
+branch checked out must not be protected either, and nothing earlier on the line may change it. A push is refused
+whatever its words when its line sets a GIT_, HOME or XDG_CONFIG_HOME variable, moves it to another folder (a cd, `git
+-C`, `env -C`, `sudo -D`), or points git elsewhere (`-c`, --config-env, --git-dir, --work-tree): working out where git
+then pushes is a guess, and the guard doesn't guess. Land work on a protected branch through a pull request. A line
+whose quoting it can't read is refused whenever it holds `git` and `push`: run such a push on its own.
 
 The kill guard refuses, in every mode and even in the background, a kill by pattern or by name: pkill, killall,
 skill, `fuser -k`, `taskkill /IM` and PowerShell's `Stop-Process -Name`, and a `kill` whose process ids come from a
@@ -38,27 +37,22 @@ pattern matches more than anyone means: on macOS, `pkill -f "colony wait" -U $(i
 pattern as one more pattern, and ended every Claude Code session on the computer. A kill of numbers, job specs such
 as %1, `$!`, or ids from a file passes. A session closes another by name with `colony stop <name>`.
 
-The merge guard refuses what lands work on a branch without the person's yes. A `gh pr merge`, and a GitHub tool's
-merge of a pull request, pass only when the pull request is in this repo, origin's, and its base is a branch
-`[safety] merge_into` allows; a `gh api` call that merges is refused, since `gh pr merge` is the way the guard can
-check. A plain `git push` that updates a protected branch, and a GitHub tool that commits onto one, are refused unless
-`merge_into` allows it. The protected branches are the base, the repo's default branch and `[safety] protect`. A
-dry-run push passes.
+The merge guard refuses a merge the person hasn't allowed. A `gh pr merge`, and a GitHub tool's merge of a pull
+request, pass only when the pull request is in this repo, origin's, and its base is a branch `[safety] merge_into`
+allows; a `gh api` call that merges is refused, since `gh pr merge` is the way the guard can check. A GitHub tool that
+commits straight onto a protected branch name is refused unless `merge_into` allows it in this repo.
 
 What the person allows comes from the code host, never from a file or a ref on this computer, which an agent can
 edit: a merge_into pattern counts only when the working copy names it and so does the colony.toml on the default
-branch of the repo the push or merge really goes to, read with `gh api`, and only when that repo is origin's. Where a
-push goes is what git says after its pushurl and url rewrites (`git remote get-url --push`, `git ls-remote
---get-url`), so a push to any other URL or remote gets no yes. When GitHub can't be read, nothing is allowed. The guard
-refuses what rewrites that picture: `git update-ref` or `symbolic-ref` on refs/remotes/, a fetch into refs/remotes/ by
-hand, `git remote set-head` with a branch, `set-url`, `rename` or `remove` of origin, `git config --edit`, and config
-that changes a remote's URL, a fetch refspec, a URL rewrite or an include, and a `-c` that reroutes a push.
+branch of the pull request's repo, read with `gh api`, and only when that repo is origin's, as git reads origin's
+address after its url rewrites. When GitHub can't be read, nothing is allowed. The guard refuses what rewrites that
+picture: `git update-ref` or `symbolic-ref` on refs/remotes/, a fetch into refs/remotes/ by hand, `git remote
+set-head` with a branch, `set-url`, `rename` or `remove` of origin, `git config --edit`, and config that changes a
+remote's URL, a fetch refspec, a URL rewrite or an include.
 
-It follows a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuses an xargs
-or a shell alias that builds one. A `cd`, or a `git checkout -b`, counts only while && joins it to the push, with no
-`||` or pipe before it, and never across `git -C`, `--git-dir`, `--work-tree` or `env -C`. A `gh pr merge` that
-shares its line with a cd, a wrapper that moves it, or a GH_ or GIT_ variable is refused, since the pull request
-checked may not be the one merged.
+Both follow a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuse an xargs or
+a shell alias that builds one. A `gh pr merge` that shares its line with a cd, a wrapper that moves it, or a GH_ or
+GIT_ variable is refused, since the pull request checked may not be the one merged.
 
 A hook stops an agent's honest mistakes, never a determined one: an agent that can edit .claude/settings.json, this
 script or .git/config by hand can get past it. The real lock is the code host's branch protection, which `colony
@@ -114,25 +108,25 @@ PIPES = {"|", "|&"}
 BACKGROUND = "&"
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
                      "--attr-source", "--shallow-file"}  # git's, before `push`
-# git push's long options, as `git push --git-completion-helper` lists them. Git reads a word that is a prefix of
-# only one of them as that option, and refuses a prefix of several.
-PUSH_OPTIONS = ("verbose", "quiet", "repo", "all", "branches", "mirror", "delete", "tags", "dry-run", "porcelain",
-                "force", "force-with-lease", "force-if-includes", "recurse-submodules", "thin", "receive-pack",
-                "exec", "set-upstream", "progress", "prune", "no-verify", "verify", "follow-tags", "signed",
-                "atomic", "push-option", "ipv4", "ipv6")
-PUSH_VALUE_OPTIONS = {"repo", "recurse-submodules", "receive-pack", "exec", "push-option"}  # take the next word
-# The settings that choose what a push with no refspec updates, as git config prints their keys.
-PUSH_CONFIG = (r"^(push\.default|remote\.pushdefault|remote\..+\.(push|mirror)|"
-               r"branch\..+\.(remote|pushremote|merge))$")
-FALSE = ("", "false", "no", "off", "0")  # the values git reads as false, and "" for a setting not there
 # Commands that can change the branch checked out, git config or the folder for a later push on the same line, which
 # the guard reads before the line runs.
 LINE_CHANGES_GIT = {"checkout", "switch", "config", "branch", "remote", "symbolic-ref"}
 LINE_CHANGES = {"cd", "pushd", "popd"}
 GIT_VARIABLE = re.compile(r"^(GIT_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where git finds its repo and its config
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
-PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
-                "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person."
+# The push guard's allow-list: the only words a push may hold besides its remote and branch. Each changes nothing about
+# what is pushed or where: -u records the upstream, --force-with-lease rewrites only a branch of the agent's own, a
+# dry run pushes nothing, and the rest change what git prints.
+PUSH_FLAGS = {"-u", "--set-upstream", "--force-with-lease", "--dry-run", "-n", "-q", "--quiet", "-v", "--verbose"}
+REMOTE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")  # a remote's plain name: no slash, no URL, no path
+# A plain branch name, as git check-ref-format allows one, without globs, refs/, HEAD or a leading dash.
+BRANCH = re.compile(r"^(?!-)(?!refs/)(?!HEAD$)(?!.*(?:\.\.|//|@\{|\.lock(?:/|$)|/\.))"
+                    r"[A-Za-z0-9_.][A-Za-z0-9_./-]*(?<![./])$")
+PUSH_REFUSAL = ("push guard: refused, {reason}. A push takes one of two forms: `git push [-u] [--force-with-lease] "
+                "[--dry-run] <remote> <branch>`, or the same with `HEAD:<branch>`, where the remote is one this "
+                "clone names, whose push and fetch addresses are one repo, and the branch is your own, never "
+                "{branches}. Land work on those through a pull request (in Hack, `colony merge <branch>`), or ask "
+                "your person."
                 " If these words are only text, such as a here-document or a message that names them, "
                 "write the text to a file with your file tool and pass the file instead.")
 REFUSAL = ("wait guard: refused, {reason}. A foreground wait blocks the session. Start the command with "
@@ -198,8 +192,8 @@ GH_COMMANDS = frozenset((
     "copilot", "extension", "gist", "gpg-key", "help", "issue", "label", "org", "pr", "preview", "project", "release",
     "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow"))
 GH_VARIABLE = re.compile(r"^(GH_\w*|GITHUB_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where gh finds its repo, host and config
-CHAIN_BREAKERS = {"||", "|", "|&"}  # before a cd, each makes it run only sometimes, or in a pipeline's own shell
 DEPTH = 4  # nested shells, evals and aliases the guard follows before it refuses
+FOLDER_OPTIONS = ("-C", "-D", "--chdir", "--git-dir", "--work-tree")  # a wrapper's options that move a command
 MERGE_REFUSAL = ("merge guard: refused, {reason}. No agent merges or pushes into a branch without the person's yes: "
                  "push your own branch and open a pull request for the person to merge (in Hack, `colony merge "
                  "<branch>`). The person allows merges into a branch with `merge_into` under [safety] in "
@@ -738,17 +732,6 @@ def permitted(branch: str, allowed: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(branch, pattern) for pattern in allowed)
 
 
-def long_options(word: str) -> set[str]:
-    """The git push options a --word names: the one it spells out, else each one it is a prefix of. Git refuses a
-    prefix of several, so reading it as each of them refuses nothing git would run."""
-    name = word[2:].partition("=")[0]
-    if name in PUSH_OPTIONS:
-        return {name}
-    if name.startswith("no-"):  # a negation takes no value, and forces or deletes nothing
-        return set()
-    return {option for option in PUSH_OPTIONS if option.startswith(name)}
-
-
 def branch_name(target: str) -> str:
     """A refspec's destination as a branch name: refs/heads/main and heads/main are main."""
     for prefix in ("refs/heads/", "heads/"):
@@ -770,20 +753,6 @@ def reached(target: str, protected: list[str]) -> str:
     return ""
 
 
-def local_branches(cwd: str, branches: list[str]) -> list[str]:
-    """The ones of these branches, or patterns, that this clone has as local branches."""
-    found = []
-    for branch in branches:
-        try:
-            run = subprocess.run(["git", "for-each-ref", "--count=1", "--format=%(refname)", f"refs/heads/{branch}"],
-                                 cwd=cwd or None, capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if run.returncode == 0 and run.stdout.strip():
-            found.append(branch)
-    return found
-
-
 def config_key(key: str) -> str:
     """A config key the way git config prints it: the section and the name in lower case, a subsection as written."""
     section, _, rest = key.partition(".")
@@ -791,189 +760,9 @@ def config_key(key: str) -> str:
     return f"{section.lower()}.{subsection}{dot}{name.lower()}"
 
 
-def push_config(cwd: str, overrides: list[tuple[str, str | None]]) -> dict[str, list[str]] | None:
-    """The settings in PUSH_CONFIG, each key's values in order, with the line's own -c values last, as git reads
-    them. None when git can't say, or when a --config-env value, which the guard can't see, sets one of them."""
-    try:
-        run = subprocess.run(["git", "config", "-z", "--get-regexp", PUSH_CONFIG], cwd=cwd or None,
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if run.returncode not in (0, 1):  # 1: none of them is set
-        return None
-    found: dict[str, list[str]] = {}
-    for entry in filter(None, run.stdout.split("\0")):
-        key, newline, value = entry.partition("\n")
-        found.setdefault(key, []).append(value if newline else "true")  # a key with no value is true
-    for key, value in overrides:
-        key = config_key(key)
-        if re.match(PUSH_CONFIG, key):
-            if value is None:
-                return None
-            found.setdefault(key, []).append(value)
-    return found
-
-
-def default_refspecs(config: dict[str, list[str]], remote: str, branch: str) -> tuple[list[str], str] | None:
-    """The refspecs a push with none of its own pushes to this remote from this branch ("" when none is checked
-    out), and the setting they come from: remote.<remote>.push, else push.default. None when git can't say."""
-    if specs := config.get(f"remote.{remote}.push"):
-        return specs, f"remote.{remote}.push"
-    mode = (config.get("push.default") or ["simple"])[-1]
-    upstream = (config.get(f"branch.{branch}.merge") or [""])[-1]
-    if mode == "nothing":
-        return [], ""
-    if mode == "matching":
-        return [":"], "push.default=matching"
-    if mode in ("simple", "current") and branch:  # simple pushes to an upstream only of the same name
-        return [branch], ""
-    if mode in ("upstream", "tracking") and branch and upstream:
-        return [f"{branch}:{upstream}"], f"push.default={mode}"
-    return None
-
-
-def refspec_target(spec: str, force: bool, delete: bool, prune: bool) -> tuple[str, str]:
-    """The branch or pattern a refspec updates on the remote, and how it rewrites it: "deletes", "force-pushes",
-    "can delete", or "" when it does neither."""
-    plus, spec = spec.startswith("+"), spec.lstrip("+")
-    source, colon, destination = spec.partition(":")
-    if spec == ":":  # every branch both sides have, as push.default=matching pushes
-        source = destination = "refs/heads/*"
-    target = destination if colon else source
-    how = ("deletes" if delete or (colon and not source) else "force-pushes" if force or plus
-           else "can delete" if prune and "*" in target else "")  # --prune deletes only through a pattern
-    return target, how
-
-
 def reaches(target: str, protected: list[str]) -> list[str]:
     """Every protected branch a refspec's destination names or matches, as reached finds each one."""
     return list(dict.fromkeys(found for branch in protected if (found := reached(target, [branch]))))
-
-
-REWRITE, UPDATE = "rewrite", "update"  # what push_rewrites found: a forced or deleting push, or a plain one
-
-
-def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
-                  overrides: list[tuple[str, str | None]] | None = None, changed: str = "",
-                  allow: bool = True, created: str = "") -> tuple[str, str]:
-    """Why a `git push` with these arguments, the words after `push`, rewrites, deletes or updates a protected branch:
-    (REWRITE, why) when it force-pushes or deletes one, (UPDATE, why) when a plain push updates one the person doesn't
-    allow at the push's own destination (Allowance), or `allow` is false, else ("", ""). overrides are the line's -c
-    settings before `push`, and None for a --config-env one,
-    whose value can't be seen. changed names what on the line can change the branch checked out, the folder or git
-    config before this push runs, and created the branch a `git checkout -b` joined to this push by && made, which HEAD
-    then names. A dry run updates nothing."""
-    force = delete = everything = mirror = prune = tags = repo = dry = False
-    positional: list[str] = []
-    remote, value_of, options_end = "", "", False  # value_of: the option the next word is the value of
-    for word in arguments:
-        if value_of:
-            remote, value_of = word if value_of == "repo" else remote, ""
-        elif options_end or not word.startswith("-") or word == "-":
-            positional.append(word)
-        elif word == "--":
-            options_end = True
-        elif word.startswith("--"):
-            named = long_options(word)
-            force = force or bool(named & {"force", "force-with-lease"})
-            delete, mirror, prune = delete or "delete" in named, mirror or "mirror" in named, prune or "prune" in named
-            everything, repo = everything or bool(named & {"all", "branches"}), repo or "repo" in named
-            tags = tags or named == {"tags"}  # tags alone pass, so only a word that can mean nothing else counts
-            dry = dry or named == {"dry-run"}
-            if "=" in word:
-                remote = word.partition("=")[2] if named == {"repo"} else remote
-            elif named and named <= PUSH_VALUE_OPTIONS:
-                value_of = "repo" if named == {"repo"} else "other"
-        else:
-            letters, option, value = word[1:].partition("o")  # -o takes the rest as its value, as in -odeploy
-            force, delete, dry = force or "f" in letters, delete or "d" in letters, dry or "n" in letters
-            value_of = "push-option" if option and not value else ""
-    if mirror:
-        return REWRITE, "`git push --mirror` overwrites every branch on the remote"
-    if force and everything:
-        return REWRITE, f"a force push of every branch rewrites {' and '.join(protected)}"
-    if prune and everything:
-        return REWRITE, (f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has "
-                         "its name")
-
-    destination = positional[0] if positional else remote  # where the push goes; the no-refspec path fills it in
-    allowances: dict[str, Allowance] = {}
-
-    def guarded(branch: str) -> bool:  # a protected branch a plain push may not update; none in a dry run
-        if dry:
-            return False
-        where = destination or "origin"
-        allowance = allowances.setdefault(where, Allowance(cwd, where)) if allow else None
-        return allowance is None or not allowance.permits(branch)
-
-    if everything and not dry and (held := [b for b in local_branches(cwd, protected) if guarded(b)]):
-        return UPDATE, f"`git push --all` pushes every local branch, {' and '.join(held)} among them"
-    # Git takes the first word as the repository even with --repo, which names only a default. With --repo the
-    # guard reads that word as a refspec too, so a push is refused when either reading reaches a protected branch.
-    refspecs = [(spec, "") for spec in positional[1:] + (positional[:1] if repo else [])]
-    if len(positional) <= 1 and not tags and not everything:
-        # No refspec: git pushes what remote.<name>.mirror, remote.<name>.push or push.default says, with --tags only
-        # tags, and with --all every branch. When the guard can't tell what that is, a plain push passes, and any
-        # other is refused.
-        how = "deletes" if delete else "force-pushes" if force else "can delete" if prune else ""
-        if changed and how:
-            return REWRITE, f"this push names no refspec, and {changed} on this line can change which branches it {how}"
-        if changed and not dry:
-            return UPDATE, f"this push names no refspec, and {changed} on this line can change which branch it updates"
-        config = None if changed else push_config(cwd, overrides or [])
-        found = None
-        if config is not None:
-            branch = current_branch(cwd)
-            setting = lambda key: (config.get(key) or [""])[-1]  # noqa: E731
-            remote = (positional[0] if positional else remote) or setting(f"branch.{branch}.pushremote") or \
-                setting("remote.pushdefault") or setting(f"branch.{branch}.remote") or "origin"
-            destination = remote
-            if setting(f"remote.{remote}.mirror").lower() not in FALSE:
-                return REWRITE, (f"remote.{remote}.mirror makes this push a `--mirror` push, which overwrites every "
-                                 "branch")
-            found = default_refspecs(config, remote, branch)
-        if found is None and how:
-            return REWRITE, f"this push names no refspec, and git config can't say which branches it {how}"
-        refspecs += [(spec, found[1]) for spec in found[0]] if found else []
-    for spec, via in refspecs:
-        target, how = refspec_target(spec, force, delete, prune)
-        if target in ("HEAD", "@") and (how or not dry):  # @ is git's short name for HEAD
-            if created:
-                target = created
-            elif changed:
-                return (REWRITE if how else UPDATE), (f"this push {how or 'updates'} HEAD, and {changed} on this line "
-                                                      "can change which branch that is")
-            else:
-                target = current_branch(cwd)
-        through = f", through {via}" if via else ""
-        if how and (branch := reached(target, protected)):
-            return REWRITE, f"this push {how} {branch}{through}"
-        if not how and target and (held := [b for b in reaches(target, protected) if guarded(b)]):
-            return UPDATE, f"this push updates {held[0]}{through}"
-    return "", ""
-
-
-def new_branch(command: str, arguments: list[str]) -> str:
-    """The branch a `git checkout -b` or `git switch -c` makes and checks out, or "" for any other checkout."""
-    options = ("-b", "-B", "--orphan") if command == "checkout" else ("-c", "-C", "--create", "--force-create",
-                                                                       "--orphan")
-    for index, word in enumerate(arguments):
-        if word in options and index + 1 < len(arguments):
-            return arguments[index + 1]
-        name, equals, value = word.partition("=")
-        if equals and name in options:
-            return value
-    return ""
-
-
-def moved_to(arguments: list[str], cwd: str, grouped: bool) -> str:
-    """The folder a `cd` or `pushd` with these arguments moves to, when the guard can tell for sure: one plain word
-    that names a folder, on a line with no subshell or substitution, whose `cd` could end inside it. Else ""."""
-    words = [word for word in arguments if word != "--"]
-    if grouped or len(words) != 1 or words[0] == "-" or any(mark in words[0] for mark in "$`*?[{"):
-        return ""
-    folder = os.path.join(cwd, os.path.expanduser(words[0]))
-    return folder if os.path.isdir(folder) else ""
 
 
 def git_alias(name: str, cwd: str, overrides: list[tuple[str, str | None]]) -> str | None:
@@ -1088,16 +877,85 @@ def fed(arguments: list[str], program: str, known: frozenset[str], words: set[st
     return next((word for word in rest if word in words), "") or (rest[0] if rest and rest[0] not in known else "")
 
 
-def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[list[str], list[str]]:
-    """A reason for each `git push` in the command line that force-pushes or deletes a protected branch, and one for
-    each that updates a protected branch the person hasn't allowed (push_rewrites), or that rewrites what the guard
-    reads as origin's (forges). It follows `sh -c`, `eval`, sudo and git aliases. A line whose quoting can't be read is
-    refused whenever its text holds `git` and `push` anywhere: the guard can't tell what such a push does, and quotes
-    can hide a force flag from any plain-text search.
+def remotes(cwd: str) -> list[str]:
+    """The remotes this clone names, as `git remote` lists them."""
+    try:
+        run = subprocess.run(["git", "remote"], cwd=cwd or None, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return run.stdout.split() if run.returncode == 0 else []
 
-    A `cd` into a folder the guard can name, and a `git checkout -b`, count only while && joins them to the push,
-    with no `||` or pipe before them: then the push runs there, on that branch, or not at all. Joined any other way,
-    each is a change the guard can't count on, and the cd's folder is one more the push may run in."""
+
+def one_repo(one: str, other: str) -> bool:
+    """Whether two addresses git gives name one repo: the same owner/name on the same host, or the same address."""
+    first, second = repo_of(one), repo_of(other)
+    return same_repo(first, second) if first[1] or second[1] else bool(one) and one == other
+
+
+def push_refusal(arguments: list[str], cwd: str, protected: list[str], changed: str = "") -> str:
+    """Why a `git push` with these arguments, the words after `push`, takes none of the allowed forms, or "". The
+    allowed forms are `[flags] <remote> <branch>` and `[flags] <remote> HEAD:<branch>`, with PUSH_FLAGS alone; a
+    remote this clone names, whose push address, after its pushurl and git's pushInsteadOf, is the repo it fetches
+    from; and a plain branch name that isn't protected. For HEAD, the branch checked out mustn't be protected either,
+    and nothing before the push on its line (`changed`) may change which branch that is."""
+    words = []
+    for word in arguments:
+        if word.startswith("-") and word != "-":
+            if word not in PUSH_FLAGS:
+                return f"`{word}` is not part of an allowed push"
+        else:
+            words.append(word)
+    if len(words) != 2:
+        return "this push names no remote and branch" if not words else \
+            "a push names exactly one remote and one branch"
+    remote, spec = words
+    if not REMOTE_NAME.fullmatch(remote) or remote not in remotes(cwd):
+        return f"`{remote}` is no remote this clone names"
+    head = spec.startswith("HEAD:")
+    branch = spec[len("HEAD:"):] if head else spec
+    if not BRANCH.fullmatch(branch):
+        return f"`{spec}` is not a plain branch name"
+    if hit := reached(branch, protected):
+        return f"{hit} is protected"
+    if head:
+        if changed:
+            return f"{changed} on this line can change the branch HEAD names"
+        current = current_branch(cwd)
+        if not current:
+            return "HEAD is no branch here"
+        if hit := reached(current, protected):
+            return f"{hit}, the branch checked out, is protected"
+    fetch, push = remote_url(cwd, remote, push=False), remote_url(cwd, remote, push=True)
+    if not fetch or not push:
+        return f"git can't say where `{remote}` pushes"
+    if not one_repo(fetch, push):
+        return f"`{remote}` pushes to {push}, not to the repo it fetches from"
+    return ""
+
+
+def line_variable(line: list[str], pattern: re.Pattern) -> str:
+    """The first variable a line sets that `pattern` names, before a command, alone, or through export, unset,
+    declare, typeset or readonly, as `NAME`, or ""."""
+    for words in simple_commands(line):
+        program = run_program(words)
+        head = words[:len(words) - len(program)]
+        named = [word.partition("=")[0] for word in head if pattern.match(word)]
+        name = PurePath(program[0]).name if program else ""
+        if name in ("export", "unset", "declare", "typeset", "readonly"):
+            named += [word.partition("=")[0] for word in program[1:] if pattern.match(word)]
+        if named:
+            return f"`{named[0]}`"
+    return ""
+
+
+def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str = "") -> tuple[list[str], list[str]]:
+    """A reason for each `git push` in the command line that takes none of the allowed forms (push_refusal), and one
+    for each git command that rewrites what the guard reads as origin's (forges), or that the guard can't follow. It
+    follows `sh -c`, `eval`, sudo and git aliases to the push. A push is refused whatever its words when its line
+    sets a GIT_, HOME or XDG_CONFIG_HOME variable, moves it to another folder (a cd, `git -C`, `env -C`), or points
+    git elsewhere (`-c`, --config-env, --git-dir, --work-tree): where git pushes is then the guard's guess, and the
+    guard doesn't guess. `moved` carries such a change into a nested shell's line. A line whose quoting can't be read
+    is refused whenever its text holds `git` and `push` anywhere."""
     try:
         line = tokens(command)
     except ValueError:
@@ -1106,54 +964,48 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[l
                     "of its own"], []
         return [], []
     if depth > DEPTH:
-        return [], ["this line nests shells, evals or aliases too deep for the guard to follow, so run it plainly"]
-    rewrites: list[str] = []
+        return ["this line nests shells, evals or aliases too deep for the guard to follow, so run it plainly"], []
+    refused: list[str] = []
     updates: list[str] = []
-    created = ""  # the branch a `git checkout -b` made, while an && chain carries it
-    where, grouped = cwd, "(" in line  # the folder the next command runs in, and whether the line holds a subshell
-    also: list[str] = []  # other folders a later command may run in, after a cd the guard can't count on
-    chain, carried = "", ""  # the folder before an && chain's cd or new branch, and which of them the chain carries
-    for words, before, after in sequence(line):
+    moved = moved or line_variable(line, GIT_VARIABLE)  # where git finds its repo and config, for the whole line
+    for words in simple_commands(line):
         program = run_program(words)
-        head = words[:len(words) - len(program)]  # assignments and wrappers, such as env GIT_DIR=x
-        variables = [word.partition("=")[0] for word in head if GIT_VARIABLE.match(word)]
+        head = words[:len(words) - len(program)]  # assignments and wrappers, such as sudo -D or env -C
         name = PurePath(program[0]).name if program else ""
-        counts = before not in CHAIN_BREAKERS and after == "&&"  # what this command changes holds for the next
+        wrapped = next((f"`{word.partition('=')[0]}`" for word in head
+                        if word.partition("=")[0] in FOLDER_OPTIONS), "")
         if name == "git":
-            index, here, overrides, moved = 1, where, [], ""
-            own = f"`{variables[0]}`" if variables else ""  # a variable set for this command alone
-            if any(word in ("-C", "--chdir") or word.startswith("--chdir=") for word in head):
-                own = own or "`env --chdir`"  # env runs the command in another folder
+            index, overrides, elsewhere = 1, [], moved or wrapped
             expanded = 0
             while True:
                 while index < len(program) and program[index].startswith("-"):
                     option, value = program[index], program[index + 1] if index + 1 < len(program) else ""
-                    if option == "-C" and value:
-                        here, moved = os.path.join(here, value), value
-                    elif option == "-c":
+                    if option == "-c":
                         key, equals, setting = value.partition("=")
                         overrides.append((key, setting if equals else "true"))  # -c <key> alone sets it to true
                     elif option.startswith("--config-env"):  # --config-env=<key>=<variable>, or the pair as the value
                         overrides.append(((option.partition("=")[2] or value).rpartition("=")[0], None))
-                    elif option.partition("=")[0] in ("--git-dir", "--work-tree"):
-                        own = own or f"`{option.partition('=')[0]}`"
+                    if option.partition("=")[0] in ("-C", "--git-dir", "--work-tree", "--config-env", "-c",
+                                                    "--namespace", "--exec-path"):
+                        elsewhere = elsewhere or f"`git {option.partition('=')[0]}`"
                     index += 2 if option in GIT_VALUE_OPTIONS else 1
                 subcommand = program[index] if index < len(program) else ""
                 if not subcommand or subcommand in GIT_COMMANDS:
                     break
-                alias = git_alias(subcommand, here, overrides)
+                alias = git_alias(subcommand, cwd, overrides)
                 if alias is None:  # an outside git-<name> program, unless this line can make it an alias
-                    if changed or own:
-                        updates.append(f"`git {subcommand}` may be an alias {changed or own} on this line defines, "
-                                       "which the guard can't see")
+                    if changed or elsewhere:
+                        updates.append(f"`git {subcommand}` may be an alias {changed or elsewhere} on this line "
+                                       "defines, which the guard can't see")
                     break
                 expanded += 1
                 if not alias or expanded > DEPTH:
                     updates.append(f"the guard can't read what the git alias `{subcommand}` runs")
                     break
                 if alias.startswith("!"):  # a shell alias: the guard reads the line it runs
-                    found = pushes(f"{alias[1:]} {shlex.join(program[index + 1:])}", here, depth + 1, changed or own)
-                    rewrites, updates = rewrites + found[0], updates + found[1]
+                    found = pushes(f"{alias[1:]} {shlex.join(program[index + 1:])}", cwd, depth + 1, changed,
+                                   elsewhere)
+                    refused, updates = refused + found[0], updates + found[1]
                     break
                 try:
                     program = [*program[:index], *shlex.split(alias), *program[index + 1:]]
@@ -1161,53 +1013,30 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[l
                     updates.append(f"the guard can't read what the git alias `{subcommand}` runs")
                     break
             subcommand = program[index] if index < len(program) else ""
-            folders = [here, *(os.path.join(folder, moved) for folder in also)]
             if subcommand == "push":
-                protected = list(dict.fromkeys(branch for folder in folders for branch in protected_branches(folder)))
-                rerouted = [key for key, _ in overrides if REMOTE_KEYS.match(config_key(key))]
-                if rerouted:  # the guard reads where a push goes from git config, which this -c changes unseen
-                    updates.append(f"`git -c {rerouted[0]}` changes where this push goes, so run it without")
-                kind, reason = push_rewrites(program[index + 1:], protected, here, overrides, changed or own,
-                                             not rerouted, created if not moved and not own else "")
-                if kind == REWRITE:
-                    rewrites.append(reason)
-                elif kind == UPDATE:
-                    updates.append(reason)
+                reason = (f"{elsewhere} on this line can change where git pushes" if elsewhere else
+                          push_refusal(program[index + 1:], cwd, protected_branches(cwd), changed))
+                if reason:
+                    refused.append(reason)
             elif reason := forges(subcommand, program[index + 1:], overrides):
                 updates.append(reason)
             elif subcommand in LINE_CHANGES_GIT:
-                made = new_branch(subcommand, program[index + 1:]) if subcommand in ("checkout", "switch") else ""
-                if made and counts and not changed and not own and not moved:
-                    chain, carried, created = chain or where, carried or f"`git {subcommand}`", made
-                else:
-                    changed, created = changed or f"`git {subcommand}`", ""
+                changed = changed or f"`git {subcommand}`"
         elif name in SHELLS or name == "eval":
             for inner in shell_lines(name, program[1:]):
-                found = pushes(inner, where, depth + 1, changed)
-                rewrites, updates = rewrites + found[0], updates + found[1]
+                found = pushes(inner, cwd, depth + 1, changed, moved or wrapped)
+                refused, updates = refused + found[0], updates + found[1]
             if name == "eval":  # it runs in this shell, so its cd or checkout carries on along the line
-                changed, created = changed or "`eval`", ""
+                changed = changed or "`eval`"
+                moved = moved or "`eval`"
         elif name == "xargs" and (sub := fed(program[1:], "git", GIT_COMMANDS, {"push"})):
             updates.append(f"`xargs` runs `git {sub}` with words the guard can't see, so run it as a command of "
                            "its own")
         elif name == "alias" and any(re.search(r"\bgit\b.*\bpush\b", word) for word in program[1:]):
             updates.append("this line defines a shell alias that pushes, which the guard can't follow")
-        elif name in ("cd", "pushd") and not variables and (folder := moved_to(program[1:], where, grouped)):
-            if counts:
-                chain, carried, where, created = chain or where, carried or f"`{name}`", folder, ""
-            else:
-                also.append(folder)
-                changed, created = changed or f"`{name}`", ""
-        elif name in LINE_CHANGES or (not program and variables) or (
-                name in ("export", "unset") and any(GIT_VARIABLE.match(word) for word in program[1:])):
-            changed, created = changed or f"`{name or variables[0]}`", ""
-        if carried and after != "&&":
-            # The && chain that carried a cd or a new branch ends here: a later command may run without them.
-            if where != chain:
-                also.append(where)
-            where, created, changed = chain, "", changed or carried
-            chain, carried = "", ""
-    return rewrites, updates
+        elif name in LINE_CHANGES:
+            changed, moved = changed or f"`{name}`", moved or f"`{name}`"
+    return refused, updates
 
 
 # The merge guard
@@ -1302,29 +1131,21 @@ def gh_alias(name: str, cwd: str) -> str | None:
     return None
 
 
-FOLDER_OPTIONS = ("-C", "-D", "--chdir", "--git-dir", "--work-tree")  # a wrapper's options that move a command
-
-
 def context_change(line: list[str]) -> str:
     """What on a line can make a gh command act on another repo, host or folder than the one the guard checks: a cd,
     a wrapper that moves the command, such as `env -C` or `sudo -D`, or a GH_, GITHUB_ or GIT_ variable set or
     exported anywhere on it, since gh finds its repo through git; "" for none."""
+    variable = line_variable(line, GH_VARIABLE) or line_variable(line, GIT_VARIABLE)
     for words in simple_commands(line):
         program = run_program(words)
         head = words[:len(words) - len(program)]
         name = PurePath(program[0]).name if program else ""
-        variables = [word.partition("=")[0] for word in head if GH_VARIABLE.match(word) or GIT_VARIABLE.match(word)]
         if name in LINE_CHANGES:
             return f"`{name}`"
-        if variables:
-            return f"`{variables[0]}`"
         moving = [word for word in head if word.partition("=")[0] in FOLDER_OPTIONS]
         if moving:
             return f"`{moving[0].partition('=')[0]}`"
-        if name in ("export", "unset", "declare", "typeset", "readonly") and any(
-                GH_VARIABLE.match(word) or GIT_VARIABLE.match(word) for word in program[1:]):
-            return f"`{name}`"
-    return ""
+    return variable
 
 
 def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
@@ -1536,8 +1357,7 @@ def main() -> int:
         if rewrites:
             branches = protected_branches(cwd)
             refusals.append(PUSH_REFUSAL.format(reason="; ".join(dict.fromkeys(rewrites)),
-                                                branches=" and ".join(branches),
-                                                them="them" if len(branches) > 1 else "it"))
+                                                branches=" and ".join(branches)))
     if "merge" in command.lower() or re.search(r"(?<![\w.-])gh(?![\w-])", command):
         merged += gh_merges(command, cwd)
     if merged:

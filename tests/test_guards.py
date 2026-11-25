@@ -100,80 +100,6 @@ def test_a_line_whose_quoting_cant_be_read_is_refused_only_for_a_long_sleep():
     assert run.returncode == 2 and "`sleep 600` waits 600 seconds in the foreground" in run.stderr
 
 
-REWRITES_BASE = [
-    "git push --force origin main",
-    "git push -f origin main",
-    "git push -fu origin main",
-    "git push origin +main",
-    "git push origin +HEAD:refs/heads/main",
-    "git push --force-with-lease origin HEAD:main",
-    "git push --force-with-lease=main:abc123 origin main",
-    "git push origin :main",
-    "git push --delete origin main",
-    "git push --mirror",
-    "git push --force --all",
-    "git -C . push --force origin main",
-    "git push --force",  # no refspec: the branch checked out, which is main
-    "git push -f origin main &",  # in the background it still rewrites main
-    "npm test && git push --force origin main",
-    "git push --tags -f origin main",
-    "git push -fo ci.skip origin +main",
-    # Git reads any unambiguous prefix of a long option as the option.
-    "git push --del origin main",
-    "git push --mir origin",
-    "git push --force-w origin main",
-    "git push -uf origin main",
-    # --prune deletes what a pattern reaches and no local branch matches, and a pattern reaches the base.
-    "git push --prune origin 'refs/heads/*:refs/heads/*'",
-    "git push --pru origin 'refs/heads/*'",
-    "git push --all --prune origin",
-    "git push origin '+refs/heads/*:refs/heads/*'",
-    # An option that takes the next word as its value, here or before `push`, hides no remote or push.
-    "git push --recurse-submodules check -f origin",
-    "git --config-env core.editor=EDITOR push --force origin main",
-    "git push -f -- origin main",
-    "git push -f origin @",  # @ is HEAD, the branch checked out
-    "git push origin +:",  # : pushes every branch both sides have, as push.default=matching does
-    "git push -f origin HEAD:heads/main",  # git reads heads/main as refs/heads/main
-    "git push origin :heads/main",
-    "git --attr-source HEAD push --force origin main",
-    "git --shallow-file x push --force origin main",
-]
-LEAVES_BASE = [
-    "git push -u origin ana/login",
-    "git push --force origin ana/login",
-    "git push --force-with-lease origin HEAD:refs/heads/ana/login",
-    "git push origin +ana/login",
-    "echo git push --force origin main",
-    "git log --oneline -3",
-    "git push --tags -f",  # only tags, though the branch checked out is main
-    "git push origin --tags --force",
-    "git push -fodeploy origin ana/login",
-    "git push --dry origin main",  # --dry-run, which pushes nothing
-    "git push -n origin main",
-    "git push --prune origin 'refs/heads/ana/*:refs/heads/ana/*'",
-    "git push origin '+refs/heads/ana/*:refs/heads/ana/*'",
-    "git push origin v1.0",
-]
-# A plain push that updates the base lands work on it, which no agent does without the person's yes: the merge guard
-# refuses it unless [safety] merge_into names the branch.
-UPDATES_BASE = [
-    "git push origin main",
-    "git push -odeploy origin main",  # -o's value, not -d
-    "git push --prune origin main",  # --prune deletes only through a pattern, but the push still updates main
-    "git push origin :",  # matching: every branch both sides have, main among them
-    "git push",  # the branch checked out, main
-    "git push origin HEAD",
-    "git push origin @",
-    "git push origin HEAD:refs/heads/main",
-    "git push origin ana/login:main",
-    "git push origin 'refs/heads/*:refs/heads/*'",
-    "git push --follow-tags origin main",
-    "npm test && git push origin main",
-    "git push origin main &",
-]
-
-
 def push_guard(command: str, root: Path, path: str = "", **call) -> subprocess.CompletedProcess:
     """Run the guard on one command from a repo whose colony.toml names the base, as Claude Code runs it, with `path`
     first on PATH when given, such as a folder holding a stub gh."""
@@ -193,18 +119,15 @@ def on_main(tmp_path):
     return tmp_path
 
 
-@pytest.mark.parametrize("command", REWRITES_BASE)
-def test_the_guard_refuses_a_push_that_force_pushes_or_deletes_the_base(command, on_main):
-    run = push_guard(command, on_main)
-    assert run.returncode == 2, command
-    assert run.stderr.startswith("push guard: refused, ") and "colony merge <branch>" in run.stderr
-    assert push_guard(command, on_main, run_in_background=True).returncode == 2
+def git_in(root: Path, *arguments: str) -> None:
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.test", *arguments],
+                   check=True, capture_output=True)
 
 
-@pytest.mark.parametrize("command", LEAVES_BASE)
-def test_the_guard_lets_a_push_that_leaves_the_base_alone_run(command, on_main):
-    run = push_guard(command, on_main)
-    assert (run.returncode, run.stderr) == (0, ""), command
+def push_refused(run: subprocess.CompletedProcess, reason: str = "") -> bool:
+    """Whether the push guard refused the call, for `reason` when given, and named the forms it allows."""
+    return run.returncode == 2 and run.stderr.startswith(f"push guard: refused, {reason}") and \
+        "A push takes one of two forms" in run.stderr and "colony merge <branch>" in run.stderr
 
 
 def merge_refused(run: subprocess.CompletedProcess, reason: str = "") -> bool:
@@ -213,186 +136,167 @@ def merge_refused(run: subprocess.CompletedProcess, reason: str = "") -> bool:
         "merge_into" in run.stderr
 
 
-@pytest.mark.parametrize("command", UPDATES_BASE)
-def test_the_merge_guard_refuses_a_plain_push_into_the_base_by_default(command, on_main):
-    run = push_guard(command, on_main)
-    assert merge_refused(run, "this push updates main"), (command, run.stderr)
-    assert "open a pull request" in run.stderr and "colony merge <branch>" in run.stderr
-    assert merge_refused(push_guard(command, on_main, run_in_background=True))
+@pytest.fixture
+def hosted(on_main):
+    """A clone whose origin is acme/demo on GitHub, on main."""
+    git_in(on_main, "remote", "add", "origin", "https://github.com/acme/demo.git")
+    return on_main
 
 
-def test_the_guard_protects_the_base_colony_toml_names(on_main):
-    (on_main / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[gate]\nbase = "other"\n')
-    assert push_guard("git push --force origin dev", on_main).returncode == 2
-    assert push_guard("git push --force origin other", on_main).returncode == 0
-    subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
-    assert push_guard("git push --force", on_main).returncode == 0  # the branch checked out is not the base
+@pytest.fixture
+def on_feature(hosted):
+    """The hosted clone with one commit, on a branch of the agent's own, ana/login."""
+    git_in(hosted, "commit", "-q", "--allow-empty", "-m", "base")
+    git_in(hosted, "checkout", "-q", "-b", "ana/login")
+    return hosted
 
 
-def test_the_guard_protects_the_default_branch_too_when_the_base_is_another(on_main):
-    (on_main / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n')
-    # With no origin/HEAD, main stands in for the default branch.
-    run = push_guard("git push --force origin main", on_main)
-    assert run.returncode == 2 and "this push force-pushes main" in run.stderr and "dev and main" in run.stderr
-    assert merge_refused(push_guard("git push origin main", on_main), "this push updates main")
-    subprocess.run(["git", "-C", str(on_main), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"],
-                   check=True)
-    assert push_guard("git push --force origin trunk", on_main).returncode == 2
-    assert push_guard("git push origin :trunk", on_main).returncode == 2
-    assert push_guard("git push --force origin dev", on_main).returncode == 2
-    assert push_guard("git push --force origin main", on_main).returncode == 0  # main is neither base nor default
-    assert push_guard("git push origin main", on_main).returncode == 0
-    assert merge_refused(push_guard("git push origin trunk", on_main), "this push updates trunk")
-
-
-def test_a_push_with_repo_is_refused_when_either_reading_of_its_words_reaches_the_base(on_main):
-    # Git takes the first word as the repository even with --repo, so this forces main, checked out, to origin.
-    assert push_guard("git push --repo=elsewhere --force origin", on_main).returncode == 2
-    subprocess.run(["git", "-C", str(on_main), "checkout", "-q", "-b", "ana/login"], check=True)
-    for command in ("git push --repo=origin --force main", "git push --repo origin --force main",
-                    "git push --rep=origin --force main"):
-        run = push_guard(command, on_main)
-        assert run.returncode == 2 and "this push force-pushes main" in run.stderr, command
-    for command in ("git push --repo=origin --force ana/login", "git push --repo=origin --force origin ana/login"):
-        assert push_guard(command, on_main).returncode == 0, command
-    assert merge_refused(push_guard("git push --repo=origin main", on_main), "this push updates main")
-
-
-def git_in(root: Path, *arguments: str) -> None:
-    subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.test", *arguments],
-                   check=True, capture_output=True)
-
-
-def test_a_forced_push_with_no_refspec_updates_what_git_config_says(on_main):
-    git_in(on_main, "checkout", "-q", "-b", "ana/login")
-    assert push_guard("git push -f", on_main).returncode == 0  # push.default=simple: ana/login alone
-    run = push_guard("git -c push.default=matching push -f", on_main)
-    assert run.returncode == 2 and "this push force-pushes main, through push.default=matching" in run.stderr
-    git_in(on_main, "config", "push.default", "matching")
-    assert push_guard("git push --force", on_main).returncode == 2
-    for command in ("git push --force origin ana/login", "git push --tags -f", "git push -f origin @",
-                    "git -c push.default=simple push -f"):
-        assert push_guard(command, on_main).returncode == 0, command
-    # A plain push with push.default=matching updates main too, which the merge guard refuses.
-    assert merge_refused(push_guard("git push", on_main), "this push updates main, through push.default=matching")
-
-
-def test_a_forced_push_with_no_refspec_reads_the_upstream_and_the_remotes_push_refspecs(on_main):
-    git_in(on_main, "checkout", "-q", "-b", "ana/login")
-    git_in(on_main, "config", "branch.ana/login.remote", "origin")
-    git_in(on_main, "config", "branch.ana/login.merge", "refs/heads/main")
-    run = push_guard("git -c push.default=upstream push -f", on_main)
-    assert run.returncode == 2 and "this push force-pushes main, through push.default=upstream" in run.stderr
-    # A plain push to the upstream, main, updates the base, which the merge guard refuses.
-    assert merge_refused(push_guard("git -c push.default=upstream push", on_main),
-                         "this push updates main, through push.default=upstream")
-    run = push_guard("git -c 'remote.origin.push=refs/heads/*:refs/heads/*' push -f", on_main)
-    assert run.returncode == 2 and "through remote.origin.push" in run.stderr
-    git_in(on_main, "config", "remote.fork.push", "refs/heads/*:refs/heads/*")
-    assert push_guard("git push -f fork", on_main).returncode == 2
-    assert push_guard("git push -f origin", on_main).returncode == 0  # fork's refspecs are not origin's
-
-
-def test_a_forced_push_with_no_refspec_is_refused_when_git_config_cant_say_what_it_updates(on_main):
-    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
-    git_in(on_main, "checkout", "-q", "-b", "ana/login")
-    for command in ("git --config-env push.default=PUSH_DEFAULT push -f", "git -c push.default=sideways push -f"):
-        run = push_guard(command, on_main)
-        assert run.returncode == 2 and "git config can't say which branches" in run.stderr, command
-    git_in(on_main, "checkout", "-q", "--detach")  # no branch checked out for simple to push
-    assert push_guard("git push -f", on_main).returncode == 2
-    assert push_guard("git push --tags -f", on_main).returncode == 0
-
-
-def test_a_plain_push_with_no_refspec_is_refused_when_git_config_forces_deletes_or_mirrors_the_base(on_main):
-    git_in(on_main, "checkout", "-q", "-b", "ana/login")
-    for command in ("git -c 'remote.origin.push=+refs/heads/*:refs/heads/*' push",
-                    "git -c remote.origin.push=:refs/heads/main push", "git -c remote.origin.mirror=true push"):
-        assert push_guard(command, on_main).returncode == 2, command
-    git_in(on_main, "config", "remote.origin.mirror", "true")
-    run = push_guard("git push", on_main)
-    assert run.returncode == 2 and "remote.origin.mirror" in run.stderr
-    for command in ("git push origin ana/login", "git push fork", "git -c remote.origin.mirror=false push"):
-        assert push_guard(command, on_main).returncode == 0, command
-
-
-def test_a_forced_push_names_its_branch_after_a_command_on_the_line_that_can_change_what_it_pushes(on_main):
-    git_in(on_main, "checkout", "-q", "-b", "ana/login")
-    for command in ("git checkout main && git push -f", "git switch main; git push --force-with-lease",
-                    "git config push.default matching && git push -f", "cd ../other && git push -f",
-                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push -f",
-                    "export GIT_DIR=../other/.git; git push -f", "git --git-dir=../other/.git push -f",
-                    "git checkout main && git push -f origin HEAD",
-                    "git symbolic-ref HEAD refs/heads/main && git push -f", "env -C ../other git push -f",
-                    "HOME=/tmp/elsewhere git push -f", "export XDG_CONFIG_HOME=/tmp/elsewhere; git push -f"):
-        run = push_guard(command, on_main)
-        assert run.returncode == 2 and "on this line can change" in run.stderr, command
-    for command in ("git rebase main && git push -f", "npm test && git push --force-with-lease",
-                    "git checkout main && git push -f origin ana/login", "git push -f && git checkout main"):
-        assert push_guard(command, on_main).returncode == 0, command
-    # A plain push the line can point at main, after the checkout, is the merge guard's to refuse.
-    assert merge_refused(push_guard("git checkout main && git push", on_main),
-                         "this push names no refspec, and `git checkout` on this line can change which branch")
-    assert merge_refused(push_guard("git checkout main && git push origin HEAD", on_main), "this push updates HEAD")
-
-
-def test_a_branch_the_line_makes_and_a_folder_it_moves_to_name_what_a_push_updates(on_main, tmp_path_factory):
-    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
-    for command in ("git checkout -b ana/new && git push -u origin HEAD", "git switch -c ana/new && git push -f origin @",
-                    "git switch --create=ana/new && npm test && git push origin HEAD"):
-        assert push_guard(command, on_main).returncode == 0, command
-    for command in ("git checkout -B main && git push origin HEAD", "git checkout -b x && git checkout main && "
-                    "git push origin HEAD"):
-        assert push_guard(command, on_main).returncode == 2, command
-    # A `cd` into a folder the guard can name moves where the line's push runs: here a clone on a branch of its own.
-    other = tmp_path_factory.mktemp("other")
-    git_in(on_main, "worktree", "add", "-q", "-b", "ana/login", str(other))
-    assert push_guard(f"cd {other} && git push origin HEAD", on_main).returncode == 0
-    assert push_guard(f"cd {other} && git push", on_main).returncode == 0
-    assert merge_refused(push_guard(f"cd {other} && git push origin main", on_main))
-    # Inside a subshell a `cd` ends with it, and a folder that isn't there is one the guard can't name.
-    for command in (f"(cd {other}) && git push origin HEAD", "cd ../nowhere && git push origin HEAD"):
-        assert merge_refused(push_guard(command, on_main)), command
-
-
-CHAINS_THE_GUARD_CANT_COUNT_ON = [
-    "cd {other} || git push origin HEAD",  # the push runs only when the cd fails
-    "cd {other}; git push origin HEAD",  # the push runs whether the cd worked or not
-    "cd {other} && true; git push origin HEAD",
-    "true || cd {other} && git push origin HEAD",  # the cd runs only when true fails, and the push runs anyway
-    "echo | cd {other} && git push origin HEAD",  # a cd in a pipeline runs in a shell of its own
-    "cd {other} && git push origin HEAD; git push origin HEAD",  # the second push may run in either folder
-    "git checkout -b ana/x || git push origin HEAD",
-    "git checkout -b ana/x; git push origin HEAD",  # when the branch exists, HEAD stays on main
-    "git switch -c ana/x & git push origin HEAD",
+# The push guard's allow-list: `git push [-u] [--force-with-lease] [--dry-run] <remote> <branch>`, or HEAD:<branch>.
+PUSHES_ALLOWED = [
+    "git push origin ana/login",
+    "git push -u origin ana/login",
+    "git push --set-upstream origin ana/login",
+    "git push --force-with-lease origin ana/login",
+    "git push -u --force-with-lease origin HEAD:ana/login",
+    "git push origin HEAD:ana/new",
+    "git push --dry-run origin ana/login",
+    "git push -n origin ana/login",
+    "git push -q origin ana/login",
+    "git push origin v1.0",
+    "npm test && git push -u origin ana/login",
+    "git push origin ana/login &",
+    "git checkout -b ana/new && git push -u origin ana/new",  # a checkout changes no branch a push names in full
+    "bash -c 'git push origin ana/login'",
+    "echo git push --force origin main",
+    "git log --oneline -3",
+]
+PUSHES_REFUSED = [
+    ("git push", "this push names no remote and branch"),
+    ("git push origin", "a push names exactly one remote and one branch"),
+    ("git push origin ana/login ana/other", "a push names exactly one remote and one branch"),
+    ("git push origin main", "main is protected"),
+    ("git push origin HEAD:main", "main is protected"),
+    ("git push --force origin ana/login", "`--force` is not part of an allowed push"),
+    ("git push -f origin ana/login", "`-f` is not part of an allowed push"),
+    ("git push --force-with-lease=main:abc123 origin ana/login", "`--force-with-lease=main:abc123` is not part"),
+    ("git push --delete origin ana/login", "`--delete` is not part"),
+    ("git push -d origin ana/login", "`-d` is not part"),
+    ("git push --all origin", "`--all` is not part"),
+    ("git push --branches origin", "`--branches` is not part"),
+    ("git push --mirror origin", "`--mirror` is not part"),
+    ("git push --tags origin", "`--tags` is not part"),
+    ("git push --repo=origin ana/login", "`--repo=origin` is not part"),
+    ("git push -o ci.skip origin ana/login", "`-o` is not part"),
+    ("git push --no-verify origin ana/login", "`--no-verify` is not part"),
+    ("git push origin +ana/login", "`+ana/login` is not a plain branch name"),
+    ("git push origin :ana/login", "`:ana/login` is not a plain branch name"),
+    ("git push origin ana/login:ana/other", "`ana/login:ana/other` is not a plain branch name"),
+    ("git push origin refs/heads/ana/login", "`refs/heads/ana/login` is not a plain branch name"),
+    ("git push origin 'refs/heads/*:refs/heads/*'", "`refs/heads/*:refs/heads/*` is not a plain branch name"),
+    ("git push origin HEAD", "`HEAD` is not a plain branch name"),
+    ("git push origin @", "`@` is not a plain branch name"),
+    ("git push https://github.com/acme/demo.git ana/login", "`https://github.com/acme/demo.git` is no remote"),
+    ("git push fork/x ana/login", "`fork/x` is no remote"),  # a remote name with a slash reads as a path
+    ("git push nowhere ana/login", "`nowhere` is no remote"),
+    ("git -c push.default=matching push origin ana/login", "`git -c` on this line can change where git pushes"),
+    ("git -c alias.p='push origin ana/login' p", "`git -c` on this line can change where git pushes"),
+    ("git --config-env=push.default=X push origin ana/login", "`git --config-env` on this line"),
+    ("git -C . push origin ana/login", "`git -C` on this line"),
+    ("git --git-dir=.git push origin ana/login", "`git --git-dir` on this line"),
+    ("git --work-tree=. push origin ana/login", "`git --work-tree` on this line"),
+    ("GIT_DIR=.git git push origin ana/login", "`GIT_DIR` on this line"),
+    ("GIT_CONFIG_GLOBAL=/tmp/x git push origin ana/login", "`GIT_CONFIG_GLOBAL` on this line"),
+    ("export GIT_CONFIG_PARAMETERS=x; git push origin ana/login", "`GIT_CONFIG_PARAMETERS` on this line"),
+    ("GIT_CONFIG_COUNT=1; git push origin ana/login", "`GIT_CONFIG_COUNT` on this line"),
+    ("HOME=/tmp git push origin ana/login", "`HOME` on this line"),
+    ("XDG_CONFIG_HOME=/tmp git push origin ana/login", "`XDG_CONFIG_HOME` on this line"),
+    ("cd /tmp && git push origin ana/login", "`cd` on this line can change where git pushes"),
+    ("env -C /tmp git push origin ana/login", "`-C` on this line"),
+    ("sudo -D /tmp git push origin ana/login", "`-D` on this line"),
+    ("git checkout main && git push origin HEAD:ana/login", "`git checkout` on this line can change the branch HEAD"),
+    ("bash -c 'git push origin main'", "main is protected"),
+    ("eval 'git push origin main'", "main is protected"),
+    ("sudo -u ana git push origin main", "main is protected"),
+    ("GIT_DIR=.git bash -c 'git push origin ana/login'", "`GIT_DIR` on this line"),
 ]
 
 
-@pytest.mark.parametrize("command", CHAINS_THE_GUARD_CANT_COUNT_ON)
-def test_a_cd_or_new_branch_counts_only_when_and_joins_it_to_the_push(command, on_main, tmp_path_factory):
-    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
-    other = tmp_path_factory.mktemp("other")
-    git_in(on_main, "worktree", "add", "-q", "-b", "ana/login", str(other))
-    run = push_guard(command.format(other=other), on_main)
-    assert merge_refused(run, "this push updates HEAD, and"), (command, run.stderr)
+@pytest.mark.parametrize("command", PUSHES_ALLOWED)
+def test_the_push_guard_lets_an_allowed_push_run(command, on_feature):
+    run = push_guard(command, on_feature)
+    assert (run.returncode, run.stderr) == (0, ""), command
 
 
-@pytest.mark.parametrize("command", ["git checkout -b ana/x && git -C {root} push origin HEAD",
-                                     "git checkout -b ana/x && git --git-dir={root}/.git push origin HEAD",
-                                     "git checkout -b ana/x && GIT_DIR={root}/.git git push origin HEAD",
-                                     "git checkout -b ana/x && env -C {root} git push origin HEAD"])
-def test_a_new_branch_names_head_only_in_the_folder_and_repo_it_was_made_in(command, on_main):
-    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
-    run = push_guard(command.format(root=on_main), on_main)
+@pytest.mark.parametrize("command, reason", PUSHES_REFUSED)
+def test_the_push_guard_refuses_every_other_push_and_names_the_allowed_forms(command, reason, on_feature):
+    run = push_guard(command, on_feature)
+    assert push_refused(run, reason), (command, run.stderr)
+    assert push_refused(push_guard(command, on_feature, run_in_background=True), reason)
+
+
+def test_a_push_of_head_needs_a_branch_checked_out_that_isnt_protected(hosted):
+    assert push_refused(push_guard("git push origin HEAD:ana/x", hosted), "main, the branch checked out, is protected")
+    git_in(hosted, "commit", "-q", "--allow-empty", "-m", "base")
+    git_in(hosted, "checkout", "-q", "--detach")
+    assert push_refused(push_guard("git push origin HEAD:ana/x", hosted), "HEAD is no branch here")
+
+
+def test_the_protected_branches_are_the_base_the_default_branch_and_protect(on_feature):
+    (on_feature / ".colony" / "colony.toml").write_text(
+        '[project]\nbase = "dev"\n\n[safety]\nprotect = ["staging", "release/[0-9]*"]\nmerge_into = ["release/*"]\n')
+    for branch in ("dev", "main", "staging", "release/1.2"):
+        assert push_refused(push_guard(f"git push origin {branch}", on_feature), f"{branch} is protected"), branch
+    assert push_guard("git push origin release-notes", on_feature).returncode == 0
+    git_in(on_feature, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+    assert push_refused(push_guard("git push origin trunk", on_feature), "trunk is protected")
+    assert push_guard("git push origin main", on_feature).returncode == 0  # now neither the base nor the default
+
+
+@pytest.mark.parametrize("key, value", [("remote.origin.pushurl", "https://github.com/someone/else.git"),
+                                        ("url.https://github.com/someone/.pushInsteadOf", "https://github.com/acme/")])
+def test_a_remote_whose_push_address_is_another_repo_is_refused(key, value, on_feature):
+    assert push_guard("git push origin ana/login", on_feature).returncode == 0
+    git_in(on_feature, "config", key, value)
+    run = push_guard("git push origin ana/login", on_feature)
+    assert push_refused(run, "`origin` pushes to https://github.com/someone/"), (key, run.stderr)
+
+
+def test_a_remote_in_a_folder_pushes_where_it_fetches(on_feature, tmp_path_factory):
+    backup = tmp_path_factory.mktemp("backup")
+    subprocess.run(["git", "init", "-q", "--bare", str(backup)], check=True)
+    git_in(on_feature, "remote", "add", "backup", str(backup))
+    assert push_guard("git push backup ana/login", on_feature).returncode == 0
+
+
+def test_merge_into_lets_no_push_into_a_protected_branch(on_feature, tmp_path):
+    """merge_into is the person's yes for a pull request's merge: a push into a protected branch is never one."""
+    (on_feature / ".colony" / "colony.toml").write_text('[project]\nbase = "main"\n\n[safety]\nmerge_into = ["main"]\n')
+    stub = github(tmp_path / "gh", default='[project]\nbase = "main"\n\n[safety]\nmerge_into = ["main"]\n')
+    assert push_refused(push_guard("git push origin main", on_feature, path=stub), "main is protected")
+
+
+LINES_THE_GUARD_CANT_FOLLOW = [
+    "echo ana/login | xargs git push origin",
+    "alias gp='git push origin main'",
+    "git config alias.p 'push origin main' && git p",
+]
+
+
+@pytest.mark.parametrize("command", LINES_THE_GUARD_CANT_FOLLOW)
+def test_a_push_built_from_words_the_guard_cant_see_is_refused(command, on_feature):
+    run = push_guard(command, on_feature)
     assert merge_refused(run), (command, run.stderr)
 
 
-def test_a_push_of_every_branch_is_refused_while_the_clone_has_the_base(on_main, tmp_path_factory):
-    assert push_guard("git push --all origin", on_main).returncode == 0  # no commit yet, so no local main
-    git_in(on_main, "commit", "-q", "--allow-empty", "-m", "base")
-    run = push_guard("git push --all origin", on_main)
-    assert merge_refused(run, "`git push --all` pushes every local branch, main among them")
-    assert push_guard("git push --all --dry-run origin", on_main).returncode == 0
+def test_a_git_alias_in_config_is_read_as_what_it_runs(on_feature):
+    git_in(on_feature, "config", "alias.ship", "push origin main")
+    git_in(on_feature, "config", "alias.sh-ship", "!git push origin main")
+    git_in(on_feature, "config", "alias.mine", "push -u origin ana/login")
+    git_in(on_feature, "config", "alias.st", "status")
+    assert push_refused(push_guard("git ship", on_feature), "main is protected")
+    assert push_refused(push_guard("git sh-ship", on_feature), "main is protected")
+    for command in ("git mine", "git st", "git lfs pull"):  # git lfs: an outside git-lfs program, no alias
+        assert push_guard(command, on_feature).returncode == 0, command
 
 
 def github(folder: Path, default: str | None = None, branches: dict[str, str] | None = None, pr: str = "",
@@ -431,114 +335,46 @@ exit 0
 ALLOW_MAIN = '[project]\nbase = "main"\n\n[safety]\nmerge_into = ["main"]\n'
 
 
-@pytest.fixture
-def hosted(on_main):
-    """A clone whose origin is acme/demo on GitHub."""
-    git_in(on_main, "remote", "add", "origin", "https://github.com/acme/demo.git")
-    return on_main
-
-
-@pytest.mark.parametrize("command", UPDATES_BASE)
-def test_a_plain_push_into_a_branch_merge_into_names_on_github_runs(command, hosted, tmp_path):
-    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
-    run = push_guard(command, hosted, path=github(tmp_path / "gh", default=ALLOW_MAIN))
-    assert (run.returncode, run.stderr) == (0, ""), command
-
-
 def test_merge_into_counts_only_what_the_copy_on_the_code_hosts_default_branch_names(hosted, tmp_path):
     """An agent can't allow itself a merge by editing its own colony.toml, nor by rewriting a ref on its computer: the
     copy on GitHub's default branch, which the person merged, must name the branch too."""
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
+    pr = "main https://github.com/acme/demo/pull/5"
     unnamed = '[project]\nbase = "main"\n'
-    assert merge_refused(push_guard("git push origin main", hosted, path=github(tmp_path / "a", default=unnamed)))
-    assert merge_refused(push_guard("git push origin main", hosted, path=github(tmp_path / "b")))  # can't be read
-    assert merge_refused(push_guard("git push origin main", on_main_no_gh(hosted)))  # no gh at all
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "a", default=unnamed, pr=pr)))
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "b", pr=pr)))  # can't be read
     # A copy of origin's main forged on this computer counts for nothing.
     git_in(hosted, "add", "-A")
     git_in(hosted, "commit", "-q", "-m", "allow main")
     git_in(hosted, "update-ref", "refs/remotes/origin/main", "HEAD")
-    assert merge_refused(push_guard("git push origin main", hosted, path=github(tmp_path / "c", default=unnamed)))
-    assert push_guard("git push origin main", hosted, path=github(tmp_path / "d", default=ALLOW_MAIN)).returncode == 0
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "c", default=unnamed, pr=pr)))
+    assert push_guard("gh pr merge 5", hosted, path=github(tmp_path / "d", default=ALLOW_MAIN, pr=pr)).returncode == 0
     # A pattern only the working copy names counts for nothing either, and a working copy can only narrow the list.
     (hosted / ".colony" / "colony.toml").write_text('[project]\nbase = "main"\n\n[safety]\nmerge_into = ["m*"]\n')
-    assert merge_refused(push_guard("git push origin main", hosted, path=github(tmp_path / "e", default=ALLOW_MAIN)))
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "e", default=ALLOW_MAIN, pr=pr)))
     (hosted / ".colony" / "colony.toml").write_text(unnamed)
-    assert merge_refused(push_guard("git push origin main", hosted, path=github(tmp_path / "f", default=ALLOW_MAIN)))
-
-
-def on_main_no_gh(root: Path) -> str:
-    """A folder whose gh always fails, as when gh isn't signed in."""
-    folder = root.parent / f"{root.name}-no-gh"
-    folder.mkdir(exist_ok=True)
-    (folder / "gh").write_text("#!/bin/sh\nexit 4\n")
-    (folder / "gh").chmod(0o755)
-    return str(folder)
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "f", default=ALLOW_MAIN, pr=pr)))
 
 
 def test_only_the_copy_on_the_default_branch_counts_never_the_bases(hosted, tmp_path):
     """An agent that may push to the base could write its own yes there, so the base's copy counts for nothing."""
-    (hosted / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev", "main"]\n')
-    default = '[project]\nbase = "dev"\n'
-    on_dev = '[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev", "main"]\n'
-    stub = github(tmp_path / "a", default=default, branches={"dev": on_dev})
-    assert merge_refused(push_guard("git push origin dev", hosted, path=stub), "this push updates dev")
-    assert merge_refused(push_guard("git push origin main", hosted, path=stub), "this push updates main")
+    (hosted / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev"]\n')
+    on_dev = '[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev"]\n'
+    pr = "dev https://github.com/acme/demo/pull/5"
+    stub = github(tmp_path / "a", default='[project]\nbase = "dev"\n', branches={"dev": on_dev}, pr=pr)
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=stub), "this pull request merges into dev")
     assert "?ref=" not in (tmp_path / "a" / "gh.log").read_text()
-    stub = github(tmp_path / "b", default=on_dev)
-    assert push_guard("git push origin dev", hosted, path=stub).returncode == 0
+    assert push_guard("gh pr merge 5", hosted, path=github(tmp_path / "b", default=on_dev, pr=pr)).returncode == 0
 
 
-DESTINATIONS = [
-    "git push https://github.com/someone/else.git main",  # a URL, not origin
-    "git push fork main",  # another remote
-    "git push git@github.com:someone/else.git HEAD:main",
-]
-
-
-@pytest.mark.parametrize("command", DESTINATIONS)
-def test_a_yes_holds_only_for_a_push_whose_real_destination_is_origins_repo(command, hosted, tmp_path):
+def test_a_yes_holds_only_when_origin_is_the_pull_requests_repo(hosted, tmp_path):
+    """Git config edited by hand can point origin elsewhere: the pull request's repo must be origin's, wherever
+    origin's address really leads after git's url rewrites."""
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
-    git_in(hosted, "remote", "add", "fork", "https://github.com/someone/else.git")
-    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
-    assert merge_refused(push_guard(command, hosted, path=stub), "this push updates main"), command
-    assert push_guard("git push https://github.com/acme/demo.git main", hosted, path=stub).returncode == 0
-
-
-@pytest.mark.parametrize("key, value, command", [
-    ("remote.origin.pushurl", "https://github.com/someone/else.git", "git push origin main"),
-    ("url.https://github.com/someone/.pushInsteadOf", "https://github.com/acme/", "git push origin main"),
-    # origin moved elsewhere, and the push names the real repo's URL: it is no longer origin's repo
-    ("remote.origin.url", "https://github.com/someone/demo.git", "git push https://github.com/acme/demo.git main"),
-])
-def test_a_push_that_git_config_sends_elsewhere_gets_no_yes(key, value, command, hosted, tmp_path):
-    """Git config written outside the guard, such as by a file edit, changes where a push really goes: the guard
-    reads where it goes, never just the name origin."""
-    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
-    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
-    assert push_guard(command, hosted, path=stub).returncode == 0
-    git_in(hosted, "config", key, value)
-    run = push_guard(command, hosted, path=stub)
-    assert merge_refused(run, "this push updates main"), (key, run.stderr)
-
-
-def test_a_push_whose_line_reroutes_it_with_dash_c_is_refused(hosted, tmp_path):
-    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
-    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
-    for command in ("git -c remote.origin.pushurl=https://github.com/someone/else.git push origin main",
-                    "git -c include.path=/tmp/elsewhere.cfg push origin main"):
-        assert merge_refused(push_guard(command, hosted, path=stub), "`git -c"), command
-
-
-def test_protect_adds_branches_and_patterns_to_the_ones_no_push_rewrites_or_updates(hosted, tmp_path):
-    toml = ('[project]\nbase = "main"\n\n[safety]  # what agents may land\nprotect = [\n  "staging",  # the demo\n'
-            '  "release/[0-9]*",\n]\nmerge_into = ["release/*"]\n')
-    (hosted / ".colony" / "colony.toml").write_text(toml)
-    stub = github(tmp_path / "gh", default=toml)
-    assert merge_refused(push_guard("git push origin staging", hosted, path=stub), "this push updates staging")
-    run = push_guard("git push --force origin release/1.2", hosted, path=stub)
-    assert run.returncode == 2 and "this push force-pushes release/1.2" in run.stderr
-    assert push_guard("git push origin release/1.2", hosted, path=stub).returncode == 0  # merge_into names it
-    assert push_guard("git push origin release-notes", hosted, path=stub).returncode == 0
+    stub = github(tmp_path / "gh", default=ALLOW_MAIN, pr="main https://github.com/acme/demo/pull/5")
+    assert push_guard("gh pr merge 5", hosted, path=stub).returncode == 0
+    git_in(hosted, "config", "url.https://github.com/someone/.insteadOf", "https://github.com/acme/")
+    assert merge_refused(push_guard("gh pr merge 5", hosted, path=stub), "this pull request is in acme/demo, not in")
 
 
 FORGES = [
@@ -577,34 +413,6 @@ def test_the_merge_guard_refuses_a_rewrite_of_what_it_reads_as_origin(command, h
 def test_the_merge_guard_lets_an_ordinary_fetch_or_config_read_run(command, hosted):
     run = push_guard(command, hosted)
     assert (run.returncode, run.stderr) == (0, ""), command
-
-
-ALIASES_THAT_PUSH = [
-    "bash -c 'git push origin main'",
-    "eval 'git push origin main'",
-    "sudo -u ana git push origin main",
-    "git -c alias.p='push origin main' p",
-    "git -c alias.p='!git push origin main' p",
-    "git config alias.p 'push origin main' && git p",
-    "echo main | xargs git push origin",
-    "alias gp='git push origin main'",
-]
-
-
-@pytest.mark.parametrize("command", ALIASES_THAT_PUSH)
-def test_the_merge_guard_follows_shells_sudo_and_aliases_to_the_push(command, hosted):
-    run = push_guard(command, hosted)
-    assert merge_refused(run), (command, run.stderr)
-
-
-def test_a_git_alias_in_config_is_read_as_what_it_runs(hosted):
-    git_in(hosted, "config", "alias.ship", "push origin main")
-    git_in(hosted, "config", "alias.sh-ship", "!git push origin main")
-    git_in(hosted, "config", "alias.st", "status")
-    assert merge_refused(push_guard("git ship", hosted), "this push updates main")
-    assert merge_refused(push_guard("git sh-ship", hosted), "this push updates main")
-    assert push_guard("git st", hosted).returncode == 0
-    assert push_guard("git lfs pull", hosted).returncode == 0  # an outside git-lfs program, no alias
 
 
 GH_API_MERGES = [
@@ -1382,7 +1190,7 @@ def test_a_fake_here_document_hides_no_merge(fake, hosted):
 
 @pytest.mark.parametrize("fake", FAKE_HEREDOCS[:3])
 def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
-    assert merge_refused(push_guard(fake.format(hidden="git push origin main"), hosted))
+    assert push_refused(push_guard(fake.format(hidden="git push origin main"), hosted), "main is protected")
     assert guard(json.dumps({"tool_input": {"command": fake.format(hidden="sleep 600")}})).returncode == 2
 
 
