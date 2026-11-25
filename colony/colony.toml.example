@@ -160,6 +160,13 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 # max_busy = 3                     # helpers one account runs at once; an account's own max_busy overrides it
 # wave = 3                         # helpers `colony helpers <n> --open` opens at once; the rest in later waves
 # wave_seconds = 60                # the pause between waves
+# stale_minutes = 15               # a usage reading older than this never places a session (at least 10)
+# share_lead_accounts = false      # true lets helpers open on a live lead's own account, as one account needs
+# helper_rate = 10                 # 5-hour percent one helper uses an hour, a guess until readings show the rate
+# scan_folders = ["~/.claude", "~/.claude-*", "~/.claude_*"]  # where `colony accounts scan` looks
+#
+# [subagents]                      # the subagent guard: builders run as helpers, never as subagents
+# max_running = 2                  # the most subagents one session runs at once; 0 lets none run
 #
 # [machine]                        # what one helper, test run and build needs here; Colony reads the rest itself
 # helper_gb = 1                    # memory one helper session needs

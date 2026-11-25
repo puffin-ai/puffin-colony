@@ -289,6 +289,8 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<user config folder>/modes/<name>.toml`, `.colony/modes/<name>.toml` | Your own modes, and the team's |
 | `~/.colony/<project>/<session>-intent.json`, `<session>-pulse.json` | Each session's intent and last report, and the pulse its wait writes every minute: when its transcript last moved, the call it waits on, and its helper agents. See [watch.md](watch.md) |
 | `~/.colony/<project>/watchdog.json`, `watchdog.log` | The watchdog's heartbeat and log |
+| `~/.colony/<project>/usage-history.json` | Each account's fresh usage readings for a day, with the helpers it ran then, from which the burn rates and forecasts come. See [capacity.md](capacity.md#plan-around-resets) |
+| `~/.colony/subagents/<session id>.json` | The subagent calls the subagent guard let through whose files haven't appeared yet. See [safety.md](safety.md#the-subagent-guard) |
 | `~/.colony/<project>/progress.json`, `status-page.json`, `<lead>-folded.json` | The cards' progress as last read, the status page's issue and last writing, and the helper lines the lead's digest folded |
 
 Every command, with one line each, is in [commands.md](commands.md).

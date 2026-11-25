@@ -10,13 +10,13 @@ There are three kinds of session:
 
 - **The lead.** The Claude Code session you type into. One per person.
 - **Helpers.** Builders, such as `builder-2`, plus the spec agent and the researcher. The lead opens them and gives them work.
-- **Subagents.** Short-lived mini-workers a helper starts inside its own session. Many run at the same time, each on one piece of a card, so the card finishes sooner. They also search code and check pages in a browser.
+- **Subagents.** Short-lived mini-workers a helper starts inside its own session, for a quick search of the code or a browser check of a page. They never build: every builder is a helper, so Colony can place it on an account with room.
 
 ### The four rules
 
 1. **You talk only to leads.** The session you open and type into is your lead. When no lead runs, `colony hi` makes your session the lead. You never chat with a helper.
 2. **Each helper belongs to one lead.** It works on that lead's cards, each on its own branch, so its context stays on its job.
-3. **Helpers use subagents for speed.** Each subagent does one piece of a card at the same time as the others, and they also search and run browser checks. Subagents return short results, so the helper stays lean. More helpers means more cards at once; more subagents means each card finishes sooner.
+3. **Builders are helpers, never subagents.** More helpers means more cards at once, and each one opens on an account with room, in waves, under each account's cap, never on the lead's own account. A subagent runs on its session's own account, where Colony can't see it, so a helper starts one only for a quick search or a browser check, and a lead never starts one to build.
 4. **Leads talk to leads.** On a team, each person's lead meets the others on one coordination issue. A lead never gives orders to another lead's helpers.
 
 ```mermaid
@@ -26,7 +26,7 @@ flowchart TB
   L1 --> H1["builder-1"] & H2["builder-2"]
   L1 --> H3["builder-3<br/>a second computer, joined"]
   L2 --> H4["Sam's helpers"]
-  H1 -.-> SA["subagents<br/>pieces in parallel,<br/>search, browser check"]
+  H1 -.-> SA["subagents<br/>quick search,<br/>browser check"]
   L1 & L2 <-.-> C[("Coordination issue")]
 ```
 

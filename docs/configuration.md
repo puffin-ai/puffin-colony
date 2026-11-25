@@ -42,6 +42,8 @@ One table per Claude Code settings folder. You need at least one.
 | `auth_command` | no | `"tools/signed-in.sh"` | A command that ends with 0 while the account is signed in. Its service check uses it instead of Claude Code's own sign-in check. |
 | `max_busy` | no | `2` | The most helpers this account runs at once, instead of `[pool] max_busy`. |
 
+A folder's path belongs to one computer. Put this computer's accounts, or this computer's folder for an account the team's file names, in `.colony/colony.local.toml`: `colony accounts add <name> --dir <folder>` writes it there, and `colony accounts scan` finds signed-in folders the pool lacks. See [capacity.md](capacity.md#finding-accounts).
+
 ```toml
 [accounts.ana]
 config_dir = "~/.claude"
@@ -303,12 +305,29 @@ Optional. The team's rules for its pool of accounts. Every key has a default. Se
 | `max_busy` | `3` | The most helpers one account runs at once, on every computer together. `colony helpers`, `colony open` and `colony join` open no helper past it. |
 | `wave` | `3` | How many helpers `colony helpers <n> --open` opens at once. The rest open in later waves. |
 | `wave_seconds` | `60` | The pause between waves. |
+| `stale_minutes` | `15` | A usage reading older than this never places a session: its account's room counts as unknown, and its old numbers are not used. At least 10, since a reading is fetched again once it is 10 minutes old. See [capacity.md](capacity.md#fresh-readings). |
+| `share_lead_accounts` | `false` | Whether helpers may open on the account a live lead or orchestrator runs on. False keeps that account for the lead, so its own team never cuts it off; a team with a single account sets it to `true`. See [capacity.md](capacity.md#the-leads-own-account). |
+| `helper_rate` | `10` | The percent of the 5-hour window one busy helper uses an hour, a guess the fit check uses only until readings show the account's real rate. `0` checks only against measured rates. See [capacity.md](capacity.md#plan-around-resets). |
+| `scan_folders` | `["~/.claude", "~/.claude-*", "~/.claude_*"]` | Where `colony accounts scan` looks for signed-in settings folders the pool lacks. See [capacity.md](capacity.md#finding-accounts). |
 
 ```toml
 [pool]
 order = "reset"
 reserve = ["admin"]
 max_busy = 3
+```
+
+## `[subagents]`
+
+Optional. How many subagents one Colony session runs at once. The subagent guard, a hook, refuses a call past it. Builders run as helpers, never as subagents; see [capacity.md](capacity.md#builders-are-helpers-never-subagents) and [safety.md](safety.md#the-subagent-guard).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `max_running` | `2` | The most subagents one session runs at once. `0` lets none run. The guard reads `.colony/colony.local.toml` first, then `.colony/colony.toml`. |
+
+```toml
+[subagents]
+max_running = 2
 ```
 
 ## `[machine]`

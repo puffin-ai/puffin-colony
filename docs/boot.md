@@ -14,7 +14,7 @@ It reads, side by side and within 12 seconds:
 4. **The live leads on every computer**, from their status comments, and your helpers.
 5. **The open pull requests** and **your open cards** on the board.
 6. **The plan**, when one is open, and **the decisions that wait on you**.
-7. **This computer's room** for helpers, and **each of your accounts' room**, from [capacity](capacity.md).
+7. **This computer's room** for helpers, and **each of your accounts' room**, with how old each reading is, from [capacity](capacity.md). It flags any of your accounts that is missing on this computer or signed out, any new signed-in folder not yet in the pool, and any account whose forecast runs out before its reset.
 
 Then it prints a short briefing. Its first line names the active mode. A part not read in time says so, and the rest goes on. Its last line is the next step, and it is one of two things:
 
@@ -35,7 +35,7 @@ Live leads: ana-main-lead (you) on Ana-Laptop, the rest of the repo; sam-web-lea
 Your helpers: builder-1, builder-2.
 Open pull requests (2): #212 Login screen; #214 Docs for the API (draft).
 This computer: 2 more helpers now, of 4 at once (8 cores, load 2.1).
-Accounts: main: 5h 40%, week 63% (resets Sat 10:00 UTC).
+Accounts: main: 5h 40%, week 63% (resets Sat 10:00 UTC), read 2 min ago.
 Plan for "Ship the new onboarding": 1 of 3 task groups done.
 Next: resume the plan at once, without asking: task group web of the plan (started; done when: the screen loads).
 ```

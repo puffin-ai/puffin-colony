@@ -26,6 +26,7 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 | The push guard | Before every Bash call, in the background too | Lets a push run in two forms alone, onto a branch of the agent's own, and refuses every other. See [The push guard](#the-push-guard). |
 | The merge guard | Before every Bash call, and before a GitHub tool merges a pull request or commits onto a branch | Refuses a merge you haven't allowed. See [The merge guard](#the-merge-guard). |
 | The kill guard | Before every Bash call, in the background too | Refuses a kill by name or pattern. See [The kill guard](#the-kill-guard). |
+| The subagent guard | Before every Agent call, in a Colony session | Refuses a subagent past `[subagents] max_running` (2) at once. See [The subagent guard](#the-subagent-guard). |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
 | `colony hooks ended` | When a session ends | Notes in the session ledger when it ended and Claude Code's reason, so the crash report can tell a person's exit from a signal or a crash. |
@@ -98,6 +99,17 @@ It lets a kill of one known process run: a number, such as `kill 4242`, a job su
 The kill, push and merge guards read every line of a command, a here-document's body too. Beside that, a line whose raw text names a kill, a `git push` or a `gh` merge anywhere must be one plain command of that kind: no `;`, `&`, `|`, second line, `$(`, backtick, here-document, `<(` or `>(`, no `$'`, `$"` or backslash, whose quoting the guard's reader may read otherwise than the shell, and no `eval`, `sh -c`, wrapper, assignment, alias or function around it. The raw text names exactly one, at the very start of the line, so the command it names is the one the guard reads. Even `2>&1` is refused on such a line. Quoting the shell reads otherwise can hide a command from the guard's reading, as a here-document body line such as `don't` can, and one plain command leaves nothing to hide. So run each push, each kill by its exact id, and each pull request step as its own plain command. Text that only names one is refused too, such as `grep -rn pkill`, `echo gh pr merge 5`, or a commit message that names `git push`. Write such text to a file with your file tool and pass the file, and search with your search tool; the refusal says so. Only the wait guard skips here-document bodies, which hide nothing it guards.
 
 To close a finished Colony session, run `colony stop <name>`, which finds the session by its name in `claude agents` and ends that one process. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
+
+### The subagent guard
+
+Builders run as helpers Colony opens, never as subagents: a subagent runs on its session's own account, where Colony can't place it, cap it or count it, and enough of them inside a lead drain the lead's account and stop the whole team at once. See [capacity.md](capacity.md#builders-are-helpers-never-subagents).
+
+The subagent guard runs before every Agent call (Task in older Claude Code versions) in a Colony session: one with `$COLONY_SESSION`, or one a person opened that `colony` or `colony claim` made a lead. It counts the subagents the session runs now from the files Claude Code keeps beside the session's transcript: one not marked finished, whose transcript moved in the last 15 minutes, still runs. A call it let through counts too until its subagent's files appear, since calls made side by side start before their files exist. Past `[subagents] max_running` (2), it refuses the call:
+
+- a lead or an orchestrator hears that builders run as helpers, opened with `colony helpers <n> --open` or `colony open <name>`, and to keep a subagent for a quick search or a browser check;
+- a helper hears to wait for one of its subagents to finish, or to do the piece itself.
+
+It is a standalone script, copied to `.colony/hooks/agent_guard.py`, and runs with any `python3` from 3.9 on. It keeps the calls it let through in `~/.colony/subagents/<session id>.json`. Your own sessions, outside Colony, are never capped.
 
 ## Recovery
 

@@ -454,3 +454,31 @@ def test_the_startup_briefing_flags_accounts_and_forecasts(host, monkeypatch):
     assert any("missing on this computer: spare" in line for line in lines)
     assert any(line.startswith("Forecast: main runs out around ") and "before its 5-hour window resets" in line
                for line in lines)
+
+
+# 80. Builders run only as helpers
+
+
+def section(text: str, heading: str) -> str:
+    start = text.index(f"\n{heading}\n")
+    end = text.find("\n## ", start + 1)
+    return text[start:end if end != -1 else None]
+
+
+def test_the_playbook_and_the_skills_say_builders_run_only_as_helpers():
+    import tomllib
+
+    playbook = (PACKAGE / "playbook.md").read_text()
+    rules = section(playbook, "## Subagents")
+    assert "Builders run only as helpers, never as subagents." in rules
+    assert "`colony helpers <n> --open` or `colony open <name>`" in rules and "[subagents] max_running" in rules
+    assert "**Speed.**" not in rules  # the old "subagents for speed" invitation is gone
+    assert "only for two things:** a quick search" in rules
+    assert "never to subagents of yours or theirs" in section(playbook, "## Orchestrator")
+    assert "at least every 30 minutes" in section(playbook, "### Capacity")
+    lead = (PACKAGE / "skills" / "colony-lead" / "SKILL.md").read_text()
+    assert "Never start a subagent to build" in lead and "at least every 30 minutes" in lead
+    builder = (PACKAGE / "skills" / "colony-builder" / "SKILL.md").read_text()
+    assert "only for a quick search or a browser check" in builder and "for speed" not in builder
+    orchestrator = tomllib.loads((PACKAGE / "modes" / "work" / "orchestrator.toml").read_text())
+    assert any("Never start a subagent to build" in rule["text"] for rule in orchestrator["rules"])
