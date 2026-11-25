@@ -869,8 +869,8 @@ def team_now(config: dict, now: float) -> tuple[dict[str, Member], str]:
 
 def watch_command(config: dict, args) -> int:
     """`colony watch [--json] [--page] [--folded]`: every lead and helper with what it does and why, what is worth a
-    look, and the cards' progress; --page writes the status page now and prints its link; --folded prints the
-    helper lines the lead's digest folded (chatter.py)."""
+    look, the cards' progress, and each account on this computer with how old its reading is; --page writes the
+    status page now and prints its link; --folded prints the helper lines the lead's digest folded (chatter.py)."""
     from colony import chatter, progress, statuspage
 
     if args.folded:
@@ -901,6 +901,12 @@ def watch_command(config: dict, args) -> int:
         print(f"- {line}")
     cards, why = progress.cards_or_note(config)
     print(progress.summary(cards, len([m for m in team.values() if m.kind == "helper"]), now) if why is None else why)
+    from colony import forecast  # each account's room, how old its reading is, and its forecast
+
+    rooms = forecast.account_lines(config, now)
+    print("Accounts on this computer:" if rooms else "Accounts on this computer: none has its folder here.")
+    for line in rooms:
+        print(f"- {line}")
     return 0
 
 

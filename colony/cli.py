@@ -351,8 +351,9 @@ def has_room(config_dir: str) -> bool:
 
 
 def room_text(name: str, config_dir: str) -> str:
-    """One account's room for a status, such as `admin: 5h 40% (resets 23:50 UTC), week 63% (resets Sat 10:00 UTC)`,
-    or `admin: no reading`."""
+    """One account's room for a status, such as `admin: 5h 40% (resets 23:50 UTC), week 63% (resets Sat 10:00 UTC),
+    read 3 min ago`, or `admin: no reading`. The reading's age shows whenever Claude Code saved its time, so an old
+    number is never quoted as today's."""
     windows = usage(config_dir)
     if not windows:
         return f"{name}: no reading"
@@ -362,7 +363,8 @@ def room_text(name: str, config_dir: str) -> str:
             used, resets = windows[window]
             when = f" (resets {resets.astimezone(timezone.utc):%a %H:%M} UTC)" if resets else ""
             parts.append(f"{short} {used:g}%{when}")
-    return f"{name}: {', '.join(parts)}"
+    age = reading_age(config_dir)
+    return f"{name}: {', '.join(parts)}" + ("" if age is None else f", read {ago(max(0.0, age))} ago")
 
 
 def person_accounts(config: dict, person: str) -> tuple[list[str], list[str]]:
@@ -1934,6 +1936,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile.register(sub)
     from colony import capacity
     capacity.register(sub)
+    from colony import accounts  # the team workstream: `colony accounts`, `accounts scan` and `accounts add`
+    accounts.register(sub)
     from colony import recover
     recover.register(sub)  # crash-report and resume
     from colony import boot, decisions  # the startup routine, modes, intake, and the person's decisions

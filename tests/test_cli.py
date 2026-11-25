@@ -364,10 +364,11 @@ def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, c
 
 
 def live_lead(name="ana-main-lead"):
-    """A lead alive on this computer by its heartbeat, as `colony claim` leaves it."""
+    """A lead alive on this computer by its heartbeat, as `colony claim` leaves it, on an account of its own: a helper
+    never opens on a live lead's account (capacity.lead_accounts)."""
     from colony import wait
 
-    wait.beat("demo", name, "first", "token0000000", named=True)
+    wait.beat("demo", name, "leads-own", "token0000000", named=True)
 
 
 def test_join_dry_run_says_what_is_missing_and_shows_the_builder(home, config, capsys):
@@ -534,7 +535,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "check", "ci", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "safety", "who", "whoami",
-            "tidy", "idea", "card", "release", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later",
+            "tidy", "idea", "card", "release", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later", "accounts",
             "crash-report", "resume",
             "boot", "summary", "mode", "plan", "orders", "session-hook", "ask", "decisions", "answer", "never-raise",
             "spend", "approve", "intent", "report", "watch", "progress", "watchdog",

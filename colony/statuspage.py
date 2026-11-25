@@ -1,8 +1,9 @@
 """The status page: one pinned issue, `Colony: status`, whose body the watchdog keeps current, so a person has one link
 that opens on a phone.
 
-The page shows what is worth a look, the cards' progress against their predictions with when the work left ends, and
-each lead and helper with what it does and why, its last report and its helper agents. It holds what the status
+The page shows what is worth a look, the cards' progress against their predictions with when the work left ends, each
+account read on the watchdog's computer with when it was read and its forecast, and each lead and helper with what it
+does and why, its last report and its helper agents. It holds what the status
 comments already hold, plus card numbers and titles: never a path on a computer, a command's output, or a secret.
 
 The watchdog writes it every `[watch] page_minutes` while `[watch] page` is true (keep), and only when it changed,
@@ -56,6 +57,12 @@ def render(config: dict, team: dict, s, now: float, cards: list | None = None, n
                          f"{cell(card.title[:80])} |")
         if len(cards) > CARDS_SHOWN:
             lines.append(f"\n{len(cards) - CARDS_SHOWN} more cards are on the board.")
+    from colony import forecast  # each account's room, when it was read, and its forecast (the team workstream)
+
+    lines += ["", "## Accounts", "", f"Read on {presence.computer()}; a reading past [pool] stale_minutes says so, and "
+              "never places a helper.", ""]
+    lines += [f"- {line}" for line in forecast.account_lines(config, now, relative=False)] or \
+        ["No account's folder is on this computer."]
     for kind, title in (("lead", "Leads"), ("helper", "Helpers")):
         group = sorted((m for m in team.values() if m.kind == kind), key=lambda m: (m.lead, m.name))
         lines += ["", f"## {title}", ""]

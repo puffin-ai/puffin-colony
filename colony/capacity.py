@@ -75,7 +75,9 @@ def read(project: str, name: str) -> dict:
 
 
 ORDERS = ("reset", "listed")
-POOL_KEYS = ("order", "out_at", "near_at", "near_hours", "reserve", "max_busy", "wave", "wave_seconds")
+POOL_KEYS = ("order", "out_at", "near_at", "near_hours", "reserve", "max_busy", "wave", "wave_seconds", "stale_minutes",
+             "share_lead_accounts", "helper_rate", "scan_folders")
+SCAN_FOLDERS = ("~/.claude", "~/.claude-*", "~/.claude_*")  # where `colony accounts scan` looks for settings folders
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,10 @@ class Policy:
     max_busy: int = 3  # helpers one account runs at once; [accounts.<name>] max_busy sets one account's own
     wave: int = 3  # helpers `colony helpers --open` opens at once
     wave_seconds: float = 60.0  # the pause between waves
+    stale_minutes: float = 15.0  # a reading older than this never places a session: its account's room is unknown
+    share_lead_accounts: bool = False  # whether helpers may open on an account a live lead or orchestrator runs on
+    helper_rate: float = 10.0  # the 5-hour window's percent one busy helper uses an hour, until readings show it
+    scan_folders: tuple = SCAN_FOLDERS
 
 
 def number(table: dict, key: str, default, low: float, high: float | None = None, whole: bool = False,
@@ -125,9 +131,20 @@ def policy(config: dict) -> Policy:
     if missing:
         raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] reserve names {missing[0]!r}, which no [accounts.<name>] "
                               "table holds")
+    share = table.get("share_lead_accounts", False)
+    if not isinstance(share, bool):
+        raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] share_lead_accounts is true or false, not {share!r}")
+    scan = table.get("scan_folders", list(SCAN_FOLDERS))
+    if not isinstance(scan, list) or not all(isinstance(item, str) and item.strip() for item in scan):
+        raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] scan_folders is a list of folders, such as "
+                              '["~/.claude", "~/.claude-*"]')
     return Policy(order, number(table, "out_at", 95, 1, 100), number(table, "near_at", 80, 1, 100),
                   number(table, "near_hours", 1, 0), frozenset(reserve), number(table, "max_busy", 3, 1, whole=True),
-                  number(table, "wave", 3, 1, whole=True), number(table, "wave_seconds", 60, 0))
+                  number(table, "wave", 3, 1, whole=True), number(table, "wave_seconds", 60, 0),
+                  # a reading is fetched again once it is cli.USAGE_STALE old, so a shorter limit would never be met
+                  stale_minutes=number(table, "stale_minutes", 15, cli.USAGE_STALE / 60),
+                  share_lead_accounts=share, helper_rate=number(table, "helper_rate", 10, 0, 100),
+                  scan_folders=tuple(scan))
 
 
 def cap(config: dict, name: str, pool: Policy) -> int:
@@ -168,11 +185,37 @@ def windows(config: dict, name: str, now: datetime | None = None) -> dict[str, t
     return cli.usage(account["config_dir"], now)
 
 
+def reading_age(config: dict, name: str, now: float | None = None) -> float | None:
+    """Seconds since an account's usage was read, or None when it has no reading: for a usage_command, since Colony
+    last ran it; for a Claude Code folder, since Claude Code fetched it (cli.reading_age), else, for a reading saved
+    with no time, since its state file last changed."""
+    now = time.time() if now is None else now
+    account = config["accounts"][name]
+    if account.get("usage_command"):
+        held = _readings.get(f"{account['usage_command']}\n{account['config_dir']}")
+        return now - held[0] if held and held[1] else None
+    age = cli.reading_age(account["config_dir"], now)
+    if age is not None or not cli.usage(account["config_dir"]):
+        return age
+    try:
+        return now - cli.usage_file(account["config_dir"]).stat().st_mtime
+    except OSError:
+        return None
+
+
+def stale(config: dict, name: str, pool: Policy | None = None, now: float | None = None) -> float | None:
+    """How old an account's reading is when it is past [pool] stale_minutes, too old to place a session by, else
+    None."""
+    age = reading_age(config, name, now)
+    return age if age is not None and age > (pool or policy(config)).stale_minutes * 60 else None
+
+
 def judge(config: dict, name: str, now: datetime, pool: Policy | None = None) -> tuple[int, tuple, str]:
-    """One account's standing for the pick, as (tier, rank, why): tier 0 has room, 1 has no reading, 2 is out of room
-    or near it with a reset far off, 3 has no folder on this computer. Within tier 0, [pool] order "reset" ranks the
-    soonest weekly reset first, "use it or lose it", counting resets in the same hour as a tie, then the most 5-hour
-    room; "listed" leaves the person's order alone."""
+    """One account's standing for the pick, as (tier, rank, why): tier 0 has room, 1 has no reading, or one older than
+    [pool] stale_minutes, which never places a session, 2 is out of room or near it with a reset far off, 3 has no
+    folder on this computer. Within tier 0, [pool] order "reset" ranks the soonest weekly reset first, "use it or
+    lose it", counting resets in the same hour as a tie, then the most 5-hour room; "listed" leaves the person's
+    order alone. A reading's age counts from now on the clock, whatever `now` the windows are judged at."""
     pool = pool or policy(config)
     far = datetime.max.replace(tzinfo=timezone.utc)
     if not Path(config["accounts"][name]["config_dir"]).expanduser().is_dir():
@@ -180,6 +223,9 @@ def judge(config: dict, name: str, now: datetime, pool: Policy | None = None) ->
     found = windows(config, name, now)
     if not found:
         return 1, (), f"{name}: no saved reading, so its room is unknown"
+    if (old := stale(config, name, pool)) is not None:
+        return 1, (), (f"{name}: its last reading is {cli.ago(old)} old, past [pool] stale_minutes "
+                       f"({pool.stale_minutes:g}), so its room is unknown and its old numbers are not used")
     five_used, five_reset = found.get("five_hour", (0.0, None))
     week_used, week_reset = found.get("seven_day", (0.0, None))
     five = f"5h {five_used:g}% used, resets in {cli.in_hours(five_reset, now)}"
@@ -315,29 +361,96 @@ def full_accounts(config: dict, counts: dict[str, set[str]], pool: Policy) -> se
     return {name for name in config["accounts"] if len(counts.get(name, ())) >= cap(config, name, pool)}
 
 
-def helper_account(config: dict, args, counts: dict[str, set[str]]) -> tuple[str, str, str] | None:
-    """The account a new helper opens on, as (name, folder, why): --account when given, else the person's pick
-    (cli.pick) among the accounts under their cap of busy helpers; None when every one is at its cap."""
+AT_CAP = "every account is at its cap of busy helpers"
+NO_FIT = "no account has room for one more helper before its window resets"
+
+
+def lead_accounts(config: dict, alive: list | None = None) -> dict[str, list[str]]:
+    """The accounts a live lead or orchestrator runs on, each with the leads on it: this session's own account when it
+    leads, and each live lead's, from its status comment on any computer or its heartbeat on this one. With no
+    `alive` given, this computer's heartbeats alone (presence.local)."""
+    from colony import presence
+
+    accounts = config.get("accounts", {})
+    found: dict[str, list[str]] = {}
+
+    def add(account: str, lead: str) -> None:
+        if account in accounts and lead not in found.setdefault(account, []):
+            found[account].append(lead)
+
+    me = os.environ.get(cli.SESSION_ENV, "")
+    if is_lead(me):
+        add(session_account(config), wait.state_name(me))
+    if alive is None:
+        try:
+            alive = presence.local(config)
+        except (cli.ColonyError, OSError, ValueError, KeyError):
+            alive = []
+    for status in alive:
+        if status.kind == "lead" and status.account:
+            add(status.account, status.name)
+    return found
+
+
+def refusal(names: list[str], full: set[str], leads: dict[str, list[str]]) -> str:
+    """Why no account takes a new helper, when each is at its cap or a lead's own."""
+    held = [name for name in names if name in leads and name not in full]
+    if not held:
+        return AT_CAP
+    owners = "; ".join(f"{name} is {' and '.join(leads[name])}'s own" for name in held)
+    return (f"every other account is at its cap of busy helpers, and {owners}, kept for it so its own team never cuts "
+            "it off: set [pool] share_lead_accounts = true in .colony/colony.local.toml to let helpers share it")
+
+
+def place(config: dict, args, counts: dict[str, set[str]],
+          kept: dict[str, list[str]] | None = None) -> tuple[tuple[str, str, str] | None, str]:
+    """The account a new helper opens on, as ((name, folder, why), "") or (None, why not). --account wins when given.
+    Otherwise the person's pick (cli.pick_with_room) among their accounts under their cap of busy helpers, leaving out
+    the ones [pool] reserve keeps free and, unless [pool] share_lead_accounts, the ones a live lead or orchestrator
+    runs on (`kept`, lead_accounts by default), and taking the first where one more helper lasts until its windows
+    reset (forecast.fits). When every account with room would run out before its reset, none: the helper waits for a
+    reset, or opens on an account named with --account."""
     if getattr(args, "account", None):
-        return cli.choose_account_why(config, args)
+        return cli.choose_account_why(config, args), ""
+    from colony import forecast
+
     pool = policy(config)
     full = full_accounts(config, counts, pool)
+    leads = {} if pool.share_lead_accounts else (lead_accounts(config) if kept is None else kept)
     person = cli.person_of(config, args)
     order, last = cli.person_accounts(config, person)
-    if not [name for name in order + last if name not in full and name not in pool.reserve]:
-        return None
-    found = cli.pick_with_room(config, person, skip=full)
-    if found is None:  # none under its cap has room: the first of them, as cli.pick names it when all are out
-        name = next(name for name in order + last if name not in full and name not in pool.reserve)
-        found = name, config["accounts"][name]["config_dir"], f"every account under its cap is out of room, so {name}"
-    name, folder, why = found
-    return name, folder, f"{why}; helpers {len(counts.get(name, ()))} of {cap(config, name, pool)}"
+    names = [name for name in dict.fromkeys(order + last) if name not in pool.reserve]
+    usable = [name for name in names if name not in full and name not in leads]
+    if not usable:
+        return None, refusal(names, full, leads)
+    skip, tight = set(full) | set(leads), []
+    while (found := cli.pick_with_room(config, person, skip=skip)) is not None:
+        name, folder, why = found
+        here = len(counts.get(name, ()))
+        fit, outlook = forecast.fits(config, name, here + 1, pool)
+        if fit:
+            return (name, folder, f"{why}; helpers {here} of {cap(config, name, pool)}"
+                    + (f"; {outlook}" if outlook else "")), ""
+        tight.append(outlook)
+        skip.add(name)
+    if tight:
+        return None, f"{NO_FIT}: {'; '.join(tight)}"
+    name = usable[0]  # none under its cap has room: the first of them, as cli.pick names it when all are out
+    return (name, config["accounts"][name]["config_dir"], f"every account under its cap is out of room, so {name}; "
+            f"helpers {len(counts.get(name, ()))} of {cap(config, name, pool)}"), ""
+
+
+def helper_account(config: dict, args, counts: dict[str, set[str]],
+                   kept: dict[str, list[str]] | None = None) -> tuple[str, str, str] | None:
+    """The account a new helper opens on, as (name, folder, why) (place), or None when none takes it."""
+    return place(config, args, counts, kept)[0]
 
 
 def choose_helper_account(config: dict, args) -> None:
-    """For `colony open` and `colony join`: put the account a new helper opens on in args.account, with why, under
-    each account's cap of busy helpers (helper_account). Refuses when every account is at its cap. A named
-    --account stays as it is."""
+    """For `colony open` and `colony join`: put the account a new helper opens on in args.account, with why (place):
+    under each account's cap of busy helpers, never on a live lead's own account unless [pool] share_lead_accounts,
+    and where it lasts until the account's reset. Refuses, saying why, when no account takes it. A named --account
+    stays as it is."""
     from colony import presence
 
     if getattr(args, "account", None):
@@ -346,11 +459,12 @@ def choose_helper_account(config: dict, args) -> None:
         alive = presence.everyone(config)[0]
     except (cli.ColonyError, OSError, ValueError, KeyError):
         alive = []
-    found = helper_account(config, args, busy(config, alive))
+    found, why = place(config, args, busy(config, alive), lead_accounts(config, alive))
     if found is None:
-        raise cli.ColonyError(f"every account is at its cap of busy helpers ([pool] max_busy, "
-                              f"{policy(config).max_busy} by default): wait for a helper to finish, or name an "
-                              "account with --account")
+        if why == AT_CAP:
+            raise cli.ColonyError(f"{AT_CAP} ([pool] max_busy, {policy(config).max_busy} by default): wait for a "
+                                  "helper to finish, or name an account with --account")
+        raise cli.ColonyError(f"{why}: wait, or name an account with --account")
     args.account, _, args.account_why = found
 
 
@@ -373,11 +487,15 @@ def open_wave(config: dict, args, count: int, taken: set[str]) -> tuple[int, str
     room = limits(config, running=len(local_helpers(config, here)))
     if room["open_now"] <= 0:
         return 0, room_reason(room)
+    from colony import forecast
+
+    forecast.record_all(config, counts)  # each fresh reading, with the helpers its account runs now
+    kept = lead_accounts(config, alive)
     opened = 0
     for _ in range(min(count, room["open_now"])):
-        found = helper_account(config, args, counts)
+        found, refused = place(config, args, counts, kept)
         if found is None:
-            return opened, "every account is at its cap of busy helpers"
+            return opened, refused
         account, _, why = found
         name = cli.free_helper(config, [*alive, *(presence.Status(t, "helper") for t in taken)])
         taken.add(name)
@@ -404,7 +522,9 @@ def room_reason(room: dict) -> str:
 def open_helpers(config: dict, args, lead: str) -> int:
     """`colony helpers <n> --open`: open the first wave now, [pool] wave helpers at most, and leave the rest to a
     background run that opens one wave every [pool] wave_seconds (open_later). Every helper opens on an account under
-    its cap of busy helpers, and only while this computer has room (limits). A dry run prints the plan."""
+    its cap of busy helpers, never on a live lead's own (place), where it lasts until the account's reset, and only
+    while this computer has room (limits). Helpers that fit on no account before its reset open right after the
+    soonest reset. A dry run prints the plan."""
     pool = policy(config)
     taken: set[str] = set()
     first = min(args.count, pool.wave)
@@ -440,20 +560,30 @@ def spawn(argv: list[str], log: Path) -> None:
 
 def open_later(config: dict, args) -> int:
     """`colony open-later <n>`, which `colony helpers --open` starts in the background: open the rest of the helpers,
-    one wave every [pool] wave_seconds, each when an account is under its cap and this computer has room. After
-    WAVE_PATIENCE with no room it gives up, and the lead hears how many did not open."""
+    one wave every [pool] wave_seconds, each when an account is under its cap and this computer has room. When the
+    helpers left fit on no account before its reset, the next wave starts right after the soonest reset
+    (forecast.next_reset). After WAVE_PATIENCE with no room, counted from that reset when it waits for one, it gives
+    up, and the lead hears how many did not open."""
+    from colony import forecast
+
     pool, left = policy(config), args.count
     taken = {name for name in (args.taken or "").split(",") if name}
-    args.dry_run, last = False, time.time()
+    args.dry_run, last, pause = False, time.time(), pool.wave_seconds
     lead = os.environ.get(wait.LEAD_ENV, "").lower() or cli.LEAD
     while left > 0:
-        SLEEP(pool.wave_seconds)
+        SLEEP(pause)
+        pause = pool.wave_seconds
         opened, why = open_wave(config, args, min(left, pool.wave), taken)
         left -= opened
         print(f"{time.strftime('%H:%M:%S')} opened {opened}, {left} left" + (f": {why}" if why and left else ""),
               flush=True)
         if opened:
             last = time.time()
+        elif why.startswith(NO_FIT) and (resets := forecast.next_reset(config, cli.person_of(config, args))):
+            pause = max(pool.wave_seconds, resets + LIMIT_GRACE - time.time())  # start them right after the reset
+            last = max(last, resets + LIMIT_GRACE)
+            print(f"{time.strftime('%H:%M:%S')} the next wave waits for the reset at {forecast.clock(resets)}",
+                  flush=True)
         elif time.time() - last > WAVE_PATIENCE:
             from colony import guards
 
@@ -1305,7 +1435,9 @@ def lead_check(config: dict, name: str):
     """What the lead's wait runs at each poll. After the computer slept or restarted, it starts again the helpers and
     waits that stopped (restart). Every CHECK_EVERY, after the first: a line when the lead itself runs on the wrong
     account, wakes for the sessions whose usage limit reset (wake_due), the service checks that are due
-    (service_lines), and a line when this computer turns busy (machine_line). It never raises."""
+    (service_lines), a line when this computer turns busy (machine_line), every few minutes a live reading of each
+    account with a warning ahead of a reset its helpers would reach first (forecast.lead_part), and, for the digest,
+    an account gone from this computer or a new one found (accounts.wait_lines). It never raises."""
     def check(waited: dict) -> list[str]:
         lines: list[str] = []
         try:
@@ -1332,6 +1464,11 @@ def lead_check(config: dict, name: str):
                 lines += [f"urgent: {line}" for line in wake_due(config, now)]
             lines += service_lines(config, held, now)
             lines += machine_line(config, held)
+            from colony import accounts, forecast  # warnings ahead of a reset; accounts gone, signed out or new
+
+            lines += forecast.lead_part(config, held.setdefault("forecast", {}), now)
+            for line in accounts.wait_lines(config, held.setdefault("accounts", {}), now):
+                waited.setdefault("pending", []).append([line, False])  # it can wait for the digest
             if now - float(held.get("seen_at") or 0) >= SEEN_EVERY:
                 held["seen_at"] = now
                 remember_seen(config)
@@ -1350,8 +1487,9 @@ def gb(value: float | None) -> str:
 
 
 def show(config: dict, args) -> int:
-    """`colony capacity [--json]`: this computer's readings and what it runs at once, each account's room and helpers,
-    the sessions waiting for a limit to reset, and the locks held."""
+    """`colony capacity [--json]`: this computer's readings and what it runs at once, each account's room, with how
+    old its reading is, its helpers and its forecast (forecast.summary), the accounts kept for a live lead, the
+    sessions waiting for a limit to reset, and the locks held. It takes a live reading first, and keeps it."""
     from colony import presence
 
     try:
@@ -1369,9 +1507,15 @@ def show(config: dict, args) -> int:
         names = list(config["accounts"])
     now = datetime.now(timezone.utc)
     cli.refresh_usage([config["accounts"][name]["config_dir"] for name in names])
+    from colony import forecast
+
+    forecast.record_all(config, counts, names)
+    kept = {} if pool.share_lead_accounts else lead_accounts(config, alive)
     accounts = [{"name": name, "room": cli.room_text(name, config["accounts"][name]["config_dir"]).split(": ", 1)[1],
                  "standing": judge(config, name, now, pool)[2].split(": ", 1)[1], "helpers": sorted(counts[name]),
-                 "max_busy": cap(config, name, pool), "reserved": name in pool.reserve} for name in names]
+                 "max_busy": cap(config, name, pool), "reserved": name in pool.reserve,
+                 "kept_for": kept.get(name, []), "read_seconds_ago": reading_age(config, name),
+                 "forecast": forecast.summary(config, name)} for name in names]
     waiting = limited(config)
     locked = {path.name.split(".")[0] for path in locks_dir().glob("*.json")} if locks_dir().is_dir() else set()
     held = {name: found for name in sorted(locked) if (found := holders(name))}
@@ -1392,8 +1536,11 @@ def show(config: dict, args) -> int:
         if account["reserved"]:
             print(f"- {account['name']}: reserved, used only with --account. {account['room']}.")
             continue
+        kept_for = (f" Kept for {' and '.join(account['kept_for'])}, its own account: no helper opens here "
+                    "([pool] share_lead_accounts)." if account["kept_for"] else "")
         print(f"- {account['name']}: {account['room']}; helpers {len(account['helpers'])} of {account['max_busy']}"
-              + (f" ({', '.join(account['helpers'])})" if account["helpers"] else "") + f". {account['standing']}.")
+              + (f" ({', '.join(account['helpers'])})" if account["helpers"] else "") + f". {account['standing']}."
+              + kept_for + f" Forecast: {account['forecast']}.")
     for name, record in waiting.items():
         when = record.get("resets_at")
         at = datetime.fromtimestamp(when, timezone.utc).strftime("%a %H:%M UTC") if isinstance(when, (int, float)) \
