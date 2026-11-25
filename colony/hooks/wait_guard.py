@@ -186,7 +186,6 @@ KILL_REFUSAL = ("kill guard: refused, {reason}. A kill by name or pattern can en
 SAFETY = "safety"  # the colony.toml table that holds merge_into and protect
 GH_TIMEOUT = 20  # seconds the guard gives `gh pr view` to say which branch a pull request merges into
 HOLDS_REF = "refs/colony/holds"  # origin's merge freeze and red holds, which `colony freeze` and `colony health` keep
-HOLDS_TIMEOUT = 15  # seconds each git call that reads origin's holds may take
 PR_MERGE_VALUE_OPTIONS = {"-t", "--subject", "-b", "--body", "-F", "--body-file", "--match-head-commit", "-A",
                           "--author-email"}
 GH_API_VALUE_OPTIONS = {"-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q",
@@ -1128,36 +1127,40 @@ def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str, str]:
     return (base, found[1], head) if base and found else ("", "", "")
 
 
-def git_quiet(cwd: str, *args: str) -> subprocess.CompletedProcess | None:
-    """One git call that reads origin's holds, within HOLDS_TIMEOUT, or None when it can't run."""
+def host_json(host: str, path: str) -> tuple[object, bool]:
+    """One `gh api` read from the code host, as host_toml reads: (its JSON, False), or (None, True) when the host says
+    it has no such thing (HTTP 404), or (None, False) when it can't be read."""
+    argv = ["gh", "api", *(["--hostname", host] if host and host != "github.com" else []), path]
     try:
-        return subprocess.run(["git", *args], cwd=cwd or None, capture_output=True, text=True, timeout=HOLDS_TIMEOUT)
+        run = subprocess.run(argv, capture_output=True, text=True, timeout=GH_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None, False
+    if run.returncode:
+        return None, "HTTP 404" in run.stderr
+    try:
+        return json.loads(run.stdout), False
+    except ValueError:
+        return None, False
 
 
-def origin_holds(cwd: str) -> list[dict] | None:
-    """Origin's holds as freeze.py keeps them: the JSON in the message of the commit origin's refs/colony/holds
-    points at, read now with `git ls-remote` and, when this clone lacks that commit, `git fetch`. [] when origin has
-    no holds; None when origin can't be reached or the commit can't be read."""
-    listed = git_quiet(cwd, "ls-remote", "origin", HOLDS_REF)
-    if listed is None or listed.returncode:
+def origin_holds(home: str) -> list[dict] | None:
+    """The holds of the repo at the URL `home`, as freeze.py keeps them on its refs/colony/holds: the JSON in the
+    message of the commit that ref points at. They are read from the code host with `gh api`, as Allowance reads the
+    person's yes, never through git, whose remotes and URL rewrites an agent can change. [] when the repo has no
+    holds ref; None when they can't be read."""
+    host, repo = repo_of(home)
+    if not repo:
         return None
-    words = listed.stdout.split()
-    if not words:
+    ref, missing = host_json(host, f"repos/{repo}/git/ref/{HOLDS_REF.removeprefix('refs/')}")
+    if missing:
         return []
-    sha = words[0]
-    if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", sha):
+    sha = ref.get("object", {}).get("sha") if isinstance(ref, dict) and isinstance(ref.get("object"), dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", sha):
         return None
-    shown = git_quiet(cwd, "--no-replace-objects", "cat-file", "commit", sha)
-    if shown is None or shown.returncode:
-        fetched = git_quiet(cwd, "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin", HOLDS_REF)
-        if fetched is None or fetched.returncode:
-            return None
-        shown = git_quiet(cwd, "--no-replace-objects", "cat-file", "commit", sha)
-        if shown is None or shown.returncode:
-            return None
-    _, _, message = shown.stdout.partition("\n\n")
+    commit, _ = host_json(host, f"repos/{repo}/git/commits/{sha}")
+    message = commit.get("message") if isinstance(commit, dict) else None
+    if not isinstance(message, str):
+        return None
     _, _, body = message.partition("\n\n")
     try:
         holds = json.loads(body or "[]")
@@ -1188,11 +1191,11 @@ def hold_words(hold: dict) -> str:
     return f"{branch} is frozen {reason}{why}, by {hold.get('by') or 'someone'}"
 
 
-def holds_refusal(base: str, head: str, cwd: str, which: str) -> str:
-    """Why a merge into `base` must wait for a live hold on it, the release freeze or a red hold, or "": a hold whose
-    allow list names the pull request's branch or its card, `#<n>` from a branch such as ana/12, lets it through. When
-    origin's holds can't be read, it waits too."""
-    holds = origin_holds(cwd)
+def holds_refusal(base: str, head: str, cwd: str, which: str, home: str) -> str:
+    """Why a merge into `base`, in the repo at the URL `home`, must wait for a live hold on it, the release freeze or
+    a red hold, or "": a hold whose allow list names the pull request's branch or its card, `#<n>` from a branch such
+    as ana/12, lets it through. When the holds can't be read, it waits too."""
+    holds = origin_holds(home)
     if holds is None:
         return (f"origin's merge freeze, {HOLDS_REF}, could not be read, so the guard can't tell whether {base} is "
                 "frozen or red: merge once origin can be reached")
@@ -1219,7 +1222,7 @@ def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request",
         return (f"{which} is in {there[1] or home}, not in this repo's origin, "
                 f"{mine[1] or 'which the guard cannot name'}")
     if Allowance(cwd, home).permits(base):
-        return holds_refusal(base, head, cwd, which)
+        return holds_refusal(base, head, cwd, which, home)
     return f"{which} merges into {base}, which [safety] merge_into on the repo's default branch doesn't name"
 
 
@@ -1643,7 +1646,8 @@ def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
         refused = [b for b in held if not allowance.permits(b)]
         if refused:
             return [f"`{action}` commits straight onto {refused[0]}"]
-        return [reason for b in held if (reason := holds_refusal(b, "", cwd, f"`{action}`"))][:1]
+        home = f"https://{mine[0]}/{mine[1]}"
+        return [reason for b in held if (reason := holds_refusal(b, "", cwd, f"`{action}`", home))][:1]
     return []
 
 

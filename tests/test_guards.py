@@ -8,7 +8,6 @@ import os
 import platform
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -344,17 +343,22 @@ def test_a_git_alias_in_config_is_read_as_what_it_runs(on_feature):
 
 
 def github(folder: Path, default: str | None = None, branches: dict[str, str] | None = None, pr: str = "",
-           aliases: str = "") -> str:
+           aliases: str = "", holds: list[dict] | str | None = None) -> str:
     """A folder with a stub gh that stands in for GitHub, and logs each call: `gh api .../contents/.colony/colony.toml`
     prints `default`, or the copy on `branches[ref]` with ?ref=, and fails when there is none; `gh pr view` prints `pr`,
-    "<base> <url> [<head>]", and fails when it is empty; `gh alias list` prints `aliases`. A stub git beside it
-    reads origin's holds from a repo that has none (holds_git), as GitHub would for a project with no freeze."""
+    "<base> <url> [<head>]", and fails when it is empty; `gh alias list` prints `aliases`. The repo's holds ref, as
+    freeze.py writes it: `holds`, a list, or none (HTTP 404) for None, or "down" for a host that can't be read."""
     folder.mkdir(parents=True, exist_ok=True)
     for name, text in {"default": default, **(branches or {})}.items():
         if text is not None:
             (folder / f"host-{name}.toml").write_text(text)
     (folder / "pr").write_text(pr)
     (folder / "aliases").write_text(aliases)
+    if holds == "down":
+        (folder / "holds-down").write_text("")
+    elif holds is not None:
+        (folder / "holds-ref.json").write_text(json.dumps({"object": {"sha": "c" * 40, "type": "commit"}}))
+        (folder / "holds-commit.json").write_text(json.dumps({"message": "colony holds\n\n" + json.dumps(holds)}))
     gh = folder / "gh"
     gh.write_text(f'''#!/bin/sh
 D="{folder}"
@@ -362,6 +366,11 @@ echo "$@" >> "$D/gh.log"
 for last; do :; done
 if [ "$1" = api ]; then
   case "$last" in
+    */git/ref/colony/holds)
+      [ -f "$D/holds-down" ] && {{ echo "gh: could not connect" >&2; exit 1; }}
+      [ -f "$D/holds-ref.json" ] && exec cat "$D/holds-ref.json"
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+    */git/commits/*) exec cat "$D/holds-commit.json" ;;
     *contents/.colony/colony.toml\\?ref=*) ref="${{last#*\\?ref=}}" ;;
     *contents/.colony/colony.toml) ref=default ;;
     *) exit 0 ;;
@@ -374,7 +383,6 @@ if [ "$1 $2" = "alias list" ]; then exec cat "$D/aliases"; fi
 exit 0
 ''')
     gh.chmod(0o755)
-    holds_git(folder, holds_origin(folder, None))
     return str(folder)
 
 
@@ -402,36 +410,6 @@ def test_merge_into_counts_only_what_the_copy_on_the_code_hosts_default_branch_n
     assert merge_refused(push_guard("gh pr merge 5", hosted, path=github(tmp_path / "f", default=ALLOW_MAIN, pr=pr)))
 
 
-def holds_origin(folder: Path, holds: list[dict] | None) -> Path:
-    """A bare repo standing in for origin's refs/colony/holds: a commit whose message holds `holds` as JSON, as
-    freeze.py writes it, or no such ref for None."""
-    bare = folder / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-    if holds is not None:
-        tree = subprocess.run(["git", "-C", str(bare), "hash-object", "-w", "-t", "tree", "/dev/null"],
-                              capture_output=True, text=True, check=True).stdout.strip()
-        commit = subprocess.run(["git", "-C", str(bare), "-c", "user.name=C", "-c", "user.email=c@example.test",
-                                 "commit-tree", tree, "-m", "colony holds", "-m", json.dumps(holds)],
-                                capture_output=True, text=True, check=True).stdout.strip()
-        subprocess.run(["git", "-C", str(bare), "update-ref", "refs/colony/holds", commit], check=True)
-    return bare
-
-
-def holds_git(folder: Path, bare: Path) -> None:
-    """A stub git in `folder` that reads origin's holds from `bare`, as the guard's git would from GitHub, and runs
-    the real git for every other call."""
-    real = shutil.which("git")
-    (folder / "git").write_text(f'''#!/bin/sh
-case "$*" in
-  "ls-remote origin refs/colony/holds") exec "{real}" ls-remote "{bare}" refs/colony/holds ;;
-  "fetch -q --no-tags --no-write-fetch-head origin refs/colony/holds")
-    exec "{real}" fetch -q --no-tags --no-write-fetch-head "{bare}" refs/colony/holds ;;
-esac
-exec "{real}" "$@"
-''')
-    (folder / "git").chmod(0o755)
-
-
 ALLOW_DEV_INTEGRATION = '[project]\nbase = "main"\nintegration = "dev"\n\n[safety]\nmerge_into = ["main", "dev"]\n'
 
 
@@ -454,11 +432,10 @@ ALLOW_DEV_INTEGRATION = '[project]\nbase = "main"\nintegration = "dev"\n\n[safet
 ])
 def test_a_merge_into_an_allowed_branch_waits_for_its_freeze_and_red_holds(holds, pr, allowed, hosted, tmp_path):
     """Regression: the merge guard never read the holds, so a lead's `gh pr merge` landed on a branch frozen for a
-    release or held red, though the docs said a freeze pauses every lead's landings. The guard reads origin's
-    refs/colony/holds after it allows a base, as freeze.py does for `colony merge`."""
+    release or held red, though the docs said a freeze pauses every lead's landings. The guard reads the repo's
+    refs/colony/holds from GitHub's API after it allows a base, as freeze.py keeps it for `colony merge`."""
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV_INTEGRATION)
-    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr=pr)
-    holds_git(Path(stub), holds_origin(tmp_path, holds))
+    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr=pr, holds=holds)
     run = push_guard("gh pr merge 5", hosted, path=stub)
     if allowed:
         assert (run.returncode, run.stderr) == (0, ""), run.stderr
@@ -468,10 +445,23 @@ def test_a_merge_into_an_allowed_branch_waits_for_its_freeze_and_red_holds(holds
         assert "colony freeze allow" in run.stderr
 
 
+def test_the_holds_come_from_the_code_hosts_api_never_from_git(hosted, tmp_path):
+    """Regression: the guard read the holds with `git ls-remote origin`, and git's remotes and URL rewrites are config
+    an agent can change. Here git says origin has no holds, and GitHub's API says dev is frozen: the merge waits."""
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV_INTEGRATION)
+    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr="dev https://github.com/acme/demo/pull/5 ana/12",
+                  holds=[{"branch": "dev", "kind": "release", "until": 4102444800}])
+    real = subprocess.run(["sh", "-c", "command -v git"], capture_output=True, text=True).stdout.strip()
+    (Path(stub) / "git").write_text(f'#!/bin/sh\ncase "$*" in *refs/colony/holds*) exit 0 ;; esac\nexec "{real}" "$@"\n')
+    (Path(stub) / "git").chmod(0o755)
+    run = push_guard("gh pr merge 5", hosted, path=stub)
+    assert merge_refused(run, "this pull request merges into dev, and dev is frozen for the release"), run.stderr
+
+
 def test_a_merge_is_refused_when_origins_holds_cant_be_read(hosted, tmp_path):
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV_INTEGRATION)
-    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr="dev https://github.com/acme/demo/pull/5 ana/12")
-    holds_git(Path(stub), tmp_path / "no-such-origin.git")
+    stub = github(tmp_path / "gh", default=ALLOW_DEV_INTEGRATION, pr="dev https://github.com/acme/demo/pull/5 ana/12",
+                  holds="down")
     run = push_guard("gh pr merge 5", hosted, path=stub)
     assert merge_refused(run, "origin's merge freeze") and "could not be read" in run.stderr, run.stderr
     tool = {"tool_name": "mcp__github__merge_pull_request", "cwd": str(hosted),
