@@ -53,6 +53,7 @@ class Status:
     waiting: str = ""  # the tool call its session waits on for an answer, such as Bash, or ""
     waiting_since: float = 0.0
     comment: int | None = None  # the status comment's id, when it came from one
+    watch: dict = field(default_factory=dict)  # its intent, last report, activity and helper agents (watch.published)
 
 
 def computer() -> str:
@@ -76,6 +77,10 @@ def body(status: Status) -> str:
              f"- folders: {', '.join(status.folders) or 'the rest of the repo'}",
              f"- room: {'; '.join(status.room) or 'no reading'}",
              f"- updated {when}, edited in place every {STATUS_EVERY // 60} minutes"]
+    from colony import watch
+
+    if doing := watch.readable(status.watch, status.at):
+        lines.insert(4, f"- doing: {doing}")
     data = {key: value for key, value in vars(status).items() if key != "comment"}
     return "\n".join(lines) + f"\n\n<!-- {MARK} {json.dumps(data, separators=(',', ':'))} -->"
 
@@ -126,6 +131,9 @@ def parse(text: str, comment: int | None = None) -> Status | None:
                               if (text := clean_text(item))])
     status.at, status.waiting_since = clean_number(data.get("at")), clean_number(data.get("waiting_since"))
     status.comment = comment
+    from colony import watch
+
+    status.watch = watch.clean(data.get("watch"))
     return status
 
 
@@ -296,6 +304,9 @@ def mine(config: dict, args, name: str, kind: str, lead: str = "") -> Status:
         doing = watch.activity()
         status.work, status.waiting = doing.get("work", ""), doing.get("waiting", "")
         status.waiting_since, status.branch = doing.get("waiting_since", 0.0), watch.branch(status.work)
+    from colony import watch
+
+    status.watch = watch.published(config["project"]["name"], name)
     return status
 
 

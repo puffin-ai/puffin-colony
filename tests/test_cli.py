@@ -535,6 +535,7 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "check", "ci", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
             "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
             "tidy", "idea", "card", "release", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later",
+            "intent", "report", "watch", "progress", "watchdog",
             "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge")
 
 

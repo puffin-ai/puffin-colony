@@ -1613,6 +1613,9 @@ def take(config: dict, args) -> int:
                               f"{lead}, and take no card in another lead's folders")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
+    from colony import watch
+
+    watch.note_take(config, args.card)  # its intent: working on the card
     start = f"origin/{config['project']['base']}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"origin/{card_branch(args.card)}"],
                       capture_output=True).returncode == 0:
@@ -1884,6 +1887,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile.register(sub)
     from colony import capacity
     capacity.register(sub)
+    from colony import watch  # the watch workstream: intent, report, watch, progress and watchdog
+    watch.register(sub)
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")

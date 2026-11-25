@@ -333,6 +333,9 @@ def learn_helpers(state: dict, comments: list, people: frozenset[str] = frozense
             known[status.name.lower()] = status.lead.lower()
             waiting[status.name.lower()] = [status.lead.lower(), status.waiting, status.waiting_since, status.computer]
             heard[status.name.lower()] = max(heard.get(status.name.lower(), ""), comment.get("updated_at") or "")
+            from colony import watch
+
+            watch.remember(state, status)  # the team watch's view of the helper: its intent, reports and agents
 
 
 def with_helpers(me: Session, state: dict) -> Session:
@@ -848,9 +851,15 @@ def _wait(repo, project, me, digest, clock, stale, heartbeat, status, outbox, si
         if starts is not None:
             state["pending"] += [[line, True] for line in starts()]
         drop_shown(path, state, listed)
+        if me.name == cli.LEAD:
+            from colony import chatter  # a helper's chatter waits for the digest, and prints folded
+
+            state["pending"] = chatter.calm(state["pending"], me.people)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
             lines = [line for line, _ in pending]
+            if me.name == cli.LEAD:
+                lines = chatter.fold(project, name, lines, me.people)
             print("\n".join(lines), flush=True)
             acknowledge(state, lines)
             messages.record_delivered(project, name, lines)
@@ -1010,8 +1019,11 @@ def run(config: dict, args, clock=None) -> int:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
         status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
         lookout = capacity.helper_check(config, me, lead_name(config, args) if named() else cli.LEAD)
+        from colony import watch  # its pulse, its reporting rhythm and its helper agents' time limit
+
+        rhythm = watch.helper_watch(config, me, lead_name(config, args) if named() else cli.LEAD)
         return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox,
-                    silent=lambda state: orders(state) + lookout(state), follow=follow)
+                    silent=lambda state: orders(state) + lookout(state) + rhythm(state), follow=follow)
     waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -1026,12 +1038,14 @@ def run(config: dict, args, clock=None) -> int:
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
     lookout = capacity.lead_check(config, name)
-    silent = lambda state: lookout(state) + orders(state)  # noqa: E731
-    if named():  # only a named lead's helpers post a status
-        from colony import watch
+    from colony import watch  # the team watch: helpers idle without a reason, missed reports, late cards
 
+    team = watch.lead_watch(config, name)
+    silent = lambda state: lookout(state) + orders(state) + team(state)  # noqa: E731
+    if named():  # only a named lead's helpers post a status
         quiet, stuck = silent_check(project, name), watch.stuck_check(name)
-        silent = lambda state: quiet(state) + stuck(state, time.time()) + lookout(state) + orders(state)  # noqa: E731
+        silent = lambda state: quiet(state) + stuck(state, time.time()) + lookout(state) + orders(state) + \
+            team(state)  # noqa: E731
         watch.keep_awake(project, os.environ.get("CLAUDE_PID", ""))
     freeze = None
     if hack(config):
@@ -1186,6 +1200,10 @@ def post(config: dict, args) -> int:
     messages.after_post(config, args, number, to, "the board" if on_board else f"card #{number}", body=body)
     if me != cli.LEAD and card is not None and any(DONE.match(sentence) for sentence in said):
         in_review(config, card)
+    if me != cli.LEAD and any(DONE.match(sentence) for sentence in said):
+        from colony import watch
+
+        watch.note_done(config, card, to)  # it now waits for its next card, on purpose
     return 0
 
 
