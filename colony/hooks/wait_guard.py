@@ -663,15 +663,30 @@ def committed_toml(cwd: str, branches: list[str]) -> str | None:
     return None
 
 
+def project_value(text: str, key: str) -> str:
+    """A string key of a colony.toml's [project] table, such as integration, or ""."""
+    found = re.search(rf'^[ \t]*{re.escape(key)}[ \t]*=[ \t]*"([^"\n]+)"', table(text, "project"), re.M)
+    return found[1].strip() if found else ""
+
+
+def long_lived(text: str) -> list[str]:
+    """The project's other long-lived branches a colony.toml names, as branches.py reads them: [project] integration,
+    [project] release and [release] long_lived."""
+    named = [project_value(text, "integration"), project_value(text, "release")]
+    return [*filter(None, named), *(strings(table(text, "release"), "long_lived") or [])]
+
+
 def protected_branches(cwd: str) -> list[str]:
     """The branches no push may rewrite, and none may update without the person's yes: the base in the working copy
-    and in origin's copy, the repo's default branch, and both copies' [safety] protect."""
+    and in origin's copy, the repo's default branch, and both copies' [safety] protect and long-lived branches
+    ([project] integration and release, [release] long_lived)."""
     text = colony_toml(cwd)
     base, default = project_base(text) or "main", default_branch(cwd)
-    extra = strings(table(text, SAFETY), "protect") or []
+    extra = [*(strings(table(text, SAFETY), "protect") or []), *long_lived(text)]
     committed = committed_toml(cwd, [default, base])
     if committed is not None:
-        extra += [*(strings(table(committed, SAFETY), "protect") or []), *filter(None, [project_base(committed)])]
+        extra += [*(strings(table(committed, SAFETY), "protect") or []), *filter(None, [project_base(committed)]),
+                  *long_lived(committed)]
     return list(dict.fromkeys([base, default, *extra]))
 
 

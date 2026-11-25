@@ -264,6 +264,27 @@ def test_the_protected_branches_are_the_base_the_default_branch_and_protect(on_f
     assert push_guard("git push origin HEAD:refs/heads/main", on_feature).returncode == 0
 
 
+def test_the_projects_other_long_lived_branches_are_protected_from_either_copy(on_feature):
+    """Regression: the guard protected the base, the default branch and [safety] protect alone, so an agent could push
+    straight to [project] integration, [project] release or a [release] long_lived branch such as staging. Each is
+    protected whether the working copy or origin's copy of colony.toml names it."""
+    toml = on_feature / ".colony" / "colony.toml"
+    toml.write_text('[project]\nbase = "main"\nintegration = "dev"\nrelease = "production"\n\n'
+                    '[release]\nlong_lived = ["staging", "qa"]\n')
+    for branch in ("main", "dev", "production", "staging", "qa"):
+        assert push_refused(push_guard(f"git push origin HEAD:refs/heads/{branch}", on_feature),
+                            f"{branch} is protected"), branch
+    assert push_guard("git push origin HEAD:refs/heads/ana/login", on_feature).returncode == 0
+    # Origin's copy widens the list too: an agent's edit of the working copy can't open them again.
+    git_in(on_feature, "add", "-A")
+    git_in(on_feature, "commit", "-q", "-m", "the long-lived branches")
+    git_in(on_feature, "update-ref", "refs/remotes/origin/main", "HEAD")
+    toml.write_text('[project]\nbase = "main"\n')
+    for branch in ("dev", "production", "staging", "qa"):
+        assert push_refused(push_guard(f"git push origin HEAD:refs/heads/{branch}", on_feature),
+                            f"{branch} is protected"), branch
+
+
 @pytest.mark.parametrize("key, value", [("remote.origin.pushurl", "https://github.com/someone/else.git"),
                                         ("url.https://github.com/someone/.pushInsteadOf", "https://github.com/acme/")])
 def test_a_remote_whose_push_address_is_another_repo_is_refused(key, value, on_feature):
@@ -1264,6 +1285,16 @@ def test_safety_protect_dry_run_prints_the_ruleset_and_runs_nothing(tmp_path, mo
     assert [rule["type"] for rule in body["rules"]] == ["deletion", "non_fast_forward", "pull_request"]
     assert "the default branch, dev, release/*" in out and "--reviews 1" in out and "Nothing ran." in out
     assert not (stub / "gh.log").exists()
+
+
+def test_the_ruleset_covers_the_projects_other_long_lived_branches():
+    """Regression: the ruleset from `colony safety protect` covered the default branch, the base and [safety] protect
+    alone, so GitHub let a direct push reach the integration, release and [release] long_lived branches."""
+    config = {"project": {"name": "demo", "base": "main", "integration": "dev", "release": "production"},
+              "release": {"long_lived": ["staging"]}, "safety": {"protect": ["hotfix/*"]}}
+    assert guards.ruleset(config, 0)["conditions"]["ref_name"]["include"] == [
+        "~DEFAULT_BRANCH", "refs/heads/main", "refs/heads/hotfix/*", "refs/heads/dev", "refs/heads/production",
+        "refs/heads/staging"]
 
 
 def test_the_ruleset_never_locks_what_colony_itself_pushes_for_a_release():

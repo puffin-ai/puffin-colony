@@ -869,13 +869,18 @@ RULESET = f"{cli.DISPLAY}: protected branches"  # the ruleset's name on GitHub, 
 
 
 def ruleset(config: dict, reviews: int) -> dict:
-    """The GitHub ruleset that locks the branches the merge guard protects: the default branch, the base and
-    [safety] protect. It refuses a deletion and a force push, and asks for a pull request for every change, with
+    """The GitHub ruleset that locks the branches the merge guard protects: the default branch, the base, [safety]
+    protect and the project's other long-lived branches, [project] integration and release and [release] long_lived
+    (branches.py). It refuses a deletion and a force push, and asks for a pull request for every change, with
     `reviews` approvals from someone other than its author. It never covers what Colony itself pushes for a release:
     the freeze's holds, `refs/colony/holds`, which no branch ruleset reaches, and the branches of its own a partial
     release and a branch sync push, `<project>/release-*` and `<project>/sync-*` (release.py, branches.py), which a
     broad pattern in [safety] protect would otherwise lock."""
     extra = [str(branch) for branch in config.get("safety", {}).get("protect", []) if isinstance(branch, str)]
+    from colony import branches
+
+    named = [config["project"].get("integration"), config["project"].get("release"), *branches.long_lived(config)]
+    extra += [branch.strip() for branch in named if isinstance(branch, str) and branch.strip()]
     include = list(dict.fromkeys(["~DEFAULT_BRANCH", f"refs/heads/{config['project']['base']}",
                                   *(f"refs/heads/{branch}" for branch in extra)]))
     project = config["project"]["name"]
