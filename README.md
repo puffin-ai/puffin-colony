@@ -119,7 +119,7 @@ flowchart TD
 - **A knowledge vault**, `knowledge/`, of typed pages with `[[links]]` that Obsidian reads, checked by `colony check-docs`. See [docs/knowledge.md](docs/knowledge.md).
 - **Rules in three levels**, from a short core in every session to full rules on demand, from the `lean` or `puffin` preset or your own. See [docs/presets.md](docs/presets.md).
 - **A board and a Needs issue.** Cards live on a GitHub Project, and the decisions only you make go to `Needs <you>`, each with a default. See [docs/cycle.md](docs/cycle.md).
-- **Guards.** A wait guard, hooks that tell the lead when a builder is stuck, and a ledger that fails when lint suppressions grow. Colony never pushes to your base branch, except `colony merge` in Hack. See [docs/safety.md](docs/safety.md).
+- **Guards.** A wait guard, hooks that tell the lead when a builder is stuck, and a ledger that fails when lint suppressions grow. Colony never pushes to your base branch, except `colony merge` in Hack, and its merge guard keeps every agent from merging into a branch you haven't allowed. Its kill guard refuses a kill by name or pattern, and after a crash `colony crash-report` says what stopped and why, and `colony resume` reopens it. See [docs/safety.md](docs/safety.md).
 - **Messages.** Agents talk in one-line issue comments: on the card, on the coordination issue between leads, or on your Needs issue. See [docs/messages.md](docs/messages.md).
 
 ## Numbers from the first batch

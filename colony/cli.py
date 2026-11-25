@@ -568,7 +568,11 @@ def cmux_usable() -> bool:
 
 
 def where_to_open(args) -> str:
-    """cmux when it takes us, this terminal for --here or a person at a terminal, else a background session."""
+    """cmux when it takes us, this terminal for --here or a person at a terminal, else a background session. A
+    command that opens several sessions at once, such as `colony resume`, sets `background`, which never takes this
+    terminal."""
+    if getattr(args, "background", False):
+        return "cmux" if cmux_usable() else "background"
     if getattr(args, "here", False):
         return "terminal"
     if cmux_usable():
@@ -596,6 +600,9 @@ def launch(config: dict, args, session: str, role: str, prompt: str) -> int:
     lead = "" if session == LEAD else (getattr(args, "lead_name", "") or os.environ.get(LEAD_ENV, ""))
     env = session_env(person, session, config_dir, lead, account)
     argv = claude_argv(config, role, title, config_dir, prompt, session_settings(config, env, masked=args.dry_run))
+    if resumed := getattr(args, "resume", ""):  # `colony resume`: the session's own conversation, by its id
+        at = argv.index("claude") + 1
+        argv[at:at] = ["--resume", resumed]
     root = str(repo_root())
     mode = where_to_open(args)
     where = {"cmux": f"a new cmux workspace at {root}", "terminal": f"this terminal at {root}",
@@ -1884,6 +1891,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile.register(sub)
     from colony import capacity
     capacity.register(sub)
+    from colony import recover
+    recover.register(sub)  # crash-report and resume
 
     p = sub.add_parser("setup", help="set this repo up in a new claude session in this terminal, or --print the "
                                      "setup prompt for a session already open")
@@ -1937,7 +1946,9 @@ def main(argv=None) -> int:
         if feature and not config["features"][feature]:
             raise ColonyError(f"`{NAME} {args.command}` is off in {mode(config)} mode: set {feature} = true under "
                               f"[features] in {DIR}/{CONFIG_NAME} to turn it on")
-        return args.run(config, args) or 0
+        from colony import recover
+        with recover.tracked(config, args):  # a long command, such as wait, leaves a mark if something kills it
+            return args.run(config, args) or 0
     except ColonyError as e:
         print(f"{NAME}: {e}", file=sys.stderr)
         return 2

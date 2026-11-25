@@ -66,6 +66,13 @@ No agent does these without the person's yes:
 
 A builder that meets one sends it to the lead as a question. Only the lead asks the person.
 
+## Recovery
+
+- **Merges wait for the person.** Push your own branch, as `git push -u origin HEAD:refs/heads/<your branch>`, and open a pull request. The push guard refuses any other form of push, and the merge guard refuses `gh pr merge` unless `[safety] merge_into` in `.colony/colony.toml` names the pull request's base. When either refuses, ask the person: never work around it.
+- **Close a session by its name.** `colony stop <name>` ends one finished session, and no other. Never kill by name or pattern, such as `pkill` or `killall`: the kill guard refuses it, because one such line can end every Claude Code session on the computer. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
+- **A background task that stopped.** When the end of a turn says your `colony wait`, or another background command of yours, stopped without finishing, start it again at once with run_in_background.
+- **After a crash, look, then reopen.** The lead runs `colony crash-report`, which says which sessions stopped, when each last showed life, and the likely cause, then `colony resume`, which reopens each one that stopped unexpectedly with its conversation, account and settings, and tells it it was restarted. Tell the person the cause in one line.
+
 ## Talking with the person
 
 Only the lead talks with the person, in its chat and on the Needs issue. Every message to the person:
@@ -186,7 +193,7 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 2. Make the change on its own branch, in its own worktree, inside the card's folders: run `colony take <n>`, then the command it prints, `git fetch origin && git worktree add {worktrees}/{project}-<name>-<n> -b <name>/<n> origin/{base}`, which starts from the card's image branch when it has one. Then run `{install}` there. Work only there.
 3. Write one test per done-when result, and no more. A bug fix still carries its regression test, and a test the repo's own rules demand still goes in; a style change needs none. For touch or layout work, check it in a browser at phone width, 390×844.
 4. Run `colony fast-check` once, when the change and its tests are done, and fix what it reports; run it again only after a fix. It runs `{fast_check}` for the check areas your branch changes, and ends on one line: `fast check: passed …`, `fast check: failed …`, or `fast check: not run …` when the change touches no check area, such as a docs-only card, or the output only says NOT RUN. When it ends on `fast check: running in the background …`, keep working: run `colony check watch <run> --until-failure` as a background command, fix its first failure at once, and use its last line in the done line.
-5. Commit, run `git push origin <name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`. A `not run` line goes in as it is: never call a check that ran nothing a pass.
+5. Commit, run `git push -u origin HEAD:refs/heads/<name>/<n>`, and post the done line at once, as the card's `predicted:` minutes assume: `colony post <n> lead "done, <name>/<n> pushed, <the fast check's last line>"`. A `not run` line goes in as it is: never call a check that ran nothing a pass.
 6. Take the next card at once.
 
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.

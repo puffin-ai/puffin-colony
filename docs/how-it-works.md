@@ -278,5 +278,7 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `~/.colony/<project>/names.json` | The session names the waits learned from GitHub, which `colony post` and `colony say` check a recipient against |
 | `~/.colony/<project>/<session>-delivered.json`, `<session>-acked.json` | The lines shown to a session, and its last `colony ack`, for redelivery after a compaction or restart |
 | `~/.colony/<project>/<lead>-starts.json` | The lead's start lines that wait for an acknowledgement |
+| `~/.colony/<project>/sessions/<name>.json` | The session ledger: each session's Claude Code id, start folder, account and last sign of life, which `colony crash-report` and `colony resume` read |
+| `~/.colony/<project>/tasks/<pid>.json` | A long background command while it runs, such as `colony wait`; one left behind stopped from outside |
 
 Every command, with one line each, is in [commands.md](commands.md).

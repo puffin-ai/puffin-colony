@@ -129,7 +129,7 @@ On a yes to `pointer`, add `@{dir}/core.md` at the top of `CLAUDE.md` and `` Thi
 
 ## 9. Open the pull request
 
-- Make a branch `{name}/setup` from `origin/<base>`, commit only the files you wrote with the message `chore: set up {display}`, and push that branch. Never push to the base branch.
+- Make a branch `{name}/setup` from `origin/<base>`, commit only the files you wrote with the message `chore: set up {display}`, and push that branch: `git push -u origin HEAD:refs/heads/{name}/setup`. Never push to the base branch.
 - Open the PR into the base branch with `gh pr create`. Its body lists each file and one line on what it holds, the board link, the last line of `{name} check-docs`, and any follow-up work.
 - End the session's work with exactly this message, its 3 lines filled in, and nothing after it:
 

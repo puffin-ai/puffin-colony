@@ -18,13 +18,18 @@ Some guarantees are locks in Colony's code. Some are hooks Claude Code runs on e
 
 ## Hooks
 
-`colony hooks install` merges three hooks into `.claude/settings.json`, and keeps every hook and setting already there. Run it again to bring Colony's hooks up to date. `--dry-run` shows what it would write.
+`colony hooks install` merges Colony's hooks into `.claude/settings.json`, and keeps every hook and setting already there. Run it again to bring Colony's hooks up to date. `--dry-run` shows what it would write.
 
 | Hook | When it runs | What it does |
 | --- | --- | --- |
 | The wait guard | Before every Bash call | Refuses a foreground sleep over 10 seconds, a loop that sleeps, an endless loop, `watch`, `gh run watch` and `gh pr checks --watch`. Its message says to use `run_in_background` or `colony wait`. A command sent to the background passes. |
+| The push guard | Before every Bash call, in the background too | Lets a push run in two forms alone, onto a branch of the agent's own, and refuses every other. See [The push guard](#the-push-guard). |
+| The merge guard | Before every Bash call, and before a GitHub tool merges a pull request or commits onto a branch | Refuses a merge you haven't allowed. See [The merge guard](#the-merge-guard). |
+| The kill guard | Before every Bash call, in the background too | Refuses a kill by name or pattern. See [The kill guard](#the-kill-guard). |
 | `colony hooks asking` | When a builder waits on a permission pop-up | Posts `urgent: <builder> waits for a person's approval on <computer>` for its lead, at most once per 10 minutes. It drops the pop-up's text, which could quote a command, a path or a token. |
 | `colony hooks stopped` | When a turn ends on an error | Posts `<session> stopped on an error (<code>) at <time>` for its lead, or for the person when the lead stops. It names the error's code word only, never its text. |
+| `colony hooks ended` | When a session ends | Notes in the session ledger when it ended and Claude Code's reason, so the crash report can tell a person's exit from a signal or a crash. |
+| `colony hooks tasks` | When a turn ends | Stamps the session ledger. When one of this session's background commands, such as its `colony wait`, stopped without finishing, it keeps the session going once with a note to start it again. See [Recovery](#recovery). |
 
 In Hack and Solo, a prompt hook also runs when you send a prompt. It prints the lines `colony wait` saved for this session, then empties that list. It makes no network call while the wait runs, and otherwise one ETag-cached `gh api` call at most every 30 seconds.
 
@@ -32,7 +37,88 @@ A posting hook's line that `gh` can't post waits in `~/.colony/<project>/outbox.
 
 The prompt hook also shows a session its standing orders once when it starts, and any change to them since. For a lead, it adds a one-time reminder when its person has no personal profile yet, and a reminder to offer a correction as a standing order when the person's message reads like one. See [profiles.md](profiles.md#live-changes).
 
-The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3`. The two posting hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+The wait guard is a standalone script, copied to `.colony/hooks/wait_guard.py`, and runs with any `python3` from 3.9 on. The push, merge and kill guards live in the same script, and run in every session in the repo, your own among them. The other hooks run only in a Colony session, one with `$COLONY_SESSION` set, and do nothing in your own sessions.
+
+### The push guard
+
+Working out exactly where git will push, through remotes, refmaps, `push.default`, upstreams, push URLs, URL rewrites, config and environment variables, is a game a guard loses. So the push guard allows one form of push, with its destination spelled out in full, and refuses every other:
+
+```
+git push [-u] [--force-with-lease] [--dry-run] <remote> HEAD:refs/heads/<branch>
+git push [-u] [--force-with-lease] [--dry-run] <remote> <local branch>:refs/heads/<branch>
+```
+
+A builder pushes its branch as `git push -u origin HEAD:refs/heads/<branch>`. A full destination means git applies no refmap and ignores `push.default` and the upstream, so git config can't send the push to another branch.
+
+- **The remote** is a plain name this clone's `git remote` lists, never a URL or a path, with no `remote.<name>.push` or `remote.<name>.mirror` in its git config, and its push address, after its `pushurl` and git's `pushInsteadOf`, is the repo it fetches from.
+- **The branch** is a plain branch name, never a protected one: the base, the repo's default branch (origin's `HEAD`), or a branch or pattern in `[safety] protect`. For `HEAD`, the branch checked out must not be protected either, and nothing earlier on the line may change it.
+- **Nothing else** joins them but `-q` and `-v`, which change only what git prints. A push is refused whatever its words when its line sets a `GIT_`, `HOME` or `XDG_CONFIG_HOME` variable, moves to another folder (`cd`, `git -C`, `env -C`, `sudo -D`), points git elsewhere (`git -c`, `--config-env`, `--git-dir`, `--work-tree`), or runs a `git config`, `git branch` or `git remote` before it.
+
+So `git push --force`, `git push` alone, a short destination such as `git push origin feature`, `--all`, `--tags`, `--delete`, a `+` refspec and a push to a URL are all refused, and the message shows the allowed form. The merge guard also refuses a `git config` that sets a remote's push refspec or mirror, `push.default`, `remote.pushDefault`, or a branch's `merge`, `remote` or `pushRemote`. Work reaches a protected branch through a pull request, which you merge, or which an agent merges under the merge guard's rules. Hack's `colony merge <branch>` doesn't go through the guard: it follows `[gate] merge_after_fast_check`, which setup asks you.
+
+### The merge guard
+
+No agent merges into any branch without your yes. By default agents open pull requests, and you merge them. The guard refuses:
+
+- `gh pr merge`, including `--auto`, unless the pull request is in this repo and its base branch is one `[safety] merge_into` allows. To check, it asks `gh pr view` for the base and the pull request's address. With `merge_into` empty, the default, it refuses every one without asking.
+- A GitHub tool that merges a pull request, such as the GitHub MCP server's `merge_pull_request`, by the same rule.
+- A `gh api` call that merges: a `PUT` to `pulls/<n>/merge`, a `POST` to `merges`, or a GraphQL `mergePullRequest`. Only `gh pr merge` may merge, because the guard can check its base.
+- A GitHub tool that commits straight onto a protected branch name, such as `push_files` or `create_or_update_file` with `branch` set to the base, or with no branch at all. In another repo than origin's, a protected branch name gets no yes.
+- A command that changes what the guard reads as origin: `git update-ref` or `git symbolic-ref` on `refs/remotes/`, a fetch into `refs/remotes/` by hand, `git remote set-head` with a branch, `git remote set-url`, `rename` or `remove` of `origin`, `git config --edit`, and `git config` that changes a remote's URL, a fetch refspec, a URL rewrite or an include, and a `git -c` that reroutes a push. Ask the person to run these.
+
+The protected branches are the base, the repo's default branch (origin's `HEAD`), and the branches and patterns in `[safety] protect`. That makes the default safe in any repo, whatever its branches are called. A force push, a deletion or a mirror push of a protected branch stays refused even when `merge_into` names it.
+
+**Where the yes comes from.** To let agents merge into a branch, such as an integration branch `dev`, add it to `[safety] merge_into` in `.colony/colony.toml`, and merge that change into the repo's default branch on GitHub. The guard counts a branch only when both the working copy and the copy on GitHub's default branch name it, and it reads GitHub's copy with `gh api`, never from a file or a ref on this computer, which an agent could edit. No other branch's copy counts, not even the base's, since an agent allowed to push there could write its own yes. When GitHub can't be read, as with `gh` signed out or offline, nothing is allowed. A branch you take out of your working copy is refused at once.
+
+**Where origin is.** The guard knows this repo by where git says origin is, after git's URL rewrites, never by `[project] repo`. A yes holds only for a pull request in origin's repo, and comes from that repo's own default branch.
+
+**Where a line hides a merge.** The guard follows `sh -c`, `eval`, `sudo`, and git and gh aliases to the command they run, and refuses an `xargs` or a shell alias that builds a push or a merge. A `gh pr merge` that shares its line with a `cd`, a wrapper that moves it, such as `env -C` or `sudo -D`, or a `GH_` or `GIT_` variable is refused: run it on a line of its own, with `--repo` for another repo.
+
+**What it costs.** A merge into an allowed branch makes one `gh api` call, and a push makes none. The protected list itself comes from this computer: the working copy, origin's `HEAD` and origin's copy of colony.toml, so an agent that edits the working copy's `base` or `protect` can narrow it, though never below the default branch.
+
+### What a hook can't do
+
+The guards stop an agent's honest mistakes, and the easy ways around them. They can't stop an agent that sets out to get past them: one that edits `.claude/settings.json`, the guard script or `.git/config` by hand, or runs a script the guard never reads, can switch them off. An agent also acts with your GitHub login, so GitHub can't tell its push or merge from yours.
+
+The real lock is on the code host: branch protection, or a ruleset, that refuses a direct push, a force push and a deletion on the base and the other protected branches, and asks for a pull request. When someone else on the team reviews, require their approval too, since GitHub never counts an author's own. `colony safety protect` turns that on for you through `gh api`, and `--dry-run` prints what it would set first. See [Second locks you should add](#second-locks-you-should-add).
+
+A local `git merge` changes nothing on GitHub until a push, and the guard checks that push, so a lead can still merge cards into its batch worktree.
+
+### The kill guard
+
+A kill by name or pattern matches more than anyone means. On macOS, `pkill -f "colony wait" -U $(id -u) -n` reads each word after the pattern as one more pattern, and in one real run it ended every Claude Code session, the terminal app's helpers and every background task on the computer. The kill guard refuses:
+
+- `pkill`, `killall`, `killall5` and `skill`, in any form, with `sudo`, `timeout` or `xargs` in front, or inside `bash -c` and `eval`;
+- `fuser -k`, `taskkill /IM` or `/FI`, and PowerShell's `Stop-Process -Name` or a pipe into `Stop-Process`;
+- a `kill` whose process ids come from a search of the running processes on the same line, such as `kill $(pgrep -f x)`, `pgrep x | xargs kill`, `kill -9 $(lsof -ti :3000)` or a loop over `ps` output;
+- `kill -1`, `kill 0` and a negative id such as `kill -- -4242`, which signal every process you own or a whole process group.
+
+It lets a kill of one known process run: a number, such as `kill 4242`, a job such as `kill %1`, or `$!`.
+
+The kill, push and merge guards read every line of a command, a here-document's body too. Beside that, a line whose raw text names a kill, a `git push` or a `gh` merge anywhere must be one plain command of that kind: no `;`, `&`, `|`, second line, `$(`, backtick, here-document, `<(` or `>(`, no `$'`, `$"` or backslash, whose quoting the guard's reader may read otherwise than the shell, and no `eval`, `sh -c`, wrapper, assignment, alias or function around it. The raw text names exactly one, at the very start of the line, so the command it names is the one the guard reads. Even `2>&1` is refused on such a line. Quoting the shell reads otherwise can hide a command from the guard's reading, as a here-document body line such as `don't` can, and one plain command leaves nothing to hide. So run each push, each kill by its exact id, and each pull request step as its own plain command. Text that only names one is refused too, such as `grep -rn pkill`, `echo gh pr merge 5`, or a commit message that names `git push`. Write such text to a file with your file tool and pass the file, and search with your search tool; the refusal says so. Only the wait guard skips here-document bodies, which hide nothing it guards.
+
+To close a finished Colony session, run `colony stop <name>`, which finds the session by its name in `claude agents` and ends that one process. For any other process, find the one you mean, check it with `ps -p <pid> -o pid=,command=`, and kill that number alone.
+
+## Recovery
+
+A crash, a kill or a sleeping laptop can stop many sessions at once. Colony keeps enough on the computer to say what stopped, why, and to bring it back.
+
+**The session ledger.** Each Colony session keeps one file, `~/.colony/<project>/sessions/<name>.json`, which its own hooks write: its Claude Code session id, the folder it started in, its transcript's path, its account, person and lead, and when it last showed life. The session's start, each prompt and the end of each turn stamp it. A turn that ends on an error adds the error's code word, the end of the session adds Claude Code's reason, and `colony stop` adds that it stopped the session on purpose. The ledger holds Colony's own fields alone, never a prompt, a command or a token.
+
+**`colony crash-report`** reads the ledger, `claude agents` and the end of each transcript. For each session of the last 24 hours, `[recover] within_hours`, it says whether it runs, stopped on purpose, or stopped unexpectedly, when it last showed life and what showed it: a hook, its transcript, its `colony wait` or its heartbeat. For an unexpected stop it names the likely cause, the strongest first:
+
+- the computer started again after the session's last sign of life;
+- some session ran a kill by name or pattern within two minutes before it;
+- it stopped within 90 seconds of other sessions, so one event stopped them all;
+- its last turn ended on a usage limit, a sign-in failure or another API error;
+- Claude Code ended it with no exit by its person, as a signal or a closed window does;
+- it stopped during a tool call, which may have ended it.
+
+**`colony resume`** reopens each session that stopped unexpectedly, leads first, with `claude --resume <id>`: the same conversation, on the account that holds it, with its role's settings, in the folder it started in, in cmux or the background. Its first line says it was restarted, when, the likely cause, and what to start again. It reopens each session once, and leaves one stopped on purpose unless you name it. `--dry-run` shows each command first.
+
+**Background commands.** A long command a session runs in the background, `colony wait`, `batch`, `fast-check`, `merge` or `retro`, keeps a file, `~/.colony/<project>/tasks/<pid>.json`, while it runs, and removes it when it ends, on an error too. A file whose process is gone means something stopped the command from outside: the agent tool, a kill or a crash. At the end of the owning session's next turn, the Stop hook keeps the session going once, with a note to start the command again, so a session never sits without its `colony wait`. The crash report lists such commands too.
+
+**Services.** List the local services your work needs as `[services.<name>]` tables, each with a check and a command that starts it again. The crash report names each one whose check fails, and `colony resume` runs its restart command, then its check again. See [configuration.md](configuration.md#recover).
 
 ## The suppressions ledger
 
@@ -68,7 +154,7 @@ The core and the stop list are instructions, not locks: a model can still get on
 
 ## Second locks you should add
 
-- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused. In Hack, that also refuses `colony merge`'s push, so either leave the base open for the event or set `merge_after_fast_check = false`.
+- **Protect your base branch on GitHub.** Require a pull request and a review. Then even a mistaken push is refused. `colony safety protect` sets a ruleset for the base, the default branch and `[safety] protect`, which refuses direct, forced and deleting pushes; `--reviews 1` also asks for another person's approval. In Hack, that also refuses `colony merge`'s push, so either leave the base open for the event or set `merge_after_fast_check = false`.
 - **Start `colony` from a shell without `ANTHROPIC_API_KEY`.**
 - **Keep `.env` files and `check_env_file` out of git.**
 - **Run `--dry-run` first,** for setup and for your first batch.

@@ -358,6 +358,31 @@ Optional. Each `[locks.<name>]` table sets one named lock's `slots`, how many ru
 slots = 1
 ```
 
+## `[safety]`
+
+What the merge guard lets agents land, and which branches it protects. See [safety.md](safety.md#the-merge-guard). Both keys take branch names and patterns, such as `release/*`. A table with neither key, or no table, is the safe default: agents merge nothing and open pull requests.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `merge_into` | `[]` | The branches agents may merge pull requests into, such as `["dev"]`. It never allows a push: the push guard refuses every push into a protected branch, named in `merge_into` or not. The guard counts a branch only when both this working copy and the copy on GitHub's default branch name it, read with `gh api`, so it takes effect once you merge it into the default branch. When GitHub can't be read, nothing is allowed. A force push or a deletion of the base stays refused. |
+| `protect` | `[]` | More branches no agent may push to, such as `["staging", "release/*"]`. The base and the repo's default branch are always protected. `colony safety protect` puts the same branches under a GitHub ruleset. |
+
+## `[recover]`
+
+What `colony crash-report` and `colony resume` look at. See [safety.md](safety.md#recovery).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `within_hours` | `24` | How far back both look for sessions that showed life. `--within` overrides it. |
+
+Both also read the local services your work needs, one `[services.<name>]` table each: `check`, a shell command that exits 0 while the service is up, and an optional `restart`, which starts it again. The crash report names each one whose check fails, and `colony resume` runs its `restart`, then its check again. Each runs in the repo's top folder, the check for up to 30 seconds and the restart for up to 5 minutes. Other keys of `[services]` are other commands' and are left alone.
+
+```toml
+[services.db]
+check = "pg_isready -h localhost -p 5432"
+restart = "docker compose up -d db"
+```
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.
