@@ -16,7 +16,7 @@ At the end of the owning session's next turn, the Stop hook tells it once to sta
 purpose, or stopped unexpectedly, when it last showed life and from what, and the likely cause: the computer started
 again, a kill by pattern on some session's line just before, many sessions stopping at once, a usage limit or another
 API error, a signal, or a tool call in flight. It also lists the stopped background tasks and each service in
-`[recover] services` whose check fails.
+`[services.<name>]` whose check fails.
 
 `colony resume` reopens every session that stopped unexpectedly, each with `claude --resume <id>` on its own account
 and its role's settings, in the folder it started in, in cmux or the background, with a first line that says it was
@@ -530,7 +530,7 @@ def survey(config: dict, hours: float, now: float | None = None) -> list[Seen]:
 
 @dataclass
 class Service:
-    """One of [recover] services: a local service, its check and the command that starts it again."""
+    """One of the [services.<name>] tables: a local service, its check and the command that starts it again."""
 
     name: str
     check: str
@@ -538,13 +538,16 @@ class Service:
 
 
 def services(config: dict) -> list[Service]:
-    """[recover] services, each a table with name, check and an optional restart."""
+    """The [services.<name>] tables, each with a `check` and an optional `restart`. A key of [services] that is no
+    table, such as a switch another command reads, is left out, and so are a table's other keys."""
     found = []
-    for item in config.get("recover", {}).get("services", []) or []:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("check"), str):
-            raise cli.ColonyError("each [[recover.services]] needs a name and a check, such as "
-                                  'name = "db" and check = "pg_isready -h localhost"')
-        found.append(Service(item["name"], item["check"], str(item.get("restart") or "")))
+    for name, item in (config.get("services") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        if not isinstance(item.get("check"), str):
+            raise cli.ColonyError(f'[services.{name}] needs a check, a command that exits 0 while the service is up, '
+                                  'such as check = "pg_isready -h localhost"')
+        found.append(Service(str(name), item["check"], str(item.get("restart") or "")))
     return found
 
 

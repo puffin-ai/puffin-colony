@@ -95,6 +95,7 @@ See [hackathon.md](hackathon.md#codex-and-other-agents).
 | --- | --- |
 | `colony suppressions [--update]` | Counts lint and type suppressions in each file against `.colony/suppressions.json`, and fails when a count grows. `# noqa` counts in any case, and stylesheets count `@ts-ignore`, `@ts-expect-error` and skipped tests too. `--update` lowers the record, and the first run writes it. |
 | `colony hooks install` | Merges Colony's hooks into `.claude/settings.json`, keeping the hooks already there, copies the wait guard, and writes `.colony/bin/colony`, the launcher pinned to the version that ran. |
+| `colony safety protect [--reviews <n>] [--dry-run]` | The person turns on the code host's own lock, which no agent can switch off from its computer, as it can a hook: one GitHub ruleset, `Puffin Colony: protected branches`, for the default branch, the base and `[safety] protect`. It refuses a direct push, a force push and a deletion, and asks for a pull request with `--reviews` approvals from someone other than its author, 0 by default; a team where someone else reviews should pass 1. Run again, it brings the ruleset up to date. `--dry-run` prints the ruleset and runs nothing. GitHub refuses it on a private repo whose plan has no rulesets, and it says so. In Hack, it warns that `colony merge` can't push the base under it. |
 | `colony upgrade [--to v<version>]` | On a new branch, moves the launcher's pin to the newest release (or the one named), has that release refresh the files Colony copied into the repo, and commits, ready for a PR. |
 | `colony hooks asking` | The Notification hook. Posts an urgent line for the lead when a builder waits on a permission pop-up. Claude Code runs it. |
 | `colony hooks stopped` | The StopFailure hook. Posts a line when a turn ends on an error. Claude Code runs it. A line either hook can't post waits in `~/.colony/<project>/outbox.json` until the next hook or wait posts it. |
@@ -114,7 +115,7 @@ See [safety.md](safety.md#recovery).
 
 | Flag | Where | What it does |
 | --- | --- | --- |
-| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `resume` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
+| `--dry-run` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, `tidy`, `tools`, `fix-links`, `hooks install`, `upgrade`, `resume`, `safety protect` | Prints the plan and runs nothing. A dry run shows env names, never their values. |
 | `--here` | `colony`, `join`, `research`, `spec` | Opens in this terminal even when cmux takes commands. |
 | `--person <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch`, `retro`, and `needs` | Whose accounts to use, when `colony.toml` names several people. On `needs`, whose decision it is. |
 | `--account <name>` | `colony`, `join`, `open`, `research`, `spec`, `batch` | The `[accounts.<name>]` table to run on, instead of the one Colony picks. |

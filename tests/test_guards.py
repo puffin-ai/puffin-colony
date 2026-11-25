@@ -475,18 +475,58 @@ def on_main_no_gh(root: Path) -> str:
     return str(folder)
 
 
-def test_the_base_the_default_copy_names_counts_unless_agents_may_push_to_it(hosted, tmp_path):
+def test_only_the_copy_on_the_default_branch_counts_never_the_bases(hosted, tmp_path):
+    """An agent that may push to the base could write its own yes there, so the base's copy counts for nothing."""
     (hosted / ".colony" / "colony.toml").write_text('[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev", "main"]\n')
     default = '[project]\nbase = "dev"\n'
-    on_dev = '[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev"]\n'
+    on_dev = '[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev", "main"]\n'
     stub = github(tmp_path / "a", default=default, branches={"dev": on_dev})
-    assert push_guard("git push origin dev", hosted, path=stub).returncode == 0
-    assert "contents/.colony/colony.toml?ref=dev" in (tmp_path / "a" / "gh.log").read_text()
-    # Once the default copy lets agents push to dev, dev's own copy could be an agent's: only the default copy counts.
-    default = '[project]\nbase = "dev"\n\n[safety]\nmerge_into = ["dev"]\n'
-    stub = github(tmp_path / "b", default=default, branches={"dev": '[safety]\nmerge_into = ["dev", "main"]\n'})
-    assert push_guard("git push origin dev", hosted, path=stub).returncode == 0
+    assert merge_refused(push_guard("git push origin dev", hosted, path=stub), "this push updates dev")
     assert merge_refused(push_guard("git push origin main", hosted, path=stub), "this push updates main")
+    assert "?ref=" not in (tmp_path / "a" / "gh.log").read_text()
+    stub = github(tmp_path / "b", default=on_dev)
+    assert push_guard("git push origin dev", hosted, path=stub).returncode == 0
+
+
+DESTINATIONS = [
+    "git push https://github.com/someone/else.git main",  # a URL, not origin
+    "git push fork main",  # another remote
+    "git push git@github.com:someone/else.git HEAD:main",
+]
+
+
+@pytest.mark.parametrize("command", DESTINATIONS)
+def test_a_yes_holds_only_for_a_push_whose_real_destination_is_origins_repo(command, hosted, tmp_path):
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
+    git_in(hosted, "remote", "add", "fork", "https://github.com/someone/else.git")
+    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
+    assert merge_refused(push_guard(command, hosted, path=stub), "this push updates main"), command
+    assert push_guard("git push https://github.com/acme/demo.git main", hosted, path=stub).returncode == 0
+
+
+@pytest.mark.parametrize("key, value, command", [
+    ("remote.origin.pushurl", "https://github.com/someone/else.git", "git push origin main"),
+    ("url.https://github.com/someone/.pushInsteadOf", "https://github.com/acme/", "git push origin main"),
+    # origin moved elsewhere, and the push names the real repo's URL: it is no longer origin's repo
+    ("remote.origin.url", "https://github.com/someone/demo.git", "git push https://github.com/acme/demo.git main"),
+])
+def test_a_push_that_git_config_sends_elsewhere_gets_no_yes(key, value, command, hosted, tmp_path):
+    """Git config written outside the guard, such as by a file edit, changes where a push really goes: the guard
+    reads where it goes, never just the name origin."""
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
+    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
+    assert push_guard(command, hosted, path=stub).returncode == 0
+    git_in(hosted, "config", key, value)
+    run = push_guard(command, hosted, path=stub)
+    assert merge_refused(run, "this push updates main"), (key, run.stderr)
+
+
+def test_a_push_whose_line_reroutes_it_with_dash_c_is_refused(hosted, tmp_path):
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
+    stub = github(tmp_path / "gh", default=ALLOW_MAIN)
+    for command in ("git -c remote.origin.pushurl=https://github.com/someone/else.git push origin main",
+                    "git -c include.path=/tmp/elsewhere.cfg push origin main"):
+        assert merge_refused(push_guard(command, hosted, path=stub), "`git -c"), command
 
 
 def test_protect_adds_branches_and_patterns_to_the_ones_no_push_rewrites_or_updates(hosted, tmp_path):
@@ -502,6 +542,10 @@ def test_protect_adds_branches_and_patterns_to_the_ones_no_push_rewrites_or_upda
 
 
 FORGES = [
+    "git config --edit",
+    "git config -e --local",
+    "git config include.path /tmp/elsewhere.cfg",
+    "git config --add includeIf.gitdir:~/work/.path /tmp/elsewhere.cfg",
     "git update-ref refs/remotes/origin/main 1234567",
     "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/ana/login",
     "git fetch . ana/login:refs/remotes/origin/main",
@@ -600,7 +644,9 @@ def test_a_pr_merge_runs_only_into_a_branch_merge_into_names_in_this_repo(hosted
 
 @pytest.mark.parametrize("command", ["cd /tmp && gh pr merge 5", "GH_REPO=someone/else gh pr merge 5",
                                      "export GH_REPO=someone/else; gh pr merge 5", "env -C /tmp gh pr merge 5",
-                                     "GH_HOST=example.com gh pr merge 5", "HOME=/tmp gh pr merge 5"])
+                                     "GH_HOST=example.com gh pr merge 5", "HOME=/tmp gh pr merge 5",
+                                     "GIT_DIR=/tmp/x/.git gh pr merge 5", "export GIT_WORK_TREE=/tmp; gh pr merge 5",
+                                     "sudo -D /tmp gh pr merge 5", "env --chdir=/tmp gh pr merge 5"])
 def test_a_pr_merge_that_shares_its_line_with_another_repo_or_folder_is_refused(command, hosted, tmp_path):
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV)
     stub = github(tmp_path / "gh", default=ALLOW_DEV, pr="dev https://github.com/acme/demo/pull/5")
@@ -650,9 +696,13 @@ def test_a_github_tools_merge_and_commit_onto_a_protected_branch_are_refused(hos
     assert merge_refused(tool_guard("mcp__github__push_files", {**commit, "branch": ""}, hosted), "`push_files` names "
                                                                                                     "no branch")
     for tool, call in (("mcp__github__push_files", {**commit, "branch": "ana/login"}),
-                       ("mcp__github__create_or_update_file", {**commit, "owner": "someone", "repo": "else"}),
+                       ("mcp__github__create_or_update_file", {**commit, "owner": "someone", "repo": "else",
+                                                               "branch": "ana/login"}),
                        ("mcp__github__get_file_contents", commit), ("mcp__other__search", {})):
         assert tool_guard(tool, call, hosted).returncode == 0, tool
+    # A protected branch name in another repo gets no yes: the guard can't read that repo's person's.
+    assert merge_refused(tool_guard("mcp__github__create_or_update_file", {**commit, "owner": "someone", "repo": "else"},
+                                    hosted), "`create_or_update_file` commits onto main in someone/else")
     (hosted / ".colony" / "colony.toml").write_text(ALLOW_MAIN)
     stub = github(tmp_path / "b", default=ALLOW_MAIN, pr="main https://github.com/acme/demo/pull/5")
     assert tool_guard("mcp__github__merge_pull_request", merge, hosted, stub).returncode == 0
@@ -1341,3 +1391,66 @@ def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
 def test_a_real_here_document_or_shift_still_reads_as_text(command):
     run = guard(json.dumps({"tool_input": {"command": command}}))
     assert (run.returncode, run.stderr) == (0, ""), command
+
+
+# colony safety protect: the code host's own lock
+
+PROTECTED = {"project": {"name": "demo", "repo": "acme/demo", "base": "dev", "mode": "startup"},
+             "safety": {"protect": ["release/*"]}, "gate": {}}
+
+
+def rulesets_stub(folder: Path, existing: str = "", fails: bool = False) -> Path:
+    """A stub gh for GitHub's rulesets: it lists `existing` as the ruleset's id, keeps the body it is sent in
+    body.json, or refuses it, and logs each call."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "gh").write_text(f'''#!/bin/sh
+D="{folder}"
+echo "$@" >> "$D/gh.log"
+case "$*" in
+  *--jq*) printf '%s\\n' "{existing}"; exit 0 ;;
+  *"--input -"*) {'echo "Upgrade to GitHub Pro" >&2; exit 1' if fails else 'cat > "$D/body.json"; echo "{{}}"'} ;;
+esac
+''')
+    (folder / "gh").chmod(0o755)
+    return folder
+
+
+def test_safety_protect_dry_run_prints_the_ruleset_and_runs_nothing(tmp_path, monkeypatch, capsys):
+    stub = rulesets_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(stub), os.environ["PATH"]]))
+    assert guards.protect(PROTECTED, argparse.Namespace(reviews=0, dry_run=True)) == 0
+    out = capsys.readouterr().out
+    body = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    assert body["name"] == "Puffin Colony: protected branches" and body["enforcement"] == "active"
+    assert body["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH", "refs/heads/dev", "refs/heads/release/*"]
+    assert [rule["type"] for rule in body["rules"]] == ["deletion", "non_fast_forward", "pull_request"]
+    assert "the default branch, dev, release/*" in out and "--reviews 1" in out and "Nothing ran." in out
+    assert not (stub / "gh.log").exists()
+
+
+def test_safety_protect_makes_the_ruleset_once_then_brings_it_up_to_date(tmp_path, monkeypatch, capsys):
+    for existing, call in (("", "api -X POST repos/acme/demo/rulesets --input -"),
+                           ("42", "api -X PUT repos/acme/demo/rulesets/42 --input -")):
+        stub = rulesets_stub(tmp_path / f"bin{existing}", existing)
+        monkeypatch.setenv("PATH", os.pathsep.join([str(stub), os.environ["PATH"]]))
+        assert guards.protect(PROTECTED, argparse.Namespace(reviews=1, dry_run=False)) == 0
+        assert (stub / "gh.log").read_text().splitlines()[-1] == call
+        body = json.loads((stub / "body.json").read_text())
+        assert body["rules"][2]["parameters"]["required_approving_review_count"] == 1
+    assert "updated the ruleset: https://github.com/acme/demo/rules" in capsys.readouterr().out
+
+
+def test_safety_protect_says_when_github_refuses_and_warns_hack_about_colony_merge(tmp_path, monkeypatch, capsys):
+    stub = rulesets_stub(tmp_path / "bin", fails=True)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(stub), os.environ["PATH"]]))
+    hack = {**PROTECTED, "project": {**PROTECTED["project"], "mode": "hack"}, "gate": {"merge_after_fast_check": True}}
+    assert guards.protect(hack, argparse.Namespace(reviews=0, dry_run=False)) == 1
+    captured = capsys.readouterr()
+    assert "GitHub refused the ruleset: Upgrade to GitHub Pro" in captured.err
+    assert "merge_after_fast_check = false" in captured.out
+    with pytest.raises(cli.ColonyError, match="--reviews is a count"):
+        guards.protect(PROTECTED, argparse.Namespace(reviews=-1, dry_run=True))
+    parser = argparse.ArgumentParser()
+    guards.add_commands(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["safety", "protect", "--reviews", "1", "--dry-run"])
+    assert (args.run, args.reviews, args.dry_run) == (guards.protect, 1, True)

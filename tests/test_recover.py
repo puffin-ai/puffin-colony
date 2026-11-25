@@ -362,8 +362,9 @@ def test_resume_tells_a_session_which_of_its_tasks_stopped_and_starts_failed_ser
                                                                                       tmp_path, capsys):
     write_task(config, dead_pid(), "batch", session="builder-1", claude="id-builder-1", label="colony batch --name b1")
     up = tmp_path / "db-up"
-    config["recover"] = {"services": [{"name": "db", "check": f"test -f '{up}'", "restart": f"touch '{up}'"},
-                                      {"name": "cache", "check": "false"}]}
+    config["services"] = {"builtin": False,  # a switch another command reads, which is no service
+                          "db": {"check": f"test -f '{up}'", "restart": f"touch '{up}'", "every_minutes": 5},
+                          "cache": {"check": "false"}}
     recover.crash_report(config, argparse.Namespace(within=None, json=False))
     out = capsys.readouterr().out
     assert "- builder-1's `colony batch --name b1`, started" in out

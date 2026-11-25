@@ -823,3 +823,68 @@ def add_commands(sub) -> None:
     p = actions.add_parser("tasks", help="the Stop hook: a note to start again a background task of this session's "
                                          "that stopped (Claude Code runs it)")
     p.set_defaults(run=tasks)
+    safety = sub.add_parser("safety", help="the code host's own lock on the branches the merge guard protects")
+    steps = safety.add_subparsers(dest="action", metavar="action", required=True)
+    p = steps.add_parser("protect", help="the person turns on a GitHub ruleset for the base, the default branch and "
+                                         "[safety] protect: no direct, forced or deleting push")
+    p.add_argument("--reviews", type=int, default=0, metavar="N",
+                   help="approvals each pull request needs from someone other than its author; 0 by default")
+    p.add_argument("--dry-run", action="store_true", help="print the ruleset it would set, and run nothing")
+    p.set_defaults(run=protect)
+
+
+RULESET = f"{cli.DISPLAY}: protected branches"  # the ruleset's name on GitHub, which `colony safety protect` keeps
+
+
+def ruleset(config: dict, reviews: int) -> dict:
+    """The GitHub ruleset that locks the branches the merge guard protects: the default branch, the base and
+    [safety] protect. It refuses a deletion and a force push, and asks for a pull request for every change, with
+    `reviews` approvals from someone other than its author."""
+    extra = [str(branch) for branch in config.get("safety", {}).get("protect", []) if isinstance(branch, str)]
+    include = list(dict.fromkeys(["~DEFAULT_BRANCH", f"refs/heads/{config['project']['base']}",
+                                  *(f"refs/heads/{branch}" for branch in extra)]))
+    review = {"required_approving_review_count": reviews, "dismiss_stale_reviews_on_push": False,
+              "require_code_owner_review": False, "require_last_push_approval": False,
+              "required_review_thread_resolution": False}
+    return {"name": RULESET, "target": "branch", "enforcement": "active",
+            "conditions": {"ref_name": {"include": include, "exclude": []}},
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"},
+                      {"type": "pull_request", "parameters": review}]}
+
+
+def protect(config: dict, args) -> int:
+    """`colony safety protect [--reviews N] [--dry-run]`: the person turns on the code host's own lock, which no agent
+    can switch off from its computer, as it can a hook. One ruleset, RULESET, made or brought up to date through `gh
+    api`. Returns 1 when GitHub refuses it, such as for a private repo on a plan without rulesets."""
+    if args.reviews < 0:
+        raise cli.ColonyError("--reviews is a count of approvals, 0 or more")
+    repo, body = config["project"]["repo"], ruleset(config, args.reviews)
+    branches = ", ".join(name.removeprefix("refs/heads/").replace("~DEFAULT_BRANCH", "the default branch")
+                         for name in body["conditions"]["ref_name"]["include"])
+    print(f"ruleset {RULESET!r} on {repo}: {branches}. It refuses a direct push, a force push and a deletion, and "
+          f"asks for a pull request with {args.reviews} approval{'s' if args.reviews != 1 else ''} from someone else.")
+    if not args.reviews:
+        print("A team where someone else reviews should add --reviews 1: GitHub never counts an author's own approval, "
+              "and agents act with their person's login.")
+    if cli.mode(config) == "hack" and config.get("gate", {}).get("merge_after_fast_check"):
+        print(f"Hack: `{cli.NAME} merge` pushes the base, which this ruleset refuses. Set [gate] "
+              "merge_after_fast_check = false, so it opens pull requests instead.")
+    if args.dry_run:
+        print(json.dumps(body, indent=2))
+        print("Nothing ran.")
+        return 0
+    from colony import wait
+
+    try:
+        found = wait.gh("api", f"repos/{repo}/rulesets", "--jq", f'.[] | select(.name == "{RULESET}") | .id').split()
+    except wait.GhError as e:
+        print(f"{cli.NAME} safety protect: GitHub's rulesets were not read: {e}", file=sys.stderr)
+        return 1
+    method, path = ("PUT", f"repos/{repo}/rulesets/{found[0]}") if found else ("POST", f"repos/{repo}/rulesets")
+    run = subprocess.run(["gh", "api", "-X", method, path, "--input", "-"], input=json.dumps(body),
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode:
+        print(f"{cli.NAME} safety protect: GitHub refused the ruleset: {run.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    print(f"{'updated' if found else 'made'} the ruleset: https://github.com/{repo}/rules")
+    return 0

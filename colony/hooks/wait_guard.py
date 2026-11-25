@@ -45,17 +45,23 @@ check. A plain `git push` that updates a protected branch, and a GitHub tool tha
 dry-run push passes.
 
 What the person allows comes from the code host, never from a file or a ref on this computer, which an agent can
-edit: a merge_into pattern counts only when the working copy names it and so does the colony.toml on GitHub's default
-branch, read with `gh api`, or on the base that copy names, unless agents may push to that base. When GitHub can't be
-read, nothing is allowed. This repo is the one origin's URL in git config names. The guard refuses what rewrites that
-picture: `git update-ref` or `symbolic-ref` on refs/remotes/, a fetch into refs/remotes/ by hand, `git remote
-set-head` with a branch, `set-url`, `rename` or `remove` of origin, and config that changes origin's URL, a fetch
-refspec or a URL rewrite.
+edit: a merge_into pattern counts only when the working copy names it and so does the colony.toml on the default
+branch of the repo the push or merge really goes to, read with `gh api`, and only when that repo is origin's. Where a
+push goes is what git says after its pushurl and url rewrites (`git remote get-url --push`, `git ls-remote
+--get-url`), so a push to any other URL or remote gets no yes. When GitHub can't be read, nothing is allowed. The guard
+refuses what rewrites that picture: `git update-ref` or `symbolic-ref` on refs/remotes/, a fetch into refs/remotes/ by
+hand, `git remote set-head` with a branch, `set-url`, `rename` or `remove` of origin, `git config --edit`, and config
+that changes a remote's URL, a fetch refspec, a URL rewrite or an include, and a `-c` that reroutes a push.
 
 It follows a push or merge wherever a line hides it: `sh -c`, `eval`, sudo, git and gh aliases, and refuses an xargs
 or a shell alias that builds one. A `cd`, or a `git checkout -b`, counts only while && joins it to the push, with no
 `||` or pipe before it, and never across `git -C`, `--git-dir`, `--work-tree` or `env -C`. A `gh pr merge` that
-shares its line with a cd or a GH_ variable is refused, since the pull request checked may not be the one merged.
+shares its line with a cd, a wrapper that moves it, or a GH_ or GIT_ variable is refused, since the pull request
+checked may not be the one merged.
+
+A hook stops an agent's honest mistakes, never a determined one: an agent that can edit .claude/settings.json, this
+script or .git/config by hand can get past it. The real lock is the code host's branch protection, which `colony
+safety protect` turns on.
 """
 from __future__ import annotations
 
@@ -163,9 +169,10 @@ TABLE_HEADER = re.compile(r"^[ \t]*\[\[?[ \t]*[A-Za-z0-9_.\"' -]+\]\]?[ \t]*(?:#
 # origin's URL as git config holds it: its host and owner/name, from https://, ssh:// or git@host: forms.
 ORIGIN = re.compile(r"^(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::\d+)?[:/]"
                     r"([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
-PR_URL = re.compile(r"^https?://[^/\s]+/([^/\s]+/[^/\s]+)/pull/\d+")
+PR_URL = re.compile(r"^(https?://[^/\s]+/[^/\s]+/[^/\s]+)/pull/\d+")
 # The settings that say where origin is and what a fetch writes into refs/remotes/, which the guard reads as origin's.
-REMOTE_KEYS = re.compile(r"^(?:remote\.[^\s]+\.(?:url|pushurl|fetch)|url\.[^\s]+\.(?:insteadof|pushinsteadof))$", re.I)
+REMOTE_KEYS = re.compile(r"^(?:remote\.[^\s]+\.(?:url|pushurl|fetch)|url\.[^\s]+\.(?:insteadof|pushinsteadof)"
+                         r"|include\.path|includeif\.[^\s]+\.path)$", re.I)  # with the includes that can set them
 CONFIG_WRITES = {"--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section", "-e",
                  "--edit"}
 CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "--get-color",
@@ -639,16 +646,37 @@ def protected_branches(cwd: str) -> list[str]:
     return list(dict.fromkeys([base, default, *extra]))
 
 
-def origin_repo(cwd: str) -> tuple[str, str]:
-    """origin's host and owner/name, from its URL as git config holds it, such as ("github.com", "acme/demo"), or
-    ("", "") when origin is no repo on a code host, such as a folder, or there is none."""
+def remote_url(cwd: str, remote: str, push: bool = True) -> str:
+    """Where git really goes for `remote`, a remote's name or a URL: with its pushurl (for a push) and git's url
+    rewrites applied, as `git remote get-url` and `git ls-remote --get-url` say, or "" when git can't say."""
+    if not remote:
+        return ""
+    named = not any(mark in remote for mark in ":/\\") and not remote.startswith((".", "~"))
+    argv = (["git", "remote", "get-url", *(["--push"] if push else []), remote] if named
+            else ["git", "ls-remote", "--get-url", remote])
     try:
-        run = subprocess.run(["git", "config", "--get", "remote.origin.url"], cwd=cwd or None, capture_output=True,
-                             text=True, timeout=5)
+        run = subprocess.run(argv, cwd=cwd or None, capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return "", ""
-    found = ORIGIN.match(run.stdout.strip()) if run.returncode == 0 else None
+        return ""
+    return run.stdout.strip().splitlines()[0] if run.returncode == 0 and run.stdout.strip() else ""
+
+
+def repo_of(url: str) -> tuple[str, str]:
+    """A repo URL's host and owner/name, such as ("github.com", "acme/demo"), or ("", "") for no repo on a code
+    host, such as a folder."""
+    found = ORIGIN.match(url.strip())
     return (found[1].lower(), found[2]) if found else ("", "")
+
+
+def origin_repo(cwd: str) -> tuple[str, str]:
+    """origin's host and owner/name, from where `git remote get-url origin` says it is, or ("", "") when origin is no
+    repo on a code host, or there is none."""
+    return repo_of(remote_url(cwd, "origin", push=False))
+
+
+def same_repo(one: tuple[str, str], other: tuple[str, str]) -> bool:
+    """Whether two (host, owner/name) pairs name one repo on a code host."""
+    return bool(one[1]) and one[0] == other[0] and one[1].lower() == other[1].lower()
 
 
 def host_toml(host: str, repo: str, ref: str = "") -> str | None:
@@ -665,30 +693,27 @@ def host_toml(host: str, repo: str, ref: str = "") -> str | None:
 
 
 class Allowance:
-    """The branches the person allows merges and pushes into: each [safety] merge_into pattern of the working copy
-    that a copy of colony.toml on the code host names too. Only copies on branches no agent may push to count: the
-    default branch's, and the base it names unless its own merge_into names that base. A ref on this computer counts
-    for nothing here, since an agent can rewrite one. The host is read once, and only when a branch the working copy
-    names is asked about, so a push of an agent's own branch makes no network call. When the host can't be read,
-    nothing is allowed."""
+    """The branches the person allows merges and pushes into, at one destination: a remote's name or a repo's URL.
+    A [safety] merge_into pattern counts only when the working copy names it and so does the colony.toml on the
+    destination repo's default branch on its code host, which no agent may push to. It counts only when the
+    destination really is origin's repo, after git's pushurl and url rewrites, so a push to any other URL or remote
+    gets no yes. A ref or a file on this computer counts for nothing here, since an agent can rewrite one. The host
+    is read once, and only when a branch the working copy names is asked about, so a push of an agent's own branch
+    makes no network call. When the host can't be read, nothing is allowed."""
 
-    def __init__(self, cwd: str) -> None:
-        self.cwd = cwd
+    def __init__(self, cwd: str, destination: str = "origin") -> None:
+        self.cwd, self.destination = cwd, destination
         self.named = strings(table(colony_toml(cwd), SAFETY), "merge_into") or []
         self.trusted: list[str] | None = None
 
     def host_named(self) -> list[str]:
-        """The merge_into patterns the code host's trusted copies name."""
+        """The merge_into patterns the copy on the destination's default branch names."""
         if self.trusted is None:
             self.trusted = []
-            host, repo = origin_repo(self.cwd)
-            default = host_toml(host, repo) if repo else None
-            if default is not None:
-                named = strings(table(default, SAFETY), "merge_into") or []
-                base = project_base(default)
-                on_base = host_toml(host, repo, base) if base and base != default_branch(self.cwd) \
-                    and not permitted(base, named) else None
-                self.trusted = named + ((strings(table(on_base, SAFETY), "merge_into") or []) if on_base else [])
+            host, repo = repo_of(remote_url(self.cwd, self.destination))
+            if same_repo((host, repo), origin_repo(self.cwd)):
+                default = host_toml(host, repo)
+                self.trusted = (strings(table(default, SAFETY), "merge_into") or []) if default is not None else []
         return self.trusted
 
     def permits(self, branch: str) -> bool:
@@ -819,10 +844,11 @@ REWRITE, UPDATE = "rewrite", "update"  # what push_rewrites found: a forced or d
 
 def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
                   overrides: list[tuple[str, str | None]] | None = None, changed: str = "",
-                  allowance: Allowance | None = None, created: str = "") -> tuple[str, str]:
+                  allow: bool = True, created: str = "") -> tuple[str, str]:
     """Why a `git push` with these arguments, the words after `push`, rewrites, deletes or updates a protected branch:
-    (REWRITE, why) when it force-pushes or deletes one, (UPDATE, why) when a plain push updates one the `allowance`
-    doesn't permit, else ("", ""). overrides are the line's -c settings before `push`, and None for a --config-env one,
+    (REWRITE, why) when it force-pushes or deletes one, (UPDATE, why) when a plain push updates one the person doesn't
+    allow at the push's own destination (Allowance), or `allow` is false, else ("", ""). overrides are the line's -c
+    settings before `push`, and None for a --config-env one,
     whose value can't be seen. changed names what on the line can change the branch checked out, the folder or git
     config before this push runs, and created the branch a `git checkout -b` joined to this push by && made, which HEAD
     then names. A dry run updates nothing."""
@@ -858,8 +884,15 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
     if prune and everything:
         return REWRITE, f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has its name"
 
+    destination = positional[0] if positional else remote  # where the push goes; the no-refspec path fills it in
+    allowances: dict[str, Allowance] = {}
+
     def guarded(branch: str) -> bool:  # a protected branch a plain push may not update; none in a dry run
-        return not dry and not (allowance is not None and allowance.permits(branch))
+        if dry:
+            return False
+        where = destination or "origin"
+        allowance = allowances.setdefault(where, Allowance(cwd, where)) if allow else None
+        return allowance is None or not allowance.permits(branch)
 
     if everything and not dry and (held := [b for b in local_branches(cwd, protected) if guarded(b)]):
         return UPDATE, f"`git push --all` pushes every local branch, {' and '.join(held)} among them"
@@ -882,6 +915,7 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
             setting = lambda key: (config.get(key) or [""])[-1]  # noqa: E731
             remote = (positional[0] if positional else remote) or setting(f"branch.{branch}.pushremote") or \
                 setting("remote.pushdefault") or setting(f"branch.{branch}.remote") or "origin"
+            destination = remote
             if setting(f"remote.{remote}.mirror").lower() not in FALSE:
                 return REWRITE, f"remote.{remote}.mirror makes this push a `--mirror` push, which overwrites every branch"
             found = default_refspecs(config, remote, branch)
@@ -975,6 +1009,8 @@ def forges(command: str, arguments: list[str], overrides: list[tuple[str, str | 
         return "`git remote set-head` with a branch points origin's HEAD by hand, which the guard reads"
     if command == "remote" and words[:1] in (["set-url"], ["rename"], ["remove"], ["rm"]) and words[1:2] == ["origin"]:
         return f"`git remote {words[0]} origin` changes origin, which the guard reads to know this repo"
+    if command == "config" and (any(word in ("-e", "--edit") for word in arguments) or words[:1] == ["edit"]):
+        return "`git config --edit` can change where origin is, which the guard reads, so ask the person"
     if command == "config" and (key := config_target(arguments)) and REMOTE_KEYS.match(config_key(key)):
         return f"`git config {key}` changes where origin is, or what a fetch writes into refs/remotes/"
     return ""
@@ -1114,8 +1150,11 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[l
             folders = [here, *(os.path.join(folder, moved) for folder in also)]
             if subcommand == "push":
                 protected = list(dict.fromkeys(branch for folder in folders for branch in protected_branches(folder)))
+                rerouted = [key for key, _ in overrides if REMOTE_KEYS.match(config_key(key))]
+                if rerouted:  # the guard reads where a push goes from git config, which this -c changes unseen
+                    updates.append(f"`git -c {rerouted[0]}` changes where this push goes, so run it without")
                 kind, reason = push_rewrites(program[index + 1:], protected, here, overrides, changed or own,
-                                             Allowance(here), created if not moved and not own else "")
+                                             not rerouted, created if not moved and not own else "")
                 if kind == REWRITE:
                     rewrites.append(reason)
                 elif kind == UPDATE:
@@ -1160,8 +1199,8 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[l
 
 
 def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str]:
-    """The branch a pull request merges into and the owner/name of the repo it is in, from `gh pr view`, or ("", "")
-    when gh can't say. `target` is its number, URL or branch, "" for the branch checked out, and `repo` the --repo
+    """The branch a pull request merges into and the URL of the repo it is in, from `gh pr view`, or ("", "") when
+    gh can't say. `target` is its number, URL or branch, "" for the branch checked out, and `repo` the --repo
     given, if any."""
     argv = ["gh", "pr", "view", *([target] if target else []), *(["--repo", repo] if repo else []),
             "--json", "baseRefName,url", "--jq", '.baseRefName + " " + .url']
@@ -1174,14 +1213,15 @@ def pr_target(target: str, repo: str, cwd: str) -> tuple[str, str]:
     return (base, found[1]) if base and found else ("", "")
 
 
-def pr_allowed(base: str, home: str, cwd: str, allowance: Allowance, which: str = "this pull request") -> str:
-    """Why merging a pull request into `base`, in the repo `home`, isn't allowed, or ""."""
+def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request") -> str:
+    """Why merging a pull request into `base`, in the repo at the URL `home`, isn't allowed, or "". The yes comes
+    from that repo's own default branch, and only when it is origin's repo."""
     if not base:
         return f"`gh pr view` could not say which branch and repo {which} merges into"
-    mine = origin_repo(cwd)[1]
-    if not mine or home.lower() != mine.lower():
-        return f"{which} is in {home}, not in this repo's origin, {mine or 'which the guard cannot name'}"
-    if allowance.permits(base):
+    there, mine = repo_of(home), origin_repo(cwd)
+    if not same_repo(there, mine):
+        return f"{which} is in {there[1] or home}, not in this repo's origin, {mine[1] or 'which the guard cannot name'}"
+    if Allowance(cwd, home).permits(base):
         return ""
     return f"{which} merges into {base}, which [safety] merge_into on the repo's default branch doesn't name"
 
@@ -1197,10 +1237,9 @@ def pr_merge(arguments: list[str], repo: str, cwd: str) -> str:
             skip = True
         elif not word.startswith("-") and not target:
             target = word
-    allowance = Allowance(cwd)
-    if not allowance.named:
+    if not Allowance(cwd).named:
         return "`gh pr merge` merges a pull request, and [safety] merge_into allows no branch"
-    return pr_allowed(*pr_target(target, repo, cwd), cwd, allowance)
+    return pr_allowed(*pr_target(target, repo, cwd), cwd)
 
 
 def api_merge(arguments: list[str]) -> str:
@@ -1246,22 +1285,27 @@ def gh_alias(name: str, cwd: str) -> str | None:
     return None
 
 
+FOLDER_OPTIONS = ("-C", "-D", "--chdir", "--git-dir", "--work-tree")  # a wrapper's options that move a command
+
+
 def context_change(line: list[str]) -> str:
     """What on a line can make a gh command act on another repo, host or folder than the one the guard checks: a cd,
-    `env --chdir`, or a GH_ or GITHUB_ variable set or exported anywhere on it; "" for none."""
+    a wrapper that moves the command, such as `env -C` or `sudo -D`, or a GH_, GITHUB_ or GIT_ variable set or
+    exported anywhere on it, since gh finds its repo through git; "" for none."""
     for words in simple_commands(line):
         program = run_program(words)
         head = words[:len(words) - len(program)]
         name = PurePath(program[0]).name if program else ""
-        variables = [word.partition("=")[0] for word in head if GH_VARIABLE.match(word)]
+        variables = [word.partition("=")[0] for word in head if GH_VARIABLE.match(word) or GIT_VARIABLE.match(word)]
         if name in LINE_CHANGES:
             return f"`{name}`"
         if variables:
             return f"`{variables[0]}`"
-        if any(word in ("-C", "--chdir") or word.startswith("--chdir=") for word in head):
-            return "`env --chdir`"
+        moving = [word for word in head if word.partition("=")[0] in FOLDER_OPTIONS]
+        if moving:
+            return f"`{moving[0].partition('=')[0]}`"
         if name in ("export", "unset", "declare", "typeset", "readonly") and any(
-                GH_VARIABLE.match(word) for word in program[1:]):
+                GH_VARIABLE.match(word) or GIT_VARIABLE.match(word) for word in program[1:]):
             return f"`{name}`"
     return ""
 
@@ -1332,31 +1376,36 @@ def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
 
 def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
     """Why a GitHub tool's call, such as mcp__github__merge_pull_request, merges a pull request the person hasn't
-    allowed, or commits straight onto a protected branch of this repo. This repo is origin's, as its URL in git config
-    says: a call that names no branch, or a repo the guard can't tell from this one, is refused."""
+    allowed, or commits straight onto a protected branch name. This repo is origin's, as `git remote get-url origin`
+    says. A merge passes only in this repo, into a branch the person allows. A commit onto a protected branch name
+    passes only in this repo, into an allowed branch, and is refused in any other repo; one that names no branch, or
+    runs where origin can't be worked out, is refused."""
     action = tool.rsplit("__", 1)[-1]
     if action in MCP_PR_MERGES:
-        allowance = Allowance(cwd)
-        if not allowance.named:
+        if not Allowance(cwd).named:
             return [f"`{action}` merges a pull request, and [safety] merge_into allows no branch"]
         number = next((str(tool_input[key]) for key in ("pullNumber", "pull_number", "number", "pr_number")
                        if tool_input.get(key)), "")
         owner, name = tool_input.get("owner"), tool_input.get("repo")
         if not (number and owner and name):
             return [f"`{action}` names no pull request number, owner and repo for the guard to check"]
-        reason = pr_allowed(*pr_target(number, f"{owner}/{name}", cwd), cwd, allowance, f"pull request {number}")
+        reason = pr_allowed(*pr_target(number, f"{owner}/{name}", cwd), cwd, f"pull request {number}")
         return [reason] if reason else []
     if action in MCP_COMMITS:
         owner, name, branch = tool_input.get("owner"), tool_input.get("repo"), str(tool_input.get("branch") or "")
         if not branch:
             return [f"`{action}` names no branch, so it commits onto the default branch"]
-        mine = origin_repo(cwd)[1]
-        if not mine:
+        mine = origin_repo(cwd)
+        if not mine[1]:
             return [f"`{action}` commits onto {branch}, and the guard can't tell this repo from origin's URL to check it"]
-        if owner and name and f"{owner}/{name}".lower() != mine.lower():
-            return []
-        allowance = Allowance(cwd)
-        held = [b for b in reaches(branch, protected_branches(cwd)) if not allowance.permits(b)]
+        held = reaches(branch, protected_branches(cwd))
+        if not held:
+            return []  # a branch of the agent's own
+        there = (mine[0], f"{owner}/{name}") if owner and name else mine
+        if not same_repo(there, mine):
+            return [f"`{action}` commits onto {held[0]} in {there[1]}, which is not this repo's origin, {mine[1]}"]
+        allowance = Allowance(cwd, f"https://{mine[0]}/{mine[1]}")
+        held = [b for b in held if not allowance.permits(b)]
         return [f"`{action}` commits straight onto {held[0]}"] if held else []
     return []
 

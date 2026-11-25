@@ -122,7 +122,6 @@ protect = []                       # more branches to protect beside the base an
 
 [recover]                          # what `colony crash-report` and `colony resume` look at (docs/safety.md#recovery)
 within_hours = 24                  # how far back both look for sessions that showed life
-# [[recover.services]]             # a local service your work needs: its check, and the command that starts it again
-# name = "db"
+# [services.db]                    # a local service your work needs: its check, and the command that starts it again
 # check = "pg_isready -h localhost -p 5432"
 # restart = "docker compose up -d db"
