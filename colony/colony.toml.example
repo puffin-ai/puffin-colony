@@ -64,6 +64,8 @@ budgets = { fast = 300, checks = 300, full = 0 }   # seconds a command follows a
                                    # in the background; 0 sends it there at once
 # caps = { full = 3600 }           # a run past its cap, in seconds, is stopped and counts as failed
 # reuse = true                     # reuse a pass on the same code with the same command
+# locks = ["test-db"]              # locks every check run holds besides tests, such as one shared test database;
+                                   # [locks.<name>] slots sets how many runs share it
 
 # [ci]                             # `colony ci`: start CI on any commit, watch it live, post the result
 # start = ""                       # the command that starts CI, with {sha}, {short}, {branch} and {repo}; empty pushes

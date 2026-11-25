@@ -88,6 +88,14 @@ def own_check_ledger(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def own_locks(monkeypatch, tmp_path):
+    """Each test keeps the computer's named locks, which every check run takes a slot of, in its own folder, so no
+    test waits on another's slot or writes to the real ~/.colony/locks."""
+    from colony import capacity
+    monkeypatch.setattr(capacity, "locks_dir", lambda: tmp_path / "colony-locks")
+
+
+@pytest.fixture(autouse=True)
 def no_usage_refresh(monkeypatch, outside_a_colony_session):  # after the clearing, which would drop it
     """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")

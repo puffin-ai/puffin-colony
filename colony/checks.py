@@ -16,6 +16,11 @@ its budget, then leaves it running in the background and returns, so no one wait
 past its cap. Each run lives on this computer, under ~/.colony/<project>/checks/runs/: its state and its whole
 output, which `colony check status` and `colony check watch` read at any time.
 
+Slots. A background run holds one slot of the `tests` lock while its check runs, and the lock has as many slots as
+test runs this computer runs at once (capacity.limits), so a busy computer runs fewer checks at a time. It holds one
+slot of each `[checks] locks` lock too, such as a shared test database, the same locks `colony lock` takes. A run
+that finds no free slot waits in the background, and its state says so (run_locks).
+
 Live. A run marks its first failure the moment a line shows one (failure_sign), and every command that follows it
 prints that line at once; `--until-failure` returns right there, so fixing starts while the rest runs. A batch round
 marks its first failure in its state.json, which `colony status` prints (watch_log).
@@ -109,7 +114,7 @@ def settings(config: dict) -> dict:
     return {"scope": table.get("scope") or ("related" if related else "areas"), "related": related,
             "guards": table.get("guards") or [], "tests": dict(table.get("tests") or {}),
             "budgets": {**BUDGETS, **(table.get("budgets") or {})}, "caps": dict(table.get("caps") or {}),
-            "reuse": table.get("reuse", True), "failure": table.get("failure") or ""}
+            "reuse": table.get("reuse", True), "failure": table.get("failure") or "", "locks": table.get("locks") or []}
 
 
 def ci_settings(config: dict) -> dict:
@@ -149,6 +154,12 @@ def validate(config: dict) -> None:
                 raise cli.ColonyError(f"[checks] {key} names {kind!r}: the kinds are {', '.join(KINDS)}")
             if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
                 raise cli.ColonyError(f"[checks] {key}.{kind} is a number of seconds, 0 or more")
+    locks = s["locks"]
+    from colony import capacity
+
+    if not isinstance(locks, list) or not all(isinstance(n, str) and capacity.NAME.fullmatch(n) for n in locks):
+        raise cli.ColonyError("[checks] locks is a list of lock names in lowercase letters, digits, dots and dashes, "
+                              'such as ["test-db"]')
     if s["failure"]:
         try:
             re.compile(s["failure"])
@@ -592,6 +603,14 @@ def tidy_runs(folder: Path) -> None:
             path.unlink(missing_ok=True)
 
 
+def run_locks(config: dict) -> list[list]:
+    """The locks a background run holds while its check runs, each with its slots: `tests`, as many as this computer
+    runs at once (capacity.limits), and each `[checks] locks` lock, as `[locks.<name>] slots` says (capacity.slots)."""
+    from colony import capacity
+
+    return [[name, capacity.slots(config, name)] for name in sorted({"tests", *settings(config)["locks"]})]
+
+
 def start(config: dict, root: Path, *, kind: str, label: str, command: str, key: str, commit: str, tree: str,
           env: dict, dirty: bool = False, areas=None, untested=(), pre: str = "", cleanup: dict | None = None,
           lane: str = "") -> dict:
@@ -616,11 +635,14 @@ def start(config: dict, root: Path, *, kind: str, label: str, command: str, key:
         run_id = f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}-{tree[:7]}-{n}"
     path, log, _ = run_files(folder, run_id)
     caps = settings(config)["caps"]
+    from colony import capacity
+
     state = {"id": run_id, "kind": kind, "label": label, "lane": lane, "root": str(root), "commit": commit,
              "tree": tree, "dirty": dirty, "key": key, "command": command, "areas": areas,
              "untested": list(untested), "pre": pre,
              "cleanup": cleanup, "status": "starting", "created": time.time(), "cap": caps.get(kind, 0),
-             "failure_pattern": settings(config)["failure"], "ledger": str(colony_home(config)), "failures": []}
+             "failure_pattern": settings(config)["failure"], "ledger": str(colony_home(config)), "failures": [],
+             "locks": run_locks(config), "locks_dir": str(capacity.locks_dir())}
     write_json(path, state)
     log.write_text("")
     package = str(Path(__file__).resolve().parent.parent)
@@ -633,7 +655,10 @@ def start(config: dict, root: Path, *, kind: str, label: str, command: str, key:
 def runner(state_path: str) -> int:
     """The background runner: run the run's install, when it has one, then its command, in their own process group,
     copying the output to the run's log as it comes and marking the first failure at once. It stops the check past
-    the run's cap, or when its cancel mark appears, and keeps a conclusive result in the ledger."""
+    the run's cap, or when its cancel mark appears, and keeps a conclusive result in the ledger. First it takes a slot
+    of each of the run's locks (run_locks), waiting in the background while none is free; its cap counts from then."""
+    from colony import capacity
+
     path = Path(state_path)
     state = read_json(path, {})
     _, log, mark = run_files(path.parent, state["id"])
@@ -641,18 +666,36 @@ def runner(state_path: str) -> int:
     write_json(path, state)
     pattern = state.get("failure_pattern") or ""
     cap = float(state.get("cap") or 0)
-    why, code, capped = "", 0, False
+    why, code, capped, slots, no_slot = "", 0, False, {}, False
     steps = [("install", state["pre"])] if state.get("pre") else []
     steps.append(("check", state["command"]))
     try:
-        with log.open("a", errors="replace") as out:
+        with log.open("a", errors="replace") as out, contextlib.ExitStack() as held:
+            if state.get("locks"):
+                state["waiting"] = ", ".join(name for name, _ in state["locks"])
+                write_json(path, state)
+                asked = time.time()
+                note = {"pid": os.getpid(), "session": os.environ.get(cli.SESSION_ENV, ""), "command": state["command"]}
+                try:
+                    slots = held.enter_context(capacity.hold_all(state["locks"], capacity.LOCK_WAIT_MINUTES, note,
+                                                                 Path(state.get("locks_dir") or capacity.locks_dir()),
+                                                                 stop=mark.exists))
+                except cli.ColonyError as e:
+                    no_slot, why = True, f"found no free slot: {e}"
+                state.pop("waiting", None)
+                state.update(slots=slots, started=time.time())
+                write_json(path, state)
+                if slots and time.time() - asked >= 1:
+                    out.write(f"colony: waited {span(time.time() - asked)} for a free slot of "
+                              f"{', '.join(slots)}\n")
+                    out.flush()
             for step, command in steps:
-                if mark.exists():
+                if mark.exists() or no_slot:
                     break
                 if step == "install":
                     out.write(f"colony: install: {command}\n")
                     out.flush()
-                shell_cmd, use_shell, env = portable.shell(command, dict(os.environ))
+                shell_cmd, use_shell, env = portable.shell(command, {**os.environ, **capacity.slot_env(slots)})
                 proc = subprocess.Popen(shell_cmd, shell=use_shell, cwd=state["root"], env=env,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, errors="replace", **portable.own_group())
@@ -707,6 +750,8 @@ def runner(state_path: str) -> int:
     last = next((line.strip() for line in reversed(text.splitlines()) if line.strip()), "no output")
     if mark.exists():
         status, why = "cancelled", mark.read_text().strip()
+    elif no_slot:
+        status = "stopped"
     elif why or code:
         status = "fail"
     elif batch.ran_nothing(text):
@@ -786,6 +831,8 @@ def result_line(label: str, state: dict, named: str = "") -> tuple[str, int]:
     if status in RUNNING:
         budget = state.get("budget_seen")
         past = f" past its {span(budget)} budget" if budget else ""
+        if state.get("waiting"):
+            past += f", waiting for a free slot of {state['waiting']}"
         return (f"{label}: running in the background{named}{past}, so work goes on: `{cli.NAME} check watch "
                 f"{state['id']}` follows it, and `{cli.NAME} check status` shows it", RUNNING_EXIT)
     last = state.get("last") or "no output"
@@ -909,6 +956,8 @@ def status_lines(config: dict, limit: int = 8, running_only: bool = False) -> li
         over = " (over its budget)" if s.get("status") in RUNNING and budget and took > budget else ""
         first = f", first failure: {s['first_failure']}" if s.get("first_failure") else ""
         why = f", {s['why']}" if s.get("why") and s.get("status") != "fail" else ""
+        if s.get("waiting") and s.get("status") in RUNNING:
+            why += f", waiting for a free slot of {s['waiting']}"
         lines.append(f"{s['id']}: {s.get('label', s.get('kind'))} {s.get('status')} after {span(took)}{over}, on "
                      f"{s.get('commit', '')[:9]}{' with changes' if s.get('tree') and s.get('dirty') else ''} in "
                      f"{s.get('root', '')}{first}{why}")

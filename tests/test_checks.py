@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from colony import batch, checks, cli
+from colony import batch, capacity, checks, cli
 from test_batch import batch_args, commit, config, git, repo, stubs  # noqa: F401  (fixtures)
 
 
@@ -254,6 +254,69 @@ def test_colony_status_shows_a_batch_rounds_first_failure_and_the_running_checks
     assert "checks, round 1: first failure at " in capsys.readouterr().out
 
 
+# Checks and capacity: a background run takes a tests slot, and the locks [checks] names
+
+
+def test_a_background_run_holds_a_tests_slot_and_each_checks_lock_and_its_command_sees_them(card, config, capsys):
+    del config["checks"]
+    config["checks"] = {"locks": ["test-db"]}
+    config["locks"] = {"test-db": {"slots": 2}}
+    config["project"]["fast_check"] = 'echo "slots $COLONY_LOCK_SLOT_TESTS $COLONY_LOCK_SLOT_TEST_DB"'
+    assert checks.run_fast_check(config, fast_args()) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "fast check: passed: slots 0 0"
+    run = checks.all_runs(config)[0]
+    assert run["locks"] == [["test-db", 2], ["tests", capacity.slots(config, "tests")]]
+    assert run["slots"] == {"test-db": 0, "tests": 0} and "waiting" not in run
+    assert capacity.holders("tests") == [] and capacity.holders("test-db") == []  # freed when the run ended
+
+
+def test_a_run_with_no_free_tests_slot_waits_in_the_background_then_runs_when_one_frees(card, config, capsys):
+    del config["checks"]
+    config["locks"] = {"tests": {"slots": 1}}
+    config["project"]["fast_check"] = "echo ran"
+    with capacity.hold("tests", 1, 0, {"session": "builder-2", "command": "pytest"}):
+        assert checks.run_fast_check(config, fast_args(wait=0.5)) == checks.RUNNING_EXIT
+        assert "waiting for a free slot of tests" in capsys.readouterr().out.splitlines()[-1]
+        assert checks.check_status(config, Namespace(run_id=None, limit=8)) == 0
+        assert "waiting for a free slot of tests" in capsys.readouterr().out
+        run = checks.running(config)[0]["id"]
+    assert checks.check_watch(config, Namespace(run_id=run, until_failure=False)) == 0
+    out = capsys.readouterr().out
+    assert "colony: waited " in out and " for a free slot of tests" in out
+    assert out.splitlines()[-1] == "fast check: passed: ran"
+
+
+def test_a_run_cancelled_while_it_waits_for_a_slot_ends_cancelled_and_never_runs(card, config, capsys, tmp_path):
+    del config["checks"]
+    config["locks"] = {"tests": {"slots": 1}}
+    config["project"]["fast_check"] = "echo ran >> ../ran.txt"
+    with capacity.hold("tests", 1, 0, {"session": "builder-2", "command": "pytest"}):
+        assert checks.run_fast_check(config, fast_args(wait=0.3)) == checks.RUNNING_EXIT
+        run = checks.running(config)[0]["id"]
+        assert checks.check_cancel(config, Namespace(run_id=run, all=False)) == 0
+        assert checks.check_watch(config, Namespace(run_id=run, until_failure=False)) == 1
+    assert capsys.readouterr().out.splitlines()[-1] == "fast check: cancelled: cancelled by hand"
+    assert lines(tmp_path / "ran.txt") == []
+
+
+def test_a_batch_rounds_checks_hold_a_tests_slot_and_a_round_with_none_free_stops_the_batch(repo, config, stubs,
+                                                                                           capsys, tmp_path,
+                                                                                           monkeypatch):
+    config["gate"].update(review=False, walk=False)
+    config["project"]["checks"] = f'echo "slot $COLONY_LOCK_SLOT_TESTS" >> {tmp_path / "slot.txt"}'
+    assert batch.run_batch(config, batch_args(repo, "11=card/a")) == 0
+    assert lines(tmp_path / "slot.txt") == ["slot 0"]
+    assert capacity.holders("tests") == []
+    config["locks"] = {"tests": {"slots": 1}}
+    monkeypatch.setattr(capacity, "LOCK_WAIT_MINUTES", 0)
+    monkeypatch.setattr(capacity, "SLEEP", lambda seconds: None)
+    with capacity.hold("tests", 1, 0, {"session": "builder-2", "command": "pytest"}):
+        assert batch.run_batch(config, Namespace(**{**vars(batch_args(repo, "12=card/b")), "name": "b2"})) == 1
+    assert "round 1's checks found no free slot: the lock tests stayed held for 0 minutes, by builder-2 (pytest)" \
+        in capsys.readouterr().out
+    assert lines(tmp_path / "slot.txt") == ["slot 0"]
+
+
 # Task 43: no repeated runs
 
 
@@ -483,6 +546,7 @@ def test_ci_says_how_to_start_it_when_no_check_ever_shows(repo, config, gh, caps
     ({"checks": {"budgets": {"slow": 3}}}, "[checks] budgets names 'slow'"),
     ({"checks": {"caps": {"full": -1}}}, "[checks] caps.full is a number of seconds"),
     ({"checks": {"failure": "("}}, "[checks] failure is not a regular expression"),
+    ({"checks": {"locks": ["Test DB"]}}, "[checks] locks is a list of lock names"),
     ({"ci": {"poll_seconds": 0}}, "[ci] poll_seconds is a number above 0"),
 ])
 def test_the_settings_refuse_what_this_version_cant_run(config, table, message):

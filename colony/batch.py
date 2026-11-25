@@ -34,6 +34,7 @@ the report's link (review_demo). Every batch that runs ends with `colony tidy` (
 from __future__ import annotations
 
 import concurrent.futures as futures
+import contextlib
 import fnmatch
 import json
 import os
@@ -1132,6 +1133,21 @@ def run_checks(b: Batch, r: int, cmd: str, proc: subprocess.Popen, log: Path, st
     return passed, last, failures, minutes
 
 
+def hold_slots(b: Batch, what: str, stack: contextlib.ExitStack) -> dict:
+    """Take a slot of each lock a check run holds (checks.run_locks), `tests` and each `[checks] locks` lock, into
+    `stack`, which frees them when it closes; return the environment that names the slots (capacity.slot_env). A slot
+    that stays held past capacity.LOCK_WAIT_MINUTES stops the batch."""
+    from colony import capacity, checks
+
+    note = {"pid": os.getpid(), "session": os.environ.get(cli.SESSION_ENV, ""),
+            "command": f"{cli.NAME} batch {b.name}: {what}"}
+    try:
+        held = stack.enter_context(capacity.hold_all(checks.run_locks(b.config), capacity.LOCK_WAIT_MINUTES, note))
+    except cli.ColonyError as e:
+        raise Stop(f"{what} found no free slot: {e}") from None
+    return capacity.slot_env(held)
+
+
 def failure_key(finding: Finding) -> str:
     """What makes two runs' failures the same one: the test it names, else its text without durations."""
     return test_id(finding) or DURATION.sub("", finding.text)
@@ -1168,8 +1184,9 @@ def start_failures(b: Batch, r: int, cmd: str) -> tuple[str, set[str]]:
         except Stop:
             return sha, set()
         log = b.reports / f"checks-start-{r}.log"
-        with log.open("wb") as out:
-            command, shell, env = portable.shell(cmd, b.check_env())
+        with contextlib.ExitStack() as slots, log.open("wb") as out:
+            slot_env = hold_slots(b, f"round {r}'s checks on the start commit", slots)
+            command, shell, env = portable.shell(cmd, {**b.check_env(), **slot_env})
             proc = subprocess.Popen(command, shell=shell, cwd=wt, env=env, stdin=subprocess.DEVNULL, stdout=out,
                                     stderr=subprocess.STDOUT, **portable.own_group())
             b.track(proc)
@@ -1262,10 +1279,12 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
     if planned.cmd is not None:
         key = scoped.commit_key(b, "HEAD", cmd)
         reused = scoped.reusable_pass(b.config, key[0])
+    slots = contextlib.ExitStack()  # the round's checks hold their slots until run_checks returns (hold_slots)
     if planned.cmd is not None and not reused:
         b.running(f"checks-r{r}", True)
+        slot_env = hold_slots(b, f"round {r}'s checks", slots)
         with log.open("wb") as out:
-            command, shell, env = portable.shell(cmd, b.check_env())
+            command, shell, env = portable.shell(cmd, {**b.check_env(), **slot_env})
             proc = subprocess.Popen(command, shell=shell, cwd=b.wt, env=env, stdout=out, stderr=subprocess.STDOUT,
                                     **portable.own_group())
             b.track(proc)
@@ -1279,7 +1298,7 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
 
         watcher = scoped.watch_log(log, proc, first_failure, scoped.settings(b.config)["failure"])
     review_report, walk_report = b.reports / f"review-{r}.md", b.reports / f"walk-{r}.md"
-    with futures.ThreadPoolExecutor(max_workers=2) as pool:
+    with slots, futures.ThreadPoolExecutor(max_workers=2) as pool:
         review = pool.submit(run_agent, b, "reviewer", reviewer_prompt(b, r, head, prev, risk_list(b, head)), b.wt,
                              f"review-r{r}", review_report, parse_open) if b.review else None
         walking = pool.submit(walk_round, b, r, head, changed) if walk else None
@@ -1296,6 +1315,7 @@ def gate(b: Batch, r: int, last: bool = False) -> list[Finding]:
         else:
             passed, line, check_findings, check_minutes = run_checks(b, r, cmd, proc, log, started, clock, watcher,
                                                                      cap)
+            slots.close()  # free the slots now: the start commit's checks below take their own
             if proc.returncode == 0 and passed and not line.startswith(ONLY_NOT_RUN):
                 scoped.keep(b, key[0], key[1], key[2], cmd, "pass", line, check_minutes)
             elif not passed:

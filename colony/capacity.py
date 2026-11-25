@@ -1161,11 +1161,11 @@ def slots(config: dict, name: str, given: int | None = None) -> int:
     return 1
 
 
-def holders(name: str) -> list[dict]:
+def holders(name: str, folder: Path | None = None) -> list[dict]:
     """Who holds a lock now, one entry per held slot, from each holder's note: a note whose lock nobody holds is
-    stale, and goes."""
+    stale, and goes. `folder` is the locks' folder, locks_dir() by default."""
     found = []
-    for note in sorted(locks_dir().glob(f"{name}.*.json")):
+    for note in sorted((folder or locks_dir()).glob(f"{name}.*.json")):
         path = note.with_suffix(".lock")
         if path.exists():
             with open(path, "a") as handle, portable.lock(handle, block=False) as free:
@@ -1179,10 +1179,11 @@ def holders(name: str) -> list[dict]:
 
 
 @contextmanager
-def hold(name: str, count: int, minutes: float, note: dict):
+def hold(name: str, count: int, minutes: float, note: dict, folder: Path | None = None, stop=None):
     """Hold one of a named lock's `count` slots, waiting up to `minutes` for one, and yield its number. A lock is a
-    file per slot under locks_dir(), locked with portable.lock, so a holder that dies frees its slot at once."""
-    folder = locks_dir()
+    file per slot under locks_dir(), or `folder`, locked with portable.lock, so a holder that dies frees its slot at
+    once. `stop`, when given, is asked between tries, and a true answer ends the wait with a ColonyError."""
+    folder = folder or locks_dir()
     folder.mkdir(parents=True, exist_ok=True)
     deadline, said = time.monotonic() + minutes * 60, False
     while True:
@@ -1198,7 +1199,9 @@ def hold(name: str, count: int, minutes: float, note: dict):
                         (folder / f"{name}.{slot}.json").unlink(missing_ok=True)
                 return
             stack.close()
-        held = holders(name)
+        held = holders(name, folder)
+        if stop is not None and stop():
+            raise cli.ColonyError(f"asked to stop while it waited for the lock {name}")
         if time.monotonic() >= deadline:
             raise cli.ColonyError(f"the lock {name} stayed held for {minutes:g} minutes, by "
                                   f"{describe_holders(held) or 'a run that left no note'}")
@@ -1207,6 +1210,24 @@ def hold(name: str, count: int, minutes: float, note: dict):
                   file=sys.stderr, flush=True)
             said = True
         SLEEP(LOCK_POLL)
+
+
+@contextmanager
+def hold_all(locks, minutes: float, note: dict, folder: Path | None = None, stop=None):
+    """Hold one slot of each lock in `locks`, pairs of a name and its slots, and yield {name: slot}. They are taken
+    in the order of their names, the same order for every run, so two runs that need the same locks never hold one
+    each while they wait for the other. Each waits up to `minutes`, as hold does."""
+    with ExitStack() as stack:
+        held = {}
+        for name, count in sorted((str(name), int(count)) for name, count in locks):
+            held[name] = stack.enter_context(hold(name, count, minutes, note, folder, stop))
+        yield held
+
+
+def slot_env(held: dict) -> dict:
+    """The environment that names the slot of each lock a run holds: $COLONY_LOCK_SLOT_<NAME>, its name in capitals
+    with every other character an underscore, such as COLONY_LOCK_SLOT_TEST_DB=1 for test-db."""
+    return {f"{SLOT_ENV}_{re.sub(r'[^A-Z0-9]', '_', name.upper())}": str(slot) for name, slot in held.items()}
 
 
 def describe_holders(held: list[dict], now: float | None = None) -> str:

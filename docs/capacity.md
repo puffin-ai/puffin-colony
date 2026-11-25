@@ -69,7 +69,7 @@ A second run waits for the lock, says who holds it, and gives up after `--wait` 
 
 A lock is a file per slot in `~/.colony/locks/`, shared by every repo on the computer. A run that crashes frees its slot at once. `colony lock --list` names each held lock, who holds it and for how long.
 
-To lock a check for every helper, put the lock in the command itself, such as `fast_check = "colony lock test-db -- npm test"`.
+Every check run that `colony fast-check`, `colony check run` or a batch starts holds a slot of `tests` by itself. To lock a check for every helper on something more, name the lock in `[checks] locks`, such as `locks = ["test-db"]`, and the command gets its slot in `$COLONY_LOCK_SLOT_TEST_DB`; see [checks.md](checks.md#every-check-fast-or-in-the-background). Or put the lock in the command itself, such as `fast_check = "colony lock test-db -- npm test"`.
 
 ## Sleep and wake
 

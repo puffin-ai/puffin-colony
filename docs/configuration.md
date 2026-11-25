@@ -127,6 +127,7 @@ These keys make checks proportional, fast and never repeated. [checks.md](checks
 | `caps` | no | `{ full = 3600 }` | A run past its kind's cap, in seconds, is stopped and counts as failed; a batch round past its cap stops the batch. Default: no cap. |
 | `reuse` | no | `true` | Whether a pass on the same code with the same command is reused instead of run again. Default `true`. |
 | `failure` | no | `'^BROKEN: '` | A regular expression for the repo's own failure line, beside the ones Colony knows, so its first failure shows at once. |
+| `locks` | no | `["test-db"]` | Locks every check run holds a slot of while it runs, besides `tests`, for things only one run can use at a time, such as a shared test database. `[locks.<name>] slots` sets how many runs share each. See [checks.md](checks.md#every-check-fast-or-in-the-background). |
 
 ## `[ci]`
 
