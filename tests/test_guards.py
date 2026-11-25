@@ -530,6 +530,59 @@ def test_a_merge_through_the_api_is_refused_even_into_an_allowed_branch(command,
         command
 
 
+MUTATION = 'mutation { mergePullRequest(input: {pullRequestId: "X"}) { clientMutationId } }'
+
+
+@pytest.mark.parametrize("command", ["gh api graphql -F query=@merge.graphql", "gh api graphql -Fquery=@merge.graphql",
+                                     "gh api graphql --field=query=@merge.graphql", "gh api graphql --input merge.json",
+                                     "gh api graphql --input=merge.json", "gh api graphql --input -",
+                                     "gh api graphql -F query=@-", "gh api graphql -F query=@missing.graphql"])
+def test_a_graphql_merge_read_from_a_file_or_stdin_is_refused(command, hosted, tmp_path):
+    """Regression: the guard read a GraphQL query only from the command line, so a merge mutation in a file passed,
+    the very form the refusal's advice pointed to. A query from a file is read from the call's folder; one from
+    standard input, or a file the guard can't read, is refused."""
+    (hosted / "merge.graphql").write_text(MUTATION)
+    (hosted / "merge.json").write_text(json.dumps({"query": MUTATION}))
+    run = push_guard(command, hosted, path=github(tmp_path / "gh"))
+    assert merge_refused(run, "`gh api graphql`"), (command, run.stderr)
+
+
+def test_a_graphql_query_from_a_file_without_a_merge_runs(hosted, tmp_path):
+    (hosted / "issues.graphql").write_text("query { repository(owner: \"acme\", name: \"demo\") { id } }")
+    (hosted / "body.json").write_text(json.dumps({"query": "query { viewer { login } }"}))
+    for command in ("gh api graphql -F query=@issues.graphql", "gh api graphql --input body.json",
+                    "gh api graphql -f query=@literal-text"):  # -f sends @literal-text as it is, reading no file
+        run = push_guard(command, hosted, path=github(tmp_path / "gh"))
+        assert (run.returncode, run.stderr) == (0, ""), command
+
+
+@pytest.mark.parametrize("runner", ["bash", "sh", "zsh", "source", ".", "./", "bash -e", "sh <"])
+@pytest.mark.parametrize("text, which", [("git push origin HEAD:refs/heads/main\n", "push guard"),
+                                         ("gh pr merge 5\n", "merge guard"),
+                                         ("pkill -f 'colony wait'\n", "kill guard")])
+def test_a_script_file_that_pushes_merges_or_kills_is_refused(runner, text, which, on_feature):
+    """Regression: the guard never read a script run as `bash push.sh`, so a push, merge or kill moved into a file
+    passed. A script's text is read, and a script it runs in turn, from the call's folder."""
+    (on_feature / "inner.sh").write_text("#!/bin/sh\n" + text)
+    (on_feature / "run.sh").write_text("#!/bin/sh\necho start\nbash inner.sh\n")
+    (on_feature / "run.sh").chmod(0o755)
+    script = "./run.sh" if runner == "./" else "run.sh"
+    command = script if runner == "./" else f"{runner} {script}"
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and f"{which}: refused, the script {script} runs inner.sh, which holds a" in run.stderr, \
+        (command, run.stderr)
+    assert "still refused" in run.stderr
+
+
+def test_a_script_without_a_push_merge_or_kill_runs_and_a_program_is_never_read_as_one(on_feature):
+    (on_feature / "test.sh").write_text("#!/bin/sh\nnpm test\ngit status\n")
+    for command in ("bash test.sh", "sh -c 'git status'", f"{sys.executable} -c pass", "git status"):
+        run = push_guard(command, on_feature)
+        assert (run.returncode, run.stderr) == (0, ""), command
+    run = push_guard("bash no-such-script.sh", on_feature)
+    assert run.returncode == 2 and "the script no-such-script.sh can't be read" in run.stderr
+
+
 @pytest.mark.parametrize("command", ["gh api repos/acme/demo/pulls/5/merge", "gh pr view 5", "gh pr create --base main",
                                      "gh api repos/acme/demo/merges", "git merge origin/main", "colony merge ana/login",
                                      "gh dash"])

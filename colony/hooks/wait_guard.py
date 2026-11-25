@@ -143,13 +143,19 @@ REMOTE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")  # a remote's plain n
 # A plain branch name, as git check-ref-format allows one, without globs, refs/, HEAD or a leading dash.
 BRANCH = re.compile(r"^(?!-)(?!refs/)(?!HEAD$)(?!.*(?:\.\.|//|@\{|\.lock(?:/|$)|/\.))"
                     r"[A-Za-z0-9_.][A-Za-z0-9_./-]*(?<![./])$")
+# The way out for text that only names a push, a merge or a kill, such as a commit message: a file. It is no way out
+# for a command: the guard reads a script a line runs (scripts), and a GraphQL query read from a file (api_merge).
+TEXT_ADVICE = (" If these words are only text, such as a commit message or a pull request body that names them, write "
+               "the text to a file with your file tool and pass the file, as `git commit -F <file>` and `gh pr create "
+               "--body-file <file>` do. A push, a merge or a kill moved into a file or a script is still refused: run "
+               "it as its own plain command.")
+FILE_LIMIT = 1_000_000  # bytes of a script or a query file the guard reads; a longer one it can't check
 PUSH_REFUSAL = ("push guard: refused, {reason}. A push takes one form alone: `git push [-u] [--force-with-lease] "
                 "[--dry-run] <remote> HEAD:refs/heads/<branch>`, or `<local branch>:refs/heads/<branch>` in place of "
                 "HEAD, where the remote is one this clone names, with no push refspec or mirror in its git config, "
                 "whose push and fetch addresses are one repo, and the branch is your own, never {branches}. Land "
                 "work on those through a pull request (in Hack, `colony merge <branch>`), or ask your person."
-                " If these words are only text, such as a here-document or a message that names them, "
-                "write the text to a file with your file tool and pass the file instead.")
+                + TEXT_ADVICE)
 REFUSAL = ("wait guard: refused, {reason}. A foreground wait blocks the session. Start the command with "
            "run_in_background and carry on, or start `colony wait` with run_in_background and act on its lines.")
 
@@ -172,8 +178,7 @@ KILL_REFUSAL = ("kill guard: refused, {reason}. A kill by name or pattern can en
                 "terminal app and the background tasks on this computer. Close a Colony session by its name with "
                 "`colony stop <name>`. For any other process, find the one you mean, check it with "
                 "`ps -p <pid> -o pid=,command=`, and kill that number alone: `kill <pid>`."
-                " If these words are only text, such as a here-document or a message that names them, "
-                "write the text to a file with your file tool and pass the file instead.")
+                + TEXT_ADVICE)
 
 # The merge guard
 SAFETY = "safety"  # the colony.toml table that holds merge_into and protect
@@ -222,8 +227,7 @@ MERGE_REFUSAL = ("merge guard: refused, {reason}. No agent merges or pushes into
                  "push your own branch and open a pull request for the person to merge (in Hack, `colony merge "
                  "<branch>`). The person allows merges into a branch with `merge_into` under [safety] in "
                  ".colony/colony.toml, on the repo's default branch on GitHub."
-                 " If these words are only text, such as a here-document or a message that names them, "
-                 "write the text to a file with your file tool and pass the file instead.")
+                 + TEXT_ADVICE)
 
 
 def sleep_seconds(arguments: list[str]) -> float | None:
@@ -1149,13 +1153,40 @@ def pr_merge(arguments: list[str], repo: str, cwd: str) -> str:
     return pr_allowed(*pr_target(target, repo, cwd), cwd)
 
 
-def api_merge(arguments: list[str]) -> str:
-    """Why a `gh api` call with these arguments, the words after `api`, merges through the API, or ""."""
+def file_bytes(name: str, cwd: str) -> bytes | None:
+    """A file a call names, read as the shell finds it: from the call's folder, with ~ and $VARIABLES expanded, at
+    most FILE_LIMIT bytes; None when it can't be read or is longer."""
+    path = Path(os.path.expandvars(os.path.expanduser(name)))
+    if not path.is_absolute():
+        path = Path(cwd or ".") / path
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read(FILE_LIMIT + 1)
+    except OSError:
+        return None
+    return data if len(data) <= FILE_LIMIT else None
+
+
+def graphql_source(option: str, value: str) -> str | None:
+    """Where a `gh api` field's value comes from: the file a `-F key=@file` or `--input file` names, "-" for standard
+    input, or None for a value written on the line. `-f` sends its value as it is, @ or not."""
+    if option == "--input":
+        return value
+    if option in ("-F", "--field"):
+        _, _, given = value.partition("=")
+        return given[1:] if given.startswith("@") else None
+    return None
+
+
+def api_merge(arguments: list[str], cwd: str = "") -> str:
+    """Why a `gh api` call with these arguments, the words after `api`, merges through the API, or "". A GraphQL
+    query read from a file is read from the call's folder; one from standard input, or from a file the guard can't
+    read, is refused, since the guard can't see what it does."""
     method, path, values, option = "", "", [], ""
     for word in arguments:
         if option:
             method = word.upper() if option in ("-X", "--method") else method
-            values += [word] if option in GH_API_FIELDS else []
+            values += [(option, word)] if option in GH_API_FIELDS else []
             option = ""
         elif word in GH_API_VALUE_OPTIONS:
             option = word
@@ -1164,9 +1195,10 @@ def api_merge(arguments: list[str]) -> str:
         elif word.startswith("-X"):
             method = word[2:].upper()
         elif word.startswith(("--field=", "--raw-field=", "--input=")):
-            values.append(word.partition("=")[2])
+            name, _, value = word.partition("=")
+            values.append((name, value))
         elif word.startswith(("-f", "-F")) and len(word) > 2:
-            values.append(word[2:])
+            values.append((word[:2], word[2:]))
         elif not word.startswith("-") and not path:
             path = word.strip("/")
     path = path.partition("?")[0]
@@ -1174,10 +1206,129 @@ def api_merge(arguments: list[str]) -> str:
         return "`gh api` merges a pull request, which only `gh pr merge` may do, so the guard can check its base"
     if re.search(r"(?:^|/)merges$", path) and (method == "POST" or (not method and values)):
         return "`gh api` merges a branch, which only `gh pr merge` may do, so the guard can check its base"
-    if path == "graphql" and any(GRAPHQL_MERGE.search(value) for value in values):
-        return ("`gh api graphql` merges a pull request, which only `gh pr merge` may do, so the guard can check "
-                "its base")
+    if path != "graphql":
+        return ""
+    merges = ("`gh api graphql` merges a pull request, which only `gh pr merge` may do, so the guard can check its "
+              "base")
+    for given, value in values:
+        source = graphql_source(given, value)
+        if source is None:
+            if GRAPHQL_MERGE.search(value):
+                return merges
+            continue
+        if source in ("", "-"):
+            return ("`gh api graphql` reads its query from standard input, which the guard can't read: write the "
+                    "query on the line, or in a file it names")
+        data = file_bytes(source, cwd)
+        if data is None:
+            return (f"`gh api graphql` reads its query from {source}, which the guard can't read from this folder, "
+                    "so it can't check that the query merges nothing")
+        if GRAPHQL_MERGE.search(data.decode("utf-8", errors="replace")):
+            return f"{merges}: {source} holds a merge mutation"
     return ""
+
+
+# Scripts: a push, a merge or a kill moved into a file the line runs as a script
+
+
+SCRIPT_SOURCES = {"source", "."}  # the shell's own commands that run a file's lines
+SHELL_VALUE_OPTIONS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}  # a shell's options that take a value
+HELD = (("push", RAW_PUSH, "a `git push`"), ("merge", RAW_MERGE, "a gh merge"), ("kill", RAW_KILL, "a kill"))
+
+
+def shell_segments(line: list[str]) -> list[tuple[list[str], str]]:
+    """A line's simple commands as sequence() splits them, each with the file a `<` gives it on standard input, or
+    ""."""
+    found: list[tuple[list[str], str]] = []
+    words: list[str] = []
+    given, skip = "", ""
+    for token in line:
+        if skip:
+            given, skip = (token if skip == "<" else given), ""
+        elif token in REDIRECTIONS:
+            skip = token
+            if words and words[-1].isdigit():
+                words.pop()
+        elif token and set(token) <= PUNCTUATION:
+            if words:
+                found.append((words, given))
+            words, given = [], ""
+        elif token not in ("{", "}"):
+            words.append(token)
+    return [*found, (words, given)] if words else found
+
+
+def script_named(program: list[str], given: str) -> str:
+    """The file a simple command runs as a script: a shell's first operand (`bash f`, `sh -e f`), the file a shell
+    reads on standard input (`sh < f`), the file `source f` or `. f` reads, or a program named by its path (`./f`).
+    "" when it runs none."""
+    if not program:
+        return ""
+    if PurePath(program[0]).name in SHELLS:
+        skip = False
+        for word in program[1:]:
+            if skip:
+                skip = False
+            elif word in SHELL_VALUE_OPTIONS:
+                skip = True
+            elif not word.startswith(("-", "+")):
+                return word
+        return given
+    if program[0] in SCRIPT_SOURCES:
+        return program[1] if len(program) > 1 else ""
+    return program[0] if "/" in program[0] else ""
+
+
+def script_text(name: str, cwd: str) -> str | None:
+    """A script's text, read from the call's folder as the shell finds it; "" for a program, a file holding a zero
+    byte, which the shell runs as no script; None when it can't be read or is longer than FILE_LIMIT."""
+    path = Path(os.path.expandvars(os.path.expanduser(name)))
+    try:
+        with open(path if path.is_absolute() else Path(cwd or ".") / path, "rb") as handle:
+            data = handle.read(FILE_LIMIT + 1)
+    except OSError:
+        return None
+    if b"\0" in data[:8192]:
+        return ""
+    return data.decode("utf-8", errors="replace") if len(data) <= FILE_LIMIT else None
+
+
+def script_findings(name: str, cwd: str, depth: int) -> list[tuple[str, str]]:
+    """(kind, what) for each push, merge or kill a script holds, or a script it runs in turn holds: what follows the
+    script's name in a reason, such as "holds a `git push`". A script the guard can't read gives kind merge."""
+    text = script_text(name, cwd)
+    if text == "":
+        return []
+    if text is None:
+        return [("merge", "can't be read from this folder, so the guard can't check that it pushes, merges or kills "
+                          "nothing: run it by a path the guard can read")]
+    held = [(kind, f"holds {what}, which the guard can't check inside a script") for kind, pattern, what in HELD
+            if pattern.search(text)]
+    if held or depth >= DEPTH:
+        return held
+    return [(kind, f"runs {inner}, which {what}") for kind, inner, what in scripts(text, cwd, depth + 1)]
+
+
+def scripts(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str, str]]:
+    """(kind, script, what) for each script the line runs, through a shell's -c and eval too, that holds a push, a
+    merge or a kill, or runs a script that does. Kind is push, merge or kill: the guard whose refusal it joins."""
+    try:
+        line = tokens(command)
+    except ValueError:
+        return []
+    found = []
+    for words, given in shell_segments(line):
+        program = run_program(words)
+        name = PurePath(program[0]).name if program else ""
+        if name in SHELLS or name == "eval":
+            inner = shell_lines(name, program[1:])
+            if inner:
+                found += [item for text in inner for item in scripts(text, cwd, depth + 1)] if depth < DEPTH else []
+                continue
+        script = script_named(program, given)
+        if script:
+            found += [(kind, script, what) for kind, what in script_findings(script, cwd, depth)]
+    return found
 
 
 def gh_alias(name: str, cwd: str) -> str | None:
@@ -1270,7 +1421,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
                          "be the one it merges: run it on a line of its own, with --repo for another repo" if context
                          else pr_merge(rest[2:], repo, cwd))
         elif rest[:1] == ["api"]:
-            found.append(api_merge(rest[1:]))
+            found.append(api_merge(rest[1:], cwd))
     return [reason for reason in found if reason]
 
 
@@ -1475,6 +1626,9 @@ def main() -> int:
     lowered = command.lower()
     if any(word in lowered for word in ("kill", "fuser", "stop-process", "spps")):
         killed = kills(command)
+    # A push, a merge or a kill moved into a script the line runs, which the guards' reading of the line can't see.
+    for kind, script, what in scripts(command, cwd):
+        {"push": rewrites, "merge": merged, "kill": killed}[kind].append(f"the script {script} {what}")
     # The plain-line rule: a line that names a push, a gh merge or a kill anywhere is one plain command of that kind.
     for kind, pattern, reasons in (("push", RAW_PUSH, rewrites), ("merge", RAW_MERGE, merged),
                                    ("kill", RAW_KILL, killed)):
