@@ -434,3 +434,15 @@ def test_resume_keeps_a_session_the_ledger_holds_no_id_for(crashed, config, open
     assert recover.resume(config, resume_args()) == 1
     assert "builder-1" not in {call["session"] for call in opened} and len(opened) == 3
     assert "kept builder-1: the ledger holds no Claude Code session id" in capsys.readouterr().err
+
+
+def test_reopen_opens_one_session_from_its_ledger_entry_for_any_recovery(config, opened, capsys):
+    ledger("builder-3", NOW - 600, lead="ana-main-lead")
+    assert recover.reopen(config, entry(config, "builder-3"), "wake: your usage limit reset") == 0
+    [call] = opened
+    assert (call["session"], call["resume"], call["account"], call["lead"], call["background"]) == (
+        "builder-3", "id-builder-3", "first", "ana-main-lead", True)
+    assert call["prompt"] == "wake: your usage limit reset"
+    assert entry(config, "builder-3")["resumed"] >= NOW
+    assert recover.reopen(config, {"name": "builder-9"}, "x") == 1
+    assert "kept builder-9: the ledger holds no Claude Code session id" in capsys.readouterr().err

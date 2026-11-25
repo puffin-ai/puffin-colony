@@ -659,6 +659,40 @@ def restart_note(seen: Seen, stopped: list[dict]) -> str:
     return " ".join([note, *(restart_line(task) for task in stopped if task.get("command") != "wait")])
 
 
+def reopen(config: dict, entry: dict, note: str, dry_run: bool = False) -> int:
+    """Open one session from its ledger entry again: `claude --resume <its id>` on the account that holds its
+    conversation, with its role's settings, in the folder it started in, in cmux or the background (never this
+    terminal), with `note` as its first line. The ledger notes that it was reopened. Returns 1 when it wasn't, saying
+    why on stderr. `colony resume` and any other recovery, such as a wake after a usage limit, open sessions through it."""
+    name = entry.get("name") or ""
+    account = account_of(config, entry)
+    if not entry.get("id"):
+        print(f"kept {name}: the ledger holds no Claude Code session id to resume it by", file=sys.stderr)
+        return 1
+    if not account:
+        print(f"kept {name}: its settings folder, {entry.get('config_dir') or '~/.claude'}, is no account in "
+              f"{cli.CONFIG_NAME}, and only that account holds its conversation", file=sys.stderr)
+        return 1
+    session = entry.get("session") or name
+    opened = argparse.Namespace(account=account, person=entry.get("person") or None, lead_name=entry.get("lead", ""),
+                                resume=entry["id"], background=True, here=False, name=session, dry_run=dry_run)
+    start, before = start_folder(entry), os.getcwd()
+    try:
+        if start:
+            os.chdir(start)  # launch opens the session at the repo's top here, as it first opened
+        code = cli.launch(config, opened, session, role_of(session), note)
+    except cli.ColonyError as e:
+        print(f"kept {name}: {e}", file=sys.stderr)
+        code = 1
+    finally:
+        os.chdir(before)
+    if code:
+        return 1
+    if not dry_run and name:
+        update(project_of(config), name, lambda held: held.update(resumed=time.time()))
+    return 0
+
+
 def resume(config: dict, args) -> int:
     """`colony resume [<name> ...] [--within H] [--dry-run]`: see the module's docstring. Returns 1 when a session or
     a service didn't come back."""
@@ -692,39 +726,15 @@ def resume(config: dict, args) -> int:
     if not chosen and not failed:
         print(f"No session to reopen: none stopped unexpectedly here in the last {hours:g} hours.")
     for seen in chosen:
-        entry = seen.entry
-        account = account_of(config, entry)
-        if not account:
-            print(f"kept {seen.name}: its settings folder, {entry.get('config_dir') or '~/.claude'}, is no account in "
-                  f"{cli.CONFIG_NAME}, and only that account holds its conversation", file=sys.stderr)
-            failed += 1
-            continue
-        session = entry.get("session") or seen.name
-        mine = [task for task in stopped if owned(task, seen.name, entry.get("id", ""))]
+        mine = [task for task in stopped if owned(task, seen.name, seen.entry.get("id", ""))]
         note = restart_note(seen, mine)
         if transport.holds_secret(note):
-            note = restart_note(Seen(entry, seen.last, seen.source, seen.state, "of something this note leaves out"),
-                                mine)
-        opened = argparse.Namespace(**{**vars(args), "account": account, "person": entry.get("person") or None,
-                                       "lead_name": entry.get("lead", ""), "resume": entry["id"], "background": True,
-                                       "here": False, "name": session})
-        start = start_folder(entry)
-        before = os.getcwd()
-        try:
-            if start:
-                os.chdir(start)  # launch opens the session at the repo's top here, as it first opened
-            code = cli.launch(config, opened, session, role_of(session), note)
-        except cli.ColonyError as e:
-            print(f"kept {seen.name}: {e}", file=sys.stderr)
-            code = 1
-        finally:
-            os.chdir(before)
-        if code:
+            note = restart_note(Seen(seen.entry, seen.last, seen.source, seen.state,
+                                     "of something this note leaves out"), mine)
+        if reopen(config, seen.entry, note, args.dry_run):
             failed += 1
-            continue
-        if not args.dry_run:
+        elif not args.dry_run:
             forget(mine)
-            update(project, seen.name, lambda held: held.update(resumed=time.time()))
     for service in services(config):
         if run_command(service.check, CHECK_TIMEOUT):
             continue
