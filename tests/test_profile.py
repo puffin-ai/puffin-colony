@@ -453,6 +453,13 @@ def test_a_session_sees_its_orders_once_when_it_starts_and_each_change_after(hom
     assert profile.change_lines(CONFIG, "lead", full=True) == []  # the wait showed it: the hook doesn't again
 
 
+def test_a_record_the_setup_reminder_wrote_alone_shows_no_empty_change(home, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s-1")
+    monkeypatch.setenv("COLONY_SESSION", "lead")
+    assert profile.setup_nudge(CONFIG, "lead")  # writes a record that holds no orders yet
+    assert profile.change_lines(CONFIG, "lead") == []
+
+
 def test_a_running_wait_hears_a_change_within_a_minute(home):
     personal("[[rules]]\ntext = \"Be brief.\"\n")
     now = [0.0]

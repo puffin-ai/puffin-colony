@@ -946,10 +946,11 @@ def change_lines(config: dict, me: str, full: bool = False) -> list[str]:
     starting = bool(sid) and (seen is None or seen.get("session") != sid)
     if starting:
         out = render(profile, role).splitlines() if lines else []
-    elif seen is not None and seen.get("orders") != lines:
+    elif seen is not None:
         old = [line for line in seen.get("orders") or [] if isinstance(line, str)]
-        out = [CHANGED, *(f"- now: {line}" for line in lines if line not in old),
-               *(f"- no longer: {line}" for line in old if line not in lines)]
+        moved = [*(f"- now: {line}" for line in lines if line not in old),
+                 *(f"- no longer: {line}" for line in old if line not in lines)]
+        out = [CHANGED, *moved] if moved else []
     if seen is None and not lines and not starting:
         return out
     record = dict(seen or {})
