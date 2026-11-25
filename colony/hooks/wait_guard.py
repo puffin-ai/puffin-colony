@@ -1623,25 +1623,34 @@ def writer(words: list[str]) -> bool:
 
 
 class Variables(NamedTuple):
-    """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`), and
-    whether it holds something that may bind any name unseen (`opaque`, REBINDS)."""
+    """What a text binds: the values the guard can follow (`values`), every name it binds in any way (`bound`),
+    whether it holds something that may bind any name unseen (`opaque`, REBINDS), and whether a name it never binds
+    may take this computer's value (`environment`), which a line that ran it may have bound unseen."""
 
     values: dict
     bound: frozenset
     opaque: bool = False
+    environment: bool = True
 
 
+NO_VARIABLES = Variables({}, frozenset())
 NAME_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SCRIPT_FOLDER = re.compile(r'\$\(dirname\s+"?(?:\$0|\$\(echo\s+"\$0"\s*\|\s*sed\s[^)]*\))"?\)')
-PLAIN_VALUE = re.compile(r"""[^\s$`'";|&()<>]+|'[^']*'|"[^"$`\\]*\"""")
-BINDERS = re.compile(r"\b(?:read|export|readonly|unset|getopts|mapfile|readarray|vared|zparseopts)\b([^;\n|&]*)")
-# What may bind a variable in a way script_variables doesn't count, or stand in for a command a value comes from: eval,
-# source or ., an alias or a function (one named dirname, say), declare, typeset or local (a nameref among them),
-# printf -v, let, arithmetic, ${NAME=value}, an array element, select and coproc. A text that holds any of them
-# resolves no variable at all.
-REBINDS = re.compile(r"\b(?:eval|source|alias|function|declare|typeset|local|let|select|coproc)\b"
-                     r"|printf\b[^;\n|&]*\s-v|(?:^|[;&|(\s])\.\s|[\w-]+\s*\(\s*\)|\(\("
-                     r"|\$\{[A-Za-z_]\w*:?=|[A-Za-z_]\w*\[[^\]\n]*\]\+?=", re.M)
+PLAIN_VALUE = re.compile(r"""[^\s$`'";|&()<>\\]+|'[^'\n]*'|"[^"$`\\]*\"""")
+SET_OPTIONS = re.compile(r"set(?:\s+[-+][A-Za-z]+(?:\s+[a-z]+)?)*")  # set -eu, set -euo pipefail
+# Commands that bind the names they are given, in bash and zsh.
+BINDER_NAMES = ("read|export|readonly|unset|getopts|mapfile|readarray|vared|zparseopts|strftime|zstat|sysread|getln"
+                "|compgen|zformat|zregexparse|pcre_match|zle")
+BINDERS = re.compile(rf"\b(?:{BINDER_NAMES})\b([^;\n|&]*)")
+# What may bind a name the guard can't see or name: eval, source or ., an alias or a function (one named dirname,
+# say), declare, typeset or local (a nameref among them), let, arithmetic, select, coproc, trap, enable, printf -v,
+# print -v, wait -p, set -A, ${NAME=value}, an array element, a named descriptor such as {NAME}>, and a binding
+# command given a name made at run time, such as read "$n". A text that holds any of them resolves no variable.
+REBINDS = re.compile(r"\b(?:eval|source|alias|function|declare|typeset|local|let|select|coproc|trap|enable)\b"
+                     r"|\bprintf?\b[^;\n|&]*\s-v|\bwait\b[^;\n|&]*\s-p|\bset\s+[-+]A\b"
+                     r"|(?:^|[;&|(\s])\.\s|[\w-]+\s*\(\s*\)|\(\(|\$\{[A-Za-z_]\w*:?=|[A-Za-z_]\w*\[[^\]\n]*\]\+?="
+                     r"|\{[A-Za-z_]\w*\}\s*[<>]"
+                     rf"|\b(?:{BINDER_NAMES})\b[^;\n|&<>]*\s[\"']*[$`]", re.M)
 # Variables the shell sets itself, such as PWD after a cd or REPLY after a read: the guard's own environment says
 # nothing of them. Only an upper-case name may come from this computer's environment (zsh's path and cdpath are
 # PATH's and CDPATH's).
@@ -1652,12 +1661,21 @@ SHELL_SET = {"PWD", "OLDPWD", "REPLY", "OPTARG", "OPTIND", "MAPFILE", "READLINE_
 ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 
 
+def only_read(name: str, text: str) -> bool:
+    """Whether `text` names `name` in its one assignment and otherwise only as $name or ${name}: any other mention,
+    such as read name, printf -v name, {name}> or ${name:=x}, may bind it."""
+    mentions = len(re.findall(rf"(?<!\w){name}(?!\w)", text))
+    reads = len(re.findall(rf"\${name}(?!\w)|\$\{{{name}\}}", text))
+    return mentions == reads + 1
+
+
 def script_variables(text: str, path: str | None) -> Variables:
-    """The variables a text binds. A name has a value the guard follows only when the text binds it once, on a line
-    of its own: to a plain word or a quoted one with no $ or `, or, in a script file run by `path` (its $0), to its
-    own folder, `NAME=$(dirname "$0")` (through `echo "$0" | sed` too). A typed line's $0 is the shell's, so `path`
-    is None and no folder follows. A second assignment anywhere, any read, for, export and the like, leaves the name
-    with no value the guard can know, and a text REBINDS matches resolves none."""
+    """The variables a text binds. A name has a value the guard follows only when the text sets it once, in its
+    straight-line start, the lines before any other command (blank lines, comments and `set -eu` aside), and
+    otherwise names it only as $name or ${name} (only_read): to a plain word or a quoted one with no $, ` or \\, or,
+    in a script file run by `path` (its $0), to its own folder, `NAME=$(dirname "$0")` (through `echo "$0" | sed`
+    too). A typed line's $0 is the shell's, so `path` is None and no folder follows. A text REBINDS matches resolves
+    none."""
     counts: dict[str, int] = {}
     for match in re.finditer(r"(?<![\w$.\-/])([A-Za-z_][A-Za-z0-9_]*)\+?=", text):
         counts[match[1]] = counts.get(match[1], 0) + 1
@@ -1669,18 +1687,30 @@ def script_variables(text: str, path: str | None) -> Variables:
     for match in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\b", text):
         counts[match[1]] = counts.get(match[1], 0) + 2
     opaque = bool(REBINDS.search(text))
-    values = {}
-    for line in [] if opaque else text.splitlines():
-        named = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\s*$", line)
-        if not named or counts.get(named[1]) != 1:
+    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    body, values = "\n".join(lines), {}
+    for line in [] if opaque else lines:
+        line = line.strip()
+        named = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", line)
+        if not line or SET_OPTIONS.fullmatch(line):
             continue
+        if not named or not (SCRIPT_FOLDER.fullmatch(named[2]) or PLAIN_VALUE.fullmatch(named[2])):
+            break  # the straight-line start ends at the first other command
         name, value = named[1], named[2]
-        if SCRIPT_FOLDER.fullmatch(value):
-            if path is not None:
-                values[name] = os.path.dirname(path) or "."
-        elif PLAIN_VALUE.fullmatch(value):
+        if counts.get(name) != 1 or not only_read(name, body):
+            continue
+        if not SCRIPT_FOLDER.fullmatch(value):
             values[name] = value.strip("'\"")
+        elif path is not None:
+            values[name] = os.path.dirname(path) or "."
     return Variables(values, frozenset(counts), opaque)
+
+
+def within(outer: Variables, inner: Variables) -> Variables:
+    """The variables a script run from a line sees: its own values, and none from this computer for a name the line
+    binds or exports, nor for any name when the line may bind one unseen."""
+    return inner._replace(bound=inner.bound | outer.bound,
+                          environment=inner.environment and outer.environment and not outer.opaque)
 
 
 def inner_variables(outer: Variables, text: str) -> Variables:
@@ -1688,14 +1718,14 @@ def inner_variables(outer: Variables, text: str) -> Variables:
     reach a new shell and the text's own bindings come in an order the guard doesn't follow; this computer's own
     for a name neither text binds."""
     inner = script_variables(text, None)
-    return Variables({}, outer.bound | inner.bound, outer.opaque or inner.opaque)
+    return Variables({}, outer.bound | inner.bound, outer.opaque or inner.opaque, outer.environment)
 
 
 def expand(word: str, variables: Variables) -> str:
     """A path word with variables filled in: a name the text binds takes the value script_variables follows, or none
     when it binds the name in a way the guard can't follow; an upper-case name it never binds, and no shell sets
-    itself (SHELL_SET), takes this computer's value. A $ left over is a variable the guard can't resolve, and so is
-    a ~ when the text may bind HOME."""
+    itself (SHELL_SET), takes this computer's value, unless a line that ran the text may have bound it. A $ left
+    over is a variable the guard can't resolve, and so is a ~ when the text may bind HOME."""
 
     def fill(match: re.Match) -> str:
         name = match[1] or match[2]
@@ -1703,12 +1733,13 @@ def expand(word: str, variables: Variables) -> str:
             return match[0]
         if name in variables.values:
             return variables.values[name]
-        if name in variables.bound or name in SHELL_SET or not ENVIRONMENT_NAME.fullmatch(name):
+        if (not variables.environment or name in variables.bound or name in SHELL_SET
+                or not ENVIRONMENT_NAME.fullmatch(name)):
             return match[0]
         return os.environ.get(name, match[0])
 
     filled = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", fill, word)
-    if re.match(r"~(?:/|$)", filled) and (variables.opaque or "HOME" in variables.bound):
+    if re.match(r"~(?:/|$)", filled) and (variables.opaque or not variables.environment or "HOME" in variables.bound):
         return "$HOME" + filled[1:]
     return os.path.expanduser(filled)
 
@@ -1814,14 +1845,14 @@ def node_launcher(text: str) -> str:
 
 
 def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built: bool = False,
-                    wrote: bool = False) -> list[tuple[str, str]]:
+                    wrote: bool = False, variables: Variables = NO_VARIABLES) -> list[tuple[str, str]]:
     """(kind, what) for each push, merge or kill a script holds, or a script it runs in turn holds: what follows the
     script's name in a reason, such as "holds a `git push`". Kind script is the script guard's: a script it can't
     read or find, a program run by its path that doesn't exist yet and that nothing earlier on the line (`built`)
     builds, and scripts nested deeper than DEPTH. A program it doesn't read still may not name a push, a merge or a
     kill in its text. An npm or pnpm launcher (node_launcher) whose own interpreter, such as "$basedir/node", isn't
     there runs the one on PATH, unless an earlier command on the line may write a file (`wrote`, writer) and none
-    builds."""
+    builds. `variables` are the line's that ran it (within)."""
     status, text = script_text(name, cwd, read_by_shell)
     if status == "program":
         return [(kind, f"holds {what}, in a program the guard doesn't read") for kind, pattern, what in HELD
@@ -1854,7 +1885,7 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
         own = os.path.join(os.path.dirname(name) or ".", interpreter)
         if script_text(own, cwd, False)[0] != "missing":
             return [(kind, f"runs {own}, which {what}")
-                    for kind, what in script_findings(own, cwd, depth + 1, False, built, wrote)]
+                    for kind, what in script_findings(own, cwd, depth + 1, False, built, wrote, variables)]
         if built or not wrote:
             return []  # the launcher runs the interpreter on PATH
         return [("script", f"runs {own} when that file is there, and an earlier command on this line may write it: "
@@ -1862,8 +1893,8 @@ def script_findings(name: str, cwd: str, depth: int, read_by_shell: bool, built:
     if depth >= DEPTH:
         return [("script", NESTED)] if scripts(text, cwd, DEPTH, probe=True) else []
     return [(kind, f"runs {inner}, which {what}" if inner else f"runs a line where {what}")
-            for kind, inner, what in scripts(text, cwd, depth + 1, variables=script_variables(text, name),
-                                             built=built, wrote=wrote)]
+            for kind, inner, what in scripts(text, cwd, depth + 1, variables=within(variables,
+                                             script_variables(text, name)), built=built, wrote=wrote)]
 
 
 def parsed_findings(text: str, cwd: str) -> list[tuple[str, str]]:
@@ -1969,7 +2000,8 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False, variabl
                                               "named in full first"))
                 continue
             found += [(kind, file, what)
-                      for kind, what in script_findings(path, here, depth, read_by_shell, built_before, wrote_before)]
+                      for kind, what in script_findings(path, here, depth, read_by_shell, built_before, wrote_before,
+                                                        variables)]
     return found
 
 

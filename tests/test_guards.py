@@ -1016,6 +1016,52 @@ def test_the_launcher_leave_and_variables_fail_closed(command, text, on_feature,
     assert run.returncode == 2, (command, run.stderr)
 
 
+@pytest.mark.parametrize("command, text", [
+    # An assignment in a branch, in a group, or after the use: the variable may be unset, or this computer's, there.
+    ("bash launch.sh", 'if false; then\nX={safe}\nfi\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", '(\nX={safe}\n)\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'bash "$X/run.sh"\nX={safe}\n'),
+    # Bindings by a name the guard read as bound once: a named descriptor, wait -p, zsh's print -v.
+    ("bash launch.sh", 'X={safe}\nexec {{X}}>/dev/null\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'X={safe}\nsleep 1 & wait -p X\nbash "$X/run.sh"\n'),
+    ("bash launch.sh", 'X={safe}\nprint -v X {evil}\nbash "$X/run.sh"\n'),
+    # A binding command given a name made at run time.
+    ("bash launch.sh", 'n=x\nX={safe}\nread -r "${{n^^}}" < where.txt\nbash "$X/run.sh"\n'),
+    # A name the line that runs a script exports or sets reaches the script, never this computer's value.
+    ("export SCRIPTS={evil}; bash launch.sh", 'bash "$SCRIPTS/run.sh"\n'),
+    ("SCRIPTS={evil} bash launch.sh", 'bash "$SCRIPTS/run.sh"\n'),
+])
+def test_a_variable_resolves_only_when_set_once_up_front_and_never_bound_elsewhere(command, text, on_feature,
+                                                                                    monkeypatch):
+    """Regression (security review of cecbebe): a variable set in a branch, a group or after its use, or bound by a
+    form the guard didn't list ({X}>, wait -p, print -v, a name made at run time), resolved to the one value it saw;
+    and a script's variable came from the guard's own environment though the line that ran it set or exported it."""
+    safe, evil = on_feature / "safe", on_feature / "evil"
+    executable(safe / "run.sh", "#!/bin/sh\necho harmless\n")
+    executable(evil / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    (on_feature / "where.txt").write_text(f"{evil}\n")
+    executable(on_feature / "launch.sh", text.format(safe=safe, evil=evil))
+    monkeypatch.setenv("X", str(safe))
+    monkeypatch.setenv("SCRIPTS", str(safe))
+    run = push_guard(command.format(evil=evil), on_feature)
+    assert run.returncode == 2, (command, text, run.stderr)
+
+
+@pytest.mark.parametrize("text", [
+    '#!/bin/sh\n# runs the tests\nset -euo pipefail\nhere=$(dirname "$0")\nbash "$here/lib/run.sh"\n',
+    '#!/bin/sh\nDIR=lib\nhere=$(dirname "$0")\n\nbash "$here/$DIR/run.sh"\nbash "${here}/${DIR}/run.sh"\n',
+])
+def test_a_variable_set_once_up_front_still_leads_to_the_script_it_names(text, on_feature):
+    """A script's own folder or a plain value, set once in its straight-line start and only read after, still
+    resolves: the guard reads the script it names, which here holds a push."""
+    executable(on_feature / "scripts" / "lib" / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    executable(on_feature / "scripts" / "ci.sh", text)
+    run = push_guard("./scripts/ci.sh", on_feature)
+    assert run.returncode == 2 and "holds a `git push`" in run.stderr, run.stderr
+    executable(on_feature / "scripts" / "lib" / "run.sh", "#!/bin/sh\necho harmless\n")
+    assert push_guard("./scripts/ci.sh", on_feature).returncode == 0
+
+
 @pytest.mark.parametrize("command", [
     "env -iS 'bash push.sh'", "env -i -S 'bash push.sh'", "env --spl='bash push.sh'",  # getopt's own reading
     "env -u FOO -S 'bash push.sh'", "env -S 'bash\\_push.sh'", "env --no-such-option bash push.sh",
