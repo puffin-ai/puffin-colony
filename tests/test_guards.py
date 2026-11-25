@@ -1344,9 +1344,13 @@ def test_upgrade_refresh_rewrites_the_copied_files_and_the_role_skills_the_repo_
     assert skill.read_text() != "old\n" and not (root / ".claude" / "skills" / "colony-builder").exists()
 
 
-def test_a_here_documents_body_on_a_line_whose_quoting_cant_be_read_holds_no_kill_or_merge():
+def test_a_here_documents_body_is_read_as_commands_and_the_refusal_says_to_use_a_file():
+    """The kill and merge guards read a here-document's body as commands: no shell parsing the guard gets wrong can
+    hide a line, and a body that only names a kill is refused, with the way out: write the text with the file tool."""
     unreadable = """echo "$(echo 'a"b')"; cat <<EOF > notes.md\npkill -f x, then gh pr merge 5\nEOF"""
-    assert guard(json.dumps({"tool_input": {"command": unreadable}})).returncode == 0
+    run = guard(json.dumps({"tool_input": {"command": unreadable}}))
+    assert run.returncode == 2 and "kill guard: refused" in run.stderr and "merge guard: refused" in run.stderr
+    assert "write the text to a file with your file tool" in run.stderr
 
 
 # A `<<` counts as a here-document only where the shell reads commands, and its body only up to an exact terminator:
@@ -1383,7 +1387,6 @@ def test_a_fake_here_document_hides_no_push_or_wait(fake, hosted):
 
 
 @pytest.mark.parametrize("command", [
-    "cat <<-EOF\n\tpkill -f x\n\tEOF",
     "git commit -m \"$(cat <<'EOF'\nfeat: refuse pkill and gh pr merge 5\n\nkill $(pgrep x) too\nEOF\n)\"",
     "echo $((1 << 2)); cat <<<'pkill x'",
     "(( n = 1 << 3 )); echo $n",
@@ -1454,3 +1457,22 @@ def test_safety_protect_says_when_github_refuses_and_warns_hack_about_colony_mer
     guards.add_commands(parser.add_subparsers(dest="command"))
     args = parser.parse_args(["safety", "protect", "--reviews", "1", "--dry-run"])
     assert (args.run, args.reviews, args.dry_run) == (guards.protect, 1, True)
+
+
+# Shell parsing the guard could get wrong, which hid the line after a here-document: the kill and merge guards now
+# read every line, so each of these is refused.
+MISREAD_HEREDOCS = [
+    "cat <<EO\\F\nEOF\n{hidden}\nEO",  # bash's delimiter is EOF, which a word-only reading takes as EO
+    # a case pattern's ) closing $( early: to zsh and bash 4 the << is quoted text and #' a comment, so the next
+    # line runs
+    "echo \"$(case a in a) echo '\" <<EOF ' ;; esac)\" #'\n{hidden}\nEOF",
+    "cat <<EO\\\nF\nEOF\n{hidden}\nEO",  # a backslash-newline joining the delimiter
+    "cat <<-EOF\n\t{hidden}\n\tEOF",  # a real body that names a kill is refused too
+]
+
+
+@pytest.mark.parametrize("command", MISREAD_HEREDOCS)
+def test_no_here_document_the_guard_could_misread_hides_a_kill_or_a_merge(command, hosted):
+    run = guard(json.dumps({"tool_input": {"command": command.format(hidden="pkill -f x")}}))
+    assert run.returncode == 2 and run.stderr.startswith("kill guard: refused, "), (command, run.stderr)
+    assert merge_refused(push_guard(command.format(hidden="gh pr merge 5"), hosted)), command

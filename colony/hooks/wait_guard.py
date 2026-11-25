@@ -12,7 +12,8 @@ an endless `while true`, `while :` or `until false` loop; watch, `gh pr checks -
 `python -c` program that sleeps long or sleeps in a loop. A call made with run_in_background passes, and so does a
 command, loop or group the line ends with &. A `wait` on the jobs the same line started passes, and those jobs'
 waits become its own, so `sleep 600 & wait` is refused. A sleep whose length it can't read, such as `sleep $DELAY`,
-passes. It drops here-document bodies first, because a body is text a command reads, not a command. A line whose
+passes. It drops here-document bodies first, because a body is text a command reads, not a command; the push, kill
+and merge guards below read bodies as commands, so no here-document the guard misreads can hide one. A line whose
 quoting Python's shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell reads
 fine, passes too, unless its plain text holds a sleep over MAX_SLEEP_SECONDS.
 
@@ -131,7 +132,9 @@ LINE_CHANGES = {"cd", "pushd", "popd"}
 GIT_VARIABLE = re.compile(r"^(GIT_\w*|HOME|XDG_CONFIG_HOME)(=|$)")  # where git finds its repo and its config
 BASE = re.compile(r'^\s*base\s*=\s*"([^"]+)"', re.M)
 PUSH_REFUSAL = ("push guard: refused, {reason}. Every teammate builds on {branches}: never force-push, rewrite or "
-                "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person.")
+                "delete {them}. Push your own branch and land it with `colony merge <branch>`, or ask your person."
+                " If these words are only text, such as a here-document or a message that names them, "
+                "write the text to a file with your file tool and pass the file instead.")
 REFUSAL = ("wait guard: refused, {reason}. A foreground wait blocks the session. Start the command with "
            "run_in_background and carry on, or start `colony wait` with run_in_background and act on its lines.")
 
@@ -143,7 +146,8 @@ ELEVATORS = {"sudo": frozenset({"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", 
                                 "--prompt", "--chdir", "--close-from", "--role", "--type", "--other-user"}),
              "doas": frozenset({"-u", "-C"})}
 POWERSHELLS = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
-POWERSHELL_KILL = re.compile(r"\b(?:stop-process|spps)\b[^;|]*\s-(?:name|processname)\b|\|\s*(?:stop-process|spps|kill)\b"
+POWERSHELL_KILL = re.compile(r"\b(?:stop-process|spps)\b[^;|]*\s-(?:name|processname)\b"
+                             r"|\|\s*(?:stop-process|spps|kill)\b"
                              r"|\.kill\(\)", re.I)
 REDIRECTIONS = {">", ">>", "<", "<<", ">&", "<&", "&>", ">|"}
 RAW_KILL = re.compile(r"(?<![\w.-])(?:pkill|killall|killall5|skill|taskkill|fuser|stop-process|spps)(?![\w-])"
@@ -151,7 +155,9 @@ RAW_KILL = re.compile(r"(?<![\w.-])(?:pkill|killall|killall5|skill|taskkill|fuse
 KILL_REFUSAL = ("kill guard: refused, {reason}. A kill by name or pattern can end every Claude Code session, the "
                 "terminal app and the background tasks on this computer. Close a Colony session by its name with "
                 "`colony stop <name>`. For any other process, find the one you mean, check it with "
-                "`ps -p <pid> -o pid=,command=`, and kill that number alone: `kill <pid>`.")
+                "`ps -p <pid> -o pid=,command=`, and kill that number alone: `kill <pid>`."
+                " If these words are only text, such as a here-document or a message that names them, "
+                "write the text to a file with your file tool and pass the file instead.")
 
 # The merge guard
 SAFETY = "safety"  # the colony.toml table that holds merge_into and protect
@@ -197,7 +203,9 @@ DEPTH = 4  # nested shells, evals and aliases the guard follows before it refuse
 MERGE_REFUSAL = ("merge guard: refused, {reason}. No agent merges or pushes into a branch without the person's yes: "
                  "push your own branch and open a pull request for the person to merge (in Hack, `colony merge "
                  "<branch>`). The person allows merges into a branch with `merge_into` under [safety] in "
-                 ".colony/colony.toml, on the repo's default branch on GitHub.")
+                 ".colony/colony.toml, on the repo's default branch on GitHub."
+                 " If these words are only text, such as a here-document or a message that names them, "
+                 "write the text to a file with your file tool and pass the file instead.")
 
 
 def sleep_seconds(arguments: list[str]) -> float | None:
@@ -437,11 +445,14 @@ def operators(run: str) -> list[str]:
     return found
 
 
-def tokens(command: str) -> list[str]:
-    """The command line's words and operators. Raises ValueError when its quoting can't be read, or a here-document
-    has no terminator line. Each newline stays before the `;` that stands for it, so a comment ends with its line, as
-    the shell ends it, and never hides the lines after it."""
-    text, ended = split_heredocs(command)
+def tokens(command: str, bodies: bool = True) -> list[str]:
+    """The command line's words and operators, here-document bodies read as commands too, so no shell parsing the
+    guard gets wrong can hide a line: the kill, push and merge guards read lines so. With `bodies` false, as the wait
+    guard reads them, a here-document's body is left out (split_heredocs), which can hide nothing those guards
+    guard. Raises ValueError when the quoting can't be read, or, without bodies, a here-document has no terminator
+    line. Each newline stays before the `;` that stands for it, so a comment ends with its line, as the shell ends it,
+    and never hides the lines after it."""
+    text, ended = (command, True) if bodies else split_heredocs(command)
     if not ended:
         raise ValueError("a here-document has no terminator line")
     lexer = shlex.shlex(text.replace("\n", "\n;"), posix=True, punctuation_chars=True)
@@ -467,7 +478,7 @@ def waits(command: str, in_loop: bool = False) -> list[str]:
     whose quoting shlex can't read, such as a $(...) holding quotes inside a double-quoted word, which the shell
     reads fine, runs, unless its plain text holds a long sleep."""
     try:
-        words = tokens(command)
+        words = tokens(command, bodies=False)
     except ValueError:
         return raw_sleeps(command)
     stack = [Frame("top")]
@@ -882,7 +893,8 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
     if force and everything:
         return REWRITE, f"a force push of every branch rewrites {' and '.join(protected)}"
     if prune and everything:
-        return REWRITE, f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has its name"
+        return REWRITE, (f"`--prune` with every branch deletes {' or '.join(protected)} where no local branch has "
+                         "its name")
 
     destination = positional[0] if positional else remote  # where the push goes; the no-refspec path fills it in
     allowances: dict[str, Allowance] = {}
@@ -917,7 +929,8 @@ def push_rewrites(arguments: list[str], protected: list[str], cwd: str,
                 setting("remote.pushdefault") or setting(f"branch.{branch}.remote") or "origin"
             destination = remote
             if setting(f"remote.{remote}.mirror").lower() not in FALSE:
-                return REWRITE, f"remote.{remote}.mirror makes this push a `--mirror` push, which overwrites every branch"
+                return REWRITE, (f"remote.{remote}.mirror makes this push a `--mirror` push, which overwrites every "
+                                 "branch")
             found = default_refspecs(config, remote, branch)
         if found is None and how:
             return REWRITE, f"this push names no refspec, and git config can't say which branches it {how}"
@@ -1061,7 +1074,8 @@ def shell_lines(name: str, arguments: list[str]) -> list[str]:
     """The command lines a shell's -c, or an eval, runs."""
     if name == "eval":
         return [" ".join(arguments)]
-    return [arguments[i + 1] for i, word in enumerate(arguments[:-1]) if word.startswith("-") and "c" in word.lstrip("-")]
+    return [arguments[i + 1] for i, word in enumerate(arguments[:-1])
+            if word.startswith("-") and "c" in word.lstrip("-")]
 
 
 def fed(arguments: list[str], program: str, known: frozenset[str], words: set[str]) -> str:
@@ -1174,7 +1188,8 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "") -> tuple[l
             if name == "eval":  # it runs in this shell, so its cd or checkout carries on along the line
                 changed, created = changed or "`eval`", ""
         elif name == "xargs" and (sub := fed(program[1:], "git", GIT_COMMANDS, {"push"})):
-            updates.append(f"`xargs` runs `git {sub}` with words the guard can't see, so run it as a command of its own")
+            updates.append(f"`xargs` runs `git {sub}` with words the guard can't see, so run it as a command of "
+                           "its own")
         elif name == "alias" and any(re.search(r"\bgit\b.*\bpush\b", word) for word in program[1:]):
             updates.append("this line defines a shell alias that pushes, which the guard can't follow")
         elif name in ("cd", "pushd") and not variables and (folder := moved_to(program[1:], where, grouped)):
@@ -1220,7 +1235,8 @@ def pr_allowed(base: str, home: str, cwd: str, which: str = "this pull request")
         return f"`gh pr view` could not say which branch and repo {which} merges into"
     there, mine = repo_of(home), origin_repo(cwd)
     if not same_repo(there, mine):
-        return f"{which} is in {there[1] or home}, not in this repo's origin, {mine[1] or 'which the guard cannot name'}"
+        return (f"{which} is in {there[1] or home}, not in this repo's origin, "
+                f"{mine[1] or 'which the guard cannot name'}")
     if Allowance(cwd, home).permits(base):
         return ""
     return f"{which} merges into {base}, which [safety] merge_into on the repo's default branch doesn't name"
@@ -1268,7 +1284,8 @@ def api_merge(arguments: list[str]) -> str:
     if re.search(r"(?:^|/)merges$", path) and (method == "POST" or (not method and values)):
         return "`gh api` merges a branch, which only `gh pr merge` may do, so the guard can check its base"
     if path == "graphql" and any(GRAPHQL_MERGE.search(value) for value in values):
-        return "`gh api graphql` merges a pull request, which only `gh pr merge` may do, so the guard can check its base"
+        return ("`gh api graphql` merges a pull request, which only `gh pr merge` may do, so the guard can check "
+                "its base")
     return ""
 
 
@@ -1319,8 +1336,7 @@ def gh_merges(command: str, cwd: str, depth: int = 0) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        text = raw_text(command)  # a body that ended at its terminator is text a command reads
-        if re.search(r"(?<![\w.-])gh(?![\w-])", text) and "merge" in text.lower():
+        if re.search(r"(?<![\w.-])gh(?![\w-])", command) and "merge" in command.lower():
             return ["this line's quoting could not be read and it holds a gh merge, so run the merge as a command of "
                     "its own"]
         return []
@@ -1397,7 +1413,8 @@ def tool_merges(tool: str, tool_input: dict, cwd: str) -> list[str]:
             return [f"`{action}` names no branch, so it commits onto the default branch"]
         mine = origin_repo(cwd)
         if not mine[1]:
-            return [f"`{action}` commits onto {branch}, and the guard can't tell this repo from origin's URL to check it"]
+            return [f"`{action}` commits onto {branch}, and the guard can't tell this repo from origin's URL to "
+                    "check it"]
         held = reaches(branch, protected_branches(cwd))
         if not held:
             return []  # a branch of the agent's own
@@ -1482,11 +1499,11 @@ def kills(command: str) -> list[str]:
     try:
         line = tokens(command)
     except ValueError:
-        if RAW_KILL.search(raw_text(command)):
+        if RAW_KILL.search(command):
             return ["this line's quoting could not be read and it holds a kill, so run the kill as a command of its "
                     "own"]
         return []
-    searching = bool(SEARCHES.search(without_heredoc_bodies(command)))
+    searching = bool(SEARCHES.search(command))
     found = [reason for words in simple_commands(line) for reason in command_kills(run_program(words), searching)]
     return list(dict.fromkeys(found))
 

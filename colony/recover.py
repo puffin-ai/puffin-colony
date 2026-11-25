@@ -666,7 +666,8 @@ def reopen(config: dict, entry: dict, note: str, dry_run: bool = False) -> int:
     """Open one session from its ledger entry again: `claude --resume <its id>` on the account that holds its
     conversation, with its role's settings, in the folder it started in, in cmux or the background (never this
     terminal), with `note` as its first line. The ledger notes that it was reopened. Returns 1 when it wasn't, saying
-    why on stderr. `colony resume` and any other recovery, such as a wake after a usage limit, open sessions through it."""
+    why on stderr. `colony resume` and any other recovery, such as a wake after a usage limit, open sessions through
+    it."""
     name = entry.get("name") or ""
     account = account_of(config, entry)
     if not entry.get("id"):
@@ -749,7 +750,8 @@ def resume(config: dict, args) -> int:
         elif run_command(service.restart, RESTART_TIMEOUT) and run_command(service.check, CHECK_TIMEOUT):
             print(f"{service.name}: started again with `{service.restart}`, and its check passes")
         else:
-            print(f"{service.name}: `{service.restart}` ran, and its check `{service.check}` still fails", file=sys.stderr)
+            print(f"{service.name}: `{service.restart}` ran, and its check `{service.check}` still fails",
+                  file=sys.stderr)
             failed += 1
     return 1 if failed else 0
 
