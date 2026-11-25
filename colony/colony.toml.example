@@ -201,3 +201,11 @@ within_hours = 24                  # how far back both look for sessions that sh
 # watchdog = true                  # the lead's wait starts the watchdog when none runs on its computer
 # escalate_minutes = 60            # a lead idle this long past idle_minutes has its person mentioned on GitHub
 # quit_hours = 24                  # a watchdog started by a wait ends after this long with no session alive here
+
+# Housekeeping (docs/cycle.md#the-leads-queue): optional, and each key shown holds its default.
+# [cards]                          # the lead's queue of To do cards
+# auto_start = "waits"             # the lead's wait starts a card whose wait just ended; "all": any ready card; "off"
+# remind_minutes = 60              # how long before the same queued card is named to the lead again
+#
+# [testers]                        # testers that share a release's findings list (docs/testing.md)
+# claim_minutes = 60               # a claim on a card with no result lapses after this, freeing the card

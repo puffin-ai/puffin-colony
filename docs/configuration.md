@@ -436,6 +436,31 @@ When a release renames or removes a setting, Colony reads the old one at its new
 | `[people.<person>] prefer_account` | Gone: `[pool] order` and `[people.<person>] accounts` set which account goes first. |
 | `[people.<person>] drain` | Gone: `[pool] reserve` keeps an account free, and `[pool] out_at` says when a session switches. |
 
+## `[cards]`
+
+Optional. How the lead's wait treats the lead's queue of To do cards. See [cycle.md](cycle.md#the-leads-queue).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `auto_start` | `"waits"` | Which ready cards the lead's wait starts by itself, for the helper the card's title names, when that helper is live and free: `"waits"`, a card whose `Waits for:` cards just landed; `"all"`, any ready card; `"off"`, none, so the lead hands out each one. |
+| `remind_minutes` | `60` | How long before the lead's wait names the same queued card again, while the queue and the free helpers stay the same. |
+
+```toml
+[cards]
+auto_start = "waits"
+remind_minutes = 60
+```
+
+## `[testers]`
+
+Optional. How testers share a release's findings list. See [testing.md](testing.md#the-findings-list).
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `claim_minutes` | `60` | How long a tester's claim on a card holds with no result. After it, the card is free for another tester, so a tester that stopped never keeps one. |
+
+The test accounts and fixtures the person prepared live in `.colony/fixtures.toml`, which `colony fixtures add` writes. See [testing.md](testing.md#test-accounts-and-fixtures).
+
 ## What the sessions' environment holds
 
 Colony sets these for every interactive session: the lead, each builder, the researcher and the spec agent. You don't set them yourself.

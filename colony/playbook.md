@@ -227,6 +227,15 @@ It posts the handover on `Colony: coordination` and prints the command that open
 - The person's phone link is the status page, the pinned `Colony: status` issue, which the watchdog keeps current; `colony watch --page` writes it now and prints the link. Your wait starts the watchdog on this computer; for one the computer keeps running, the person runs `colony watchdog install`.
 - A `chatter:` line folds helper lines that only said they had nothing to do. `colony watch --folded` shows them.
 
+### Cards and the queue
+
+- When you know a card's files, name them on a `Files:` line beside its `Folders:` line. When `colony card new` prints an `overlap:` line, give both cards to one helper, or make one wait for the other with `colony card waits <n> <other>`. A card that needs another card's work first gets `--waits-for <n>` when you make it: it starts once that card lands, whatever branch it merged into. `colony card overlaps` lists every overlapping pair.
+- Hand the next card out with `colony card next --start`: it takes the first ready card in your queue, posts its `start: this card` line, and sets its Status and Helper. `colony card next` shows the queue.
+- Your wait starts a card whose wait just ended, for the helper its title names when that helper is free, and gives you one line saying so. A `queued:` line means a card is ready while a helper is free, or while none of your cards is in progress: run `colony card next --start` at once, without asking the person. When it says no helper is free, open one (see Capacity).
+- A line that a card waits for one that closed without landing: change its wait with `colony card waits <n> <cards>`, or close the card.
+- A `done` line carries the files the branch changed, which Colony reads from its diff. Use that list, never one typed in a line, and look at any file it names outside the card's paths before you merge the branch.
+- `colony tidy` closes the cards a merged pull request finished on any branch, such as an integration branch, so you never close them by hand.
+
 ## Builder
 
 In hack mode, follow the Hack section instead.
@@ -243,6 +252,8 @@ You build fast: a fresh reviewer, the full checks and a browser walk check quali
 Keep the board current: after each commit, `colony board set <n> Last_update=now`. Progress goes there, never in a line: your lines to the lead are only `done`, `question:`, `blocked:` and `urgent:`.
 
 Report while you work: at least every 30 minutes, `colony report "<one line of progress>"`, which stamps the card's Last update too. Your wait reminds you when one is due. When you stop on purpose, say why instead of posting a line: `colony intent waiting "<what>"` or `colony intent holding "<what>"`. `colony take` and your `done` line set your intent for you. Never post that you are idle. When your wait says a helper agent of yours ran past its time limit, read its output, and stop it with your agent tool unless it is about to finish.
+
+Your `done` line carries the list of files your branch changed, which Colony reads from its diff, so never type that list yourself. `colony take` refuses a card that waits for others still open: take the next card instead.
 
 When a check needs something only one run may use at a time, such as the one local test database or a fixed port, run it under its lock, `colony lock <name> -- <command>`, as the card or the repo's commands name it. When a line says your usage limit reset or the computer slept, start `colony wait` in the background again and carry on from where you stopped.
 
@@ -277,6 +288,8 @@ The tester checks a release on the deployed app, the way a person would use it, 
 2. It reads the release's batches and their cards, and tests each card's done-when results on the deployed app. It changes no code.
 3. Its lines come on the release pull request. A `blocked:` line names a step only a person can take, such as admitting an account: ask the person for it in chat, in one line, and send the tester an `answer:` once it is done.
 4. Its `done` line names one findings issue. Turn each failure in it into a card, and close the findings issue once every failure has its card.
+5. Testers use the test accounts and fixtures the person prepared, which `colony fixtures` lists from `.colony/fixtures.toml`. When the person tells you about one, record it with `colony fixtures add`, by reference only, never its secret, and commit the file. Read the registry before you ask the person for a test account or test data: `colony needs` refuses such a question while the registry holds any, and `--new-fixture` asks anyway, when you say what it lacks.
+6. For a large release, testers on several computers share one findings list: the person runs `colony tester "<the release pull request's link>"` on another computer, and each tester claims its own cards with `colony findings next`. `colony findings show <release>` shows where testing stands.
 
 ## Checks
 

@@ -11,7 +11,9 @@ stale-card lines for the lead's wait.
   and `colony card new` prints that median beside a new card's prediction.
 - `colony retro` runs one agent on a batch's reports that writes each lesson as a rule line and a check, or a
   decision, into a pull request.
-- `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update.
+- `stale_lines(config, now)` is the lead's wait's board check, by each card's Status, Helper and Last update, and
+  the lead's queue check (cards.lead_lines): a card whose wait is over starts, and a lead with cards queued hears
+  which to hand out next.
 
 `needs` and `handover` check their issue's comment count before they post, and rotate a full one (tidy.keep_short).
 
@@ -32,6 +34,7 @@ import re
 import shlex
 import statistics
 import subprocess
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -491,10 +494,16 @@ def needs_line(lead: str, person: str, question: str, default: str, sender: str 
 def needs(config: dict, args) -> int:
     """`colony needs "<question>" --default "<x>" [--person p]`: post a decision on the person's Needs issue, for
     their lead. Any session may post one, such as the spec agent's approval question, and signs it with
-    $COLONY_SESSION; the lead signs as `<person>-lead`, so its own wait skips the line."""
+    $COLONY_SESSION; the lead signs as `<person>-lead`, so its own wait skips the line. A question about test accounts
+    or test data is refused while the registry holds some the person prepared, unless --new-fixture
+    (testers.check_question)."""
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name: needs signs its line with it")
+    if not getattr(args, "new_fixture", False):
+        from colony import testers
+
+        testers.check_question(args.question)
     person = (args.needs_person or cli.person_of(config, args)).lower()
     lead, repo = wait.lead_name(config, args), config["project"]["repo"]
     line = needs_line(lead, person, args.question, args.default, lead if me == cli.LEAD else me)
@@ -948,6 +957,10 @@ def stale_lines(config: dict, now) -> list[str]:
     `now` is an aware datetime, or a Unix time. Each card is reported once until its Last update changes, through
     a state file in ~/.colony/<project>/. Call it at most every STALE_CHECK_MINUTES. It returns [] when the repo has
     no board, and raises cli.ColonyError when the board can't be read, which the caller prints and goes on.
+
+    The same read of the board serves the lead's queue (cards.lead_lines), whose lines follow the stale ones: a card
+    whose `Waits for:` cards landed starts for its free helper, and queued cards name the next one to hand out. A
+    queue check that fails says so on stderr, and the stale lines go out anyway.
     """
     now = now if isinstance(now, datetime) else datetime.fromtimestamp(now, timezone.utc)
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
@@ -959,7 +972,8 @@ def stale_lines(config: dict, now) -> list[str]:
     reported = wait.read_json(path, {})
     reported = reported if isinstance(reported, dict) else {}
     lines, stale = [], []
-    for item in board.items(found):
+    items = board.items(found)
+    for item in items:
         last = board.field_value(item, board.LAST_UPDATE)
         if board.squash(board.field_value(item, "Status")) != board.squash("In progress"):
             continue
@@ -981,6 +995,13 @@ def stale_lines(config: dict, now) -> list[str]:
             lines.append(f"#{number} stale: {helper or 'its helper'} shows no update since {last}; check its session")
     reported = {key: at for key, at in reported.items() if now - moment(at) <= KEEP_REPORTED}
     wait.write_json(path, reported)
+    from colony import cards
+
+    try:
+        lines += cards.lead_lines(config, items, now)
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        print(f"{cli.NAME} wait: the queue check failed, and runs again with the next stale check: {e}",
+              file=sys.stderr)
     return lines
 
 
@@ -997,6 +1018,8 @@ def add_commands(sub) -> None:
     p.add_argument("question", help="the question, one sentence")
     p.add_argument("--default", required=True, help="what you do until the person answers")
     p.add_argument("--person", dest="needs_person", metavar="PERSON", help="whose decision it is, you by default")
+    p.add_argument("--new-fixture", action="store_true",
+                   help="ask for a new test account or test data although the registry holds some: none of them fits")
     p.set_defaults(run=needs)
 
     p = sub.add_parser("handover", help="the lead: post the handover before compaction, or --read the last one")

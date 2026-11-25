@@ -1639,7 +1639,8 @@ def image(config: dict, args) -> int:
 
 def take(config: dict, args) -> int:
     """`colony take <n>`: a helper takes card n, which must sit in its lead's folders, and marks it In progress with
-    itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'."""
+    itself as Helper. A lead with no folders holds the rest of the repo, so its card must avoid other live leads'. A
+    card whose `Waits for:` cards haven't landed is refused (cards.refuse_waiting)."""
     from colony import board, presence, wait
 
     me = os.environ.get(SESSION_ENV, "").lower()
@@ -1658,6 +1659,9 @@ def take(config: dict, args) -> int:
     why = registry.why_not_take(config, alive, lead, args.card, folders)
     if why:
         raise ColonyError(why)
+    from colony import cards  # a card whose `Waits for:` cards haven't landed waits
+
+    cards.refuse_waiting(config, args.card, card.get("body") or "")
     board.set_fields(config, args.card, [("Status", "In progress"), ("Helper", me)])
     print(f"#{args.card} is yours, {me}: In progress.")
     from colony import watch
@@ -1978,6 +1982,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     from colony import messages  # the messages workstream: ack, redeliver, waits and nudge
     messages.register(sub)
+    from colony import testers  # the test accounts and fixtures registry, and the shared findings list
+    testers.register(sub)
     return parser
 
 

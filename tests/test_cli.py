@@ -538,7 +538,8 @@ COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "resear
             "crash-report", "resume",
             "boot", "summary", "mode", "plan", "orders", "session-hook", "ask", "decisions", "answer", "never-raise",
             "spend", "approve", "intent", "report", "watch", "progress", "watchdog",
-            "leads", "lend", "borrow", "worktree", "config", "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge")
+            "leads", "lend", "borrow", "worktree", "config", "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge",
+            "fixtures", "findings")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):
@@ -583,7 +584,8 @@ def test_tester_opens_a_tester_whose_brief_holds_the_release(config, capsys):
     out = capsys.readouterr().out
     assert "command: claude --remote-control demo-tester --model m --effort medium " in out
     assert "You are the tester for demo." in out and f"The release: {url}" in out
-    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings issue" in out
+    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings list" in out
+    assert "colony fixtures" in out and "colony findings next <release number>" in out
     assert "{release}" not in out and "{project}" not in out
     assert "dry run: demo-tester on account first" in out
 

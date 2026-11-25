@@ -36,7 +36,7 @@ FIELDS_QUERY = """query($id: ID!) { node(id: $id) { ... on ProjectV2 { fields(fi
 
 ITEMS_QUERY = """query($id: ID!, $cursor: String) { node(id: $id) { ... on ProjectV2 {
   items(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id
-    content { ... on Issue { number url state title updatedAt closedAt }
+    content { ... on Issue { number url state stateReason title body updatedAt closedAt }
               ... on PullRequest { number url state title updatedAt closedAt } }
     fieldValues(first: 30) { nodes {
       ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
@@ -159,8 +159,9 @@ def ensure_options(field: dict, wanted: tuple[str, ...]) -> bool:
 
 
 def items(board: dict) -> list[dict]:
-    """Every item on the board: its id, issue number, url, state (OPEN or CLOSED), title, updatedAt and closedAt, and
-    its fields by squashed name."""
+    """Every item on the board: its id, issue number, url, state (OPEN or CLOSED), stateReason (COMPLETED or
+    NOT_PLANNED for a closed issue), title, body, updatedAt and closedAt, and its fields by squashed name. The body
+    holds a card's `Folders:`, `Files:` and `Waits for:` lines (cards.py)."""
     found, cursor = [], None
     while True:
         page = graphql(ITEMS_QUERY, id=board["id"], **({"cursor": cursor} if cursor else {}))["node"]["items"]
@@ -170,7 +171,8 @@ def items(board: dict) -> list[dict]:
                       for value in (node.get("fieldValues") or {}).get("nodes") or []
                       if value and (value.get("field") or {}).get("name")}
             found.append({"id": node["id"], "number": content.get("number"), "url": content.get("url", ""),
-                          "state": content.get("state", ""), "title": content.get("title", ""),
+                          "state": content.get("state", ""), "stateReason": content.get("stateReason") or "",
+                          "title": content.get("title", ""), "body": content.get("body") or "",
                           "updatedAt": content.get("updatedAt", ""), "closedAt": content.get("closedAt", ""),
                           "fields": values})
         if not page["pageInfo"]["hasNextPage"]:

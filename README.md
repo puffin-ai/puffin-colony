@@ -58,6 +58,7 @@ cd your-repo && colony
 - [Capacity](docs/capacity.md): accounts, usage limits, service checks, the computer's room, locks and sleep
 - [Watch](docs/watch.md): what each session does and why, reports, progress, the watchdog and a status page for your phone
 - [Folders and worktrees](docs/folders.md): one lead registry for every copy of the repo, lending and borrowing folders, silent leads, and worktrees inside the repo
+- [Real-use testing](docs/testing.md): the test accounts and fixtures a person prepared, and one findings list that testers on every computer share
 - [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## The 3 setups
