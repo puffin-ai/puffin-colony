@@ -35,6 +35,8 @@ from colony import __version__, cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
+AGENT_GUARD = "agent_guard.py"  # the subagent guard, beside it (hooks/agent_guard.py, docs/safety.md)
+AGENT_MATCHER = "Agent|Task"  # the tool that starts a subagent; Task in older Claude Code versions
 ASKING_REPEAT = 600  # a builder posts at most one asking line per 10 minutes
 ERROR_CODE = re.compile(r"[a-z_]{1,40}")
 UNREAD_EVERY = 30  # with no wait running, the prompt hook reads GitHub itself at most once per 30 seconds
@@ -243,8 +245,10 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
     root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
     program = PLUGIN_BIN if plugin else REPO_BIN
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
+    agents = f"colony/hooks/{AGENT_GUARD}" if plugin else f"{cli.DIR}/hooks/{AGENT_GUARD}"
     entries = [
         ("PreToolUse", GUARD_MATCHER, {"type": "command", "command": python_command(guard, root=root)}, guard),
+        ("PreToolUse", AGENT_MATCHER, {"type": "command", "command": python_command(agents, root=root)}, agents),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking", program), "async": True}, "hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped", program), "async": True},
@@ -262,11 +266,14 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
         return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE"),
                 *boot.hook_entries(program)]
     entries += boot.hook_entries(program)
-    # The repo's guard needs only its copied script, and its other hooks need its launcher.
-    repo_guard = f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{GUARD}" ]'
+    # The repo's guards need only their copied scripts, and its other hooks need its launcher.
     launcher = f"[ -x {REPO_BIN} ]"
-    return [(event, matcher, {**hook, "command": step_aside(marker, repo_guard if GUARD in marker else launcher)
-                              + hook["command"]}, marker)
+
+    def ready(marker: str) -> str:
+        script = marker.rsplit("/", 1)[-1]
+        return f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{script}" ]' if script in (GUARD, AGENT_GUARD) else launcher
+
+    return [(event, matcher, {**hook, "command": step_aside(marker, ready(marker)) + hook["command"]}, marker)
             for event, matcher, hook, marker in entries]
 
 
@@ -386,9 +393,9 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
 
 
 def install(config: dict, args) -> int:
-    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, copy the wait guard into
-    .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the same
-    hooks."""
+    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, copy the wait guard and the subagent
+    guard into .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the
+    same hooks."""
     root = cli.repo_root()
     # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
     name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
@@ -398,11 +405,14 @@ def install(config: dict, args) -> int:
         print(f"hooks plan for {root}:")
         print(f"  .claude/{name}: merge the {events} hooks, keeping every hook already there")
         print(f"  {cli.DIR}/hooks/{GUARD}: the wait guard, copied from the package")
+        print(f"  {cli.DIR}/hooks/{AGENT_GUARD}: the subagent guard, copied from the package")
         print(f"  {LAUNCHER}: the launcher, pinned to {cli.DISPLAY} {__version__}")
         print("Nothing ran.")
         return 0
     added, updated = merge_hooks(settings)
+    agents = root / cli.DIR / "hooks" / AGENT_GUARD
     for path, text in ((guard, resources.files(__package__).joinpath("hooks", GUARD).read_text()),
+                       (agents, resources.files(__package__).joinpath("hooks", AGENT_GUARD).read_text()),
                        (root / LAUNCHER, launcher())):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
@@ -410,6 +420,7 @@ def install(config: dict, args) -> int:
     done = f"added {', '.join(added) or 'nothing'}" + (f", updated {', '.join(updated)}" if updated else "")
     print(f"wrote .claude/{name}: {done}, and kept every hook already there")
     print(f"wrote {cli.DIR}/hooks/{GUARD}")
+    print(f"wrote {cli.DIR}/hooks/{AGENT_GUARD}")
     print(f"wrote {LAUNCHER}, pinned to {cli.DISPLAY} {__version__}")
     return 0
 
