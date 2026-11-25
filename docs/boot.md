@@ -81,7 +81,7 @@ A group made with `--draft` is drafted first, and built only after your yes on t
 
 ## Orders reach helpers
 
-A helper starts with its lead's standing orders for helpers, such as when the full suite runs, whether it may merge, how to write and what you approved for it, in its first prompt. The lead keeps them on its computer for a helper that joins there, and posts them on `Colony: coordination`, only when they change, for a helper that joins on another computer. A helper reads only a copy the team posted, by one of `[people] logins`, or with none set, by someone GitHub says has access to the repo, and uses an approval in it only after the checks in [decisions.md](decisions.md#approvals-reach-helpers). `colony orders` prints them, and `--publish` posts them now.
+A helper starts with its lead's standing orders for helpers, such as when the full suite runs, whether it may merge, how to write and what you approved for it, in its first prompt. The lead keeps them on its computer for a helper that joins there, and posts them on `Colony: coordination`, only when they change, for a helper that joins on another computer. The posted copy is the standing orders as text alone, never an approval. A helper reads it only from a comment one of its lead's own person's logins wrote, `[people.<person>] login` or a `[people] logins` login whose name is theirs, and reads nothing when `colony.toml` names none. Approvals are the person's, given at their own terminal on each computer ([decisions.md](decisions.md#approvals-reach-helpers)). `colony orders` prints them, and `--publish` posts them now.
 
 ## The hooks
 
@@ -93,4 +93,4 @@ A helper starts with its lead's standing orders for helpers, such as when the fu
 | PreCompact | `compact` | Saves the handover, and posts a lead's |
 | SessionEnd | `end` | The same |
 | Stop | `turn` | Keeps the snapshot current, in the background |
-| PreToolUse | `tool` | Lets through a call you approved ([decisions.md](decisions.md#approvals-reach-helpers)). It runs only while an approval is live |
+| PreToolUse | `tool` | Lets through a call you approved at your own terminal ([decisions.md](decisions.md#approvals-reach-helpers)). It runs only while an approval is live |

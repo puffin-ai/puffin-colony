@@ -16,10 +16,12 @@
   explanation attached, and every answer is recorded word for word, there and in the ledger on this computer,
   ~/.colony/<project>/decisions.json. `colony decisions` lists what waits, and `colony answer` records an answer.
 - **Approval gates.** A `gate` question carries a draft; its build waits for the person's yes (`approved`).
-- **Approvals reach helpers.** `colony allow` records what the person approved, in their own words, as Claude Code
-  permission rules. The PreToolUse hook (boot.session_hook) lets a matching call of the lead or its helpers through,
-  until the approval expires, so a helper's permission check doesn't stop what the person already said yes to. It
-  only ever allows: a guard that refuses a call still refuses it.
+- **Approvals reach helpers.** The person approves at their own terminal, never through an agent: `colony approve`
+  refuses unless it runs at an interactive terminal outside any agent's session, and the person types yes. Each
+  approval is a set of Claude Code permission rules (check_rule) kept in this computer's Colony state for at most a
+  day. The PreToolUse hook (boot.session_hook) lets a matching call of that person's leads and helpers here through,
+  so a helper's permission check doesn't stop what the person already said yes to. It only ever allows: a guard that
+  refuses a call still refuses it. Nothing on the code host ever carries an approval.
 
 Python 3.11+ standard library only.
 """
@@ -598,18 +600,33 @@ def is_live(item: dict, now: float | None = None) -> bool:
     return not item.get("revoked") and float(item.get("until") or 0) > (time.time() if now is None else now)
 
 
-def live_approvals(config: dict, lead: str) -> list[dict]:
-    """The approvals in force for `lead` and its helpers."""
-    return [item for item in read_approvals(config) if item.get("lead") == lead and is_live(item)]
+def applies(item: dict, session: str, person: str, lead: str) -> bool:
+    """Whether an approval covers a session: it is live, it is its person's own, and it names that session's lead, or
+    none, and that session, or every one."""
+    if not is_live(item) or not all(valid_rule(rule) for rule in item.get("rules") or [None]):
+        return False
+    if str(item.get("person") or "").lower() != (person or "").lower():
+        return False
+    if item.get("lead") and item["lead"] != lead:
+        return False
+    only = item.get("only") or []
+    return not only or session in only
+
+
+def live_approvals(config: dict, person: str, lead: str = "") -> list[dict]:
+    """The approvals in force for the person's sessions on this computer, or with `lead`, for that lead's."""
+    return [item for item in read_approvals(config) if is_live(item) and str(item.get("person") or "").lower() ==
+            (person or "").lower() and (not lead or not item.get("lead") or item["lead"] == lead)]
 
 
 def approval_lines(items: list[dict]) -> list[str]:
-    """Each approval as one line: the person's words, its rules, for whom, and until when."""
+    """Each approval as one line: its rules, for whom, and until when."""
     lines = []
     for item in items:
-        who = "" if item.get("for") == ["all"] else f", for {', '.join(item.get('for', []))}"
-        lines.append(f"\"{item['words']}\" ({item['id']}: {', '.join(item['rules'])}{who}, until "
-                     f"{now_text(item['until'])})")
+        who = [f"{item['lead']}'s sessions"] if item.get("lead") else []
+        who += [f"only {', '.join(item['only'])}"] if item.get("only") else []
+        lines.append(f"{item['id']}: {', '.join(item['rules'])}" + (f" ({'; '.join(who)})" if who else "")
+                     + f", until {now_text(item['until'])}")
     return lines
 
 
@@ -714,9 +731,10 @@ def matches(rule: str, tool: str, given: dict, cwd: str = "") -> bool:
 
 
 def tool_decision(config: dict, session: str, payload: dict) -> dict | None:
-    """The PreToolUse hook's answer: allow a call the person approved for this session, with the approval named, or
-    None to leave it to the usual checks."""
+    """The PreToolUse hook's answer: allow a call that an approval the person made at their own terminal covers for
+    this session, with the approval named, or None to leave it to the usual checks."""
     lead = os.environ.get(wait.LEAD_ENV, "").lower() or lead_of(config)
+    person = os.environ.get(cli.PERSON_ENV, "").lower() or person_of(config)
     tool, given = str(payload.get("tool_name") or ""), payload.get("tool_input") or {}
     if not isinstance(given, dict):
         return None
@@ -725,170 +743,79 @@ def tool_decision(config: dict, session: str, payload: dict) -> dict | None:
         mark(False)
         return None
     for item in items:
-        if item.get("lead") != lead or not is_live(item):
+        if not applies(item, session, person, lead):
             continue
-        whom = item.get("for") or ["all"]
-        if whom != ["all"] and session not in whom:
-            continue
-        for rule in item.get("rules", []):
+        for rule in item["rules"]:
             if matches(rule, tool, given, str(payload.get("cwd") or "")):
                 return {"hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "permissionDecision": "allow",
-                    "permissionDecisionReason": f"The person approved this ({item['id']}, {rule}): "
-                                                f"\"{item['words']}\""}}
+                    "permissionDecisionReason": f"{cli_title(person)} approved this at their own terminal "
+                                                f"({item['id']}, {rule})."}}
     return None
 
 
-# The person's own comment, behind every approval that travels
+# Approvals the person gives at their own terminal
 
 
-COMMENT_REF = re.compile(r"(?:#issuecomment-|/comments/)?(\d+)$")
+AGENT_ENV = ("CLAUDECODE", cli.SESSION_ENV, cli.CLAUDE_SESSION_ENV)  # what an agent's command carries
 
 
-def person_logins(config: dict, person: str) -> frozenset[str]:
-    """The person's own logins on the code host: `[people.<person>] login`, and the logins [people] names for them."""
-    if not person:
-        return frozenset()
-    table = config.get("people", {}).get(person)
-    own = {str(table["login"]).lower()} if isinstance(table, dict) and table.get("login") else set()
-    return frozenset(own | set(wait.person_logins(config, person)))
+def at_own_terminal() -> bool:
+    """Whether this command runs at the person's own terminal: its input and output are a terminal, and nothing in its
+    environment says an agent's session runs it."""
+    from colony import portable
+
+    if any(os.environ.get(name) for name in AGENT_ENV):
+        return False
+    return portable.is_terminal(sys.stdin) and portable.is_terminal(sys.stdout)
 
 
-def squash(text: str) -> str:
-    return " ".join(re.sub(r"[*_`>]", " ", str(text or "")).lower().split())
-
-
-def signed_by_an_agent(body: str) -> bool:
-    """Whether a comment carries what an agent's post carries: a `(from <name>)` signature on a line, a sender's note,
-    an attachment, or a decision's note. The person's own comment carries none."""
-    body = str(body or "")
-    if wait.NOTE_TEXT.search(body) or wait.ATTACHMENT.search(body) or NOTE in body:
-        return True
-    return any(wait.SIGNED.search(wait.MARKUP.sub("", line)) for line in body.splitlines())
-
-
-def persons_comment(config: dict, ref, person: str) -> dict:
-    """The person's own comment `ref`, an id or a comment's address, read from the code host: written by one of the
-    person's logins, and unsigned, so no agent and no outsider wrote it. It raises when it isn't."""
-    found = COMMENT_REF.search(str(ref or "").strip())
-    if not found:
-        raise cli.ColonyError(f"{ref!r} is no comment: give its id or its address, ending #issuecomment-<id>")
-    logins = person_logins(config, person)
-    if not logins:
-        raise cli.ColonyError(f"Colony doesn't know {person or 'the person'}'s login, so it can't check who wrote the "
-                              f"comment: set login under [people.{person or '<person>'}] in {cli.DIR}/{cli.CONFIG_NAME}")
-    data = json.loads(wait.gh("api", f"repos/{config['project']['repo']}/issues/comments/{found[1]}") or "{}")
-    author = str((data.get("user") or {}).get("login") or "").lower()
-    if author not in logins:
-        raise cli.ColonyError(f"comment {found[1]} was written by {author or 'someone unknown'}, not by "
-                              f"{person}: only the person's own comment carries an approval")
-    if signed_by_an_agent(data.get("body", "")):
-        raise cli.ColonyError(f"comment {found[1]} carries an agent's signature or note: only a comment the person "
-                              "wrote themself carries an approval")
-    return {"id": int(found[1]), "url": str(data.get("html_url") or ""), "body": str(data.get("body") or "")}
-
-
-def accept_published(config: dict, lead: str, approvals, person: str) -> list[dict]:
-    """The approvals a lead published that a helper on this computer may use: each must point to the person's own
-    comment, which says its words; every rule must pass check_rule; it lasts at most APPROVAL_MOST hours from now. The
-    rest are dropped, each with a line on stderr. The accepted ones are kept here for the permission hook."""
-    accepted, now = [], time.time()
-    for item in approvals if isinstance(approvals, list) else []:
-        if not isinstance(item, dict) or not re.fullmatch(r"A\d+", str(item.get("id", ""))):
-            continue
-        rules = item.get("rules")
-        why = ""
-        if not isinstance(rules, list) or not rules or not all(valid_rule(rule) for rule in rules):
-            why = "a rule wider than an approval may hold"
-        elif not item.get("comment"):
-            why = "it points to no comment of the person's"
-        else:
-            try:
-                comment = persons_comment(config, item["comment"], person)
-            except (cli.ColonyError, OSError, ValueError) as e:
-                why = str(e)
-            else:
-                if not squash(item.get("words")) or squash(item.get("words")) not in squash(comment["body"]):
-                    why = "the person's comment doesn't say its words"
-        whom = item.get("for") if isinstance(item.get("for"), list) else ["all"]
-        if not why and not all(isinstance(w, str) and (w == "all" or cli.SESSION_NAME.fullmatch(w)) for w in whom):
-            why = "it names a session that can't be one"
-        if why:
-            print(f"{cli.NAME}: approval {item.get('id')} from {lead} is not used: {why}", file=sys.stderr)
-            continue
-        until = min(float(item.get("until") or 0), now + APPROVAL_MOST * 3600)
-        if until > now:
-            accepted.append({"id": item["id"], "words": str(item["words"]), "rules": [str(r).strip() for r in rules],
-                             "for": whom, "until": until, "comment": item["comment"], "lead": lead,
-                             "published": True, "at": now})
-    kept = [item for item in read_approvals(config) if item.get("lead") != lead or not item.get("published")]
-    write_approvals(config, [*kept, *accepted])
-    return accepted
-
-
-def allow_cmd(config: dict, args) -> int:
-    """`colony allow ["<the person's words>"] --rule "<permission rule>" … [--comment <their comment>] [--for <helper>
-    …] [--hours <h>]`, `colony allow --list`, `colony allow --revoke <id>`: record what the person approved, so the
-    permission checks of this lead and its helpers let it through until it expires. Only an approval that points to
-    the person's own comment on the code host reaches helpers on other computers (accept_published)."""
-    lead = lead_of(config, args)
+def approve_cmd(config: dict, args) -> int:
+    """`colony approve "<rule>" … [--for <hours>] [--only <session> …] [--lead <lead>]`, `colony approve --list`,
+    `colony approve --revoke <id>`: the person, at their own terminal, lets the permission checks of their leads and
+    helpers on this computer through a call each rule covers, until it expires. An agent can list approvals, and
+    never make or revoke one."""
+    person = person_of(config, args)
     if args.list:
-        items = live_approvals(config, lead)
+        items = live_approvals(config, person)
         print("\n".join(approval_lines(items)) or "No approval is in force.")
         return 0
-    lead_only("allow")
+    if not at_own_terminal():
+        raise cli.ColonyError("an approval is given by the person, at their own terminal: run `colony approve` there "
+                              "yourself. An agent's session can't make or revoke one")
+    if not person:
+        raise cli.ColonyError("say whose approval this is: --person <you>")
+    items = read_approvals(config)
     if args.revoke:
         ref = args.revoke.strip().upper()
-        items = read_approvals(config)
-        hit = [item for item in items if item.get("id") == ref and item.get("lead") == lead]
+        hit = [item for item in items if item.get("id") == ref and str(item.get("person")).lower() == person]
         if not hit:
-            raise cli.ColonyError(f"there is no approval {ref}: `{cli.NAME} allow --list` lists them")
+            raise cli.ColonyError(f"there is no approval {ref} of yours: `{cli.NAME} approve --list` lists them")
         for item in hit:
             item["revoked"] = time.time()
         write_approvals(config, items)
         print(f"{ref} revoked: it lets nothing through from now on.")
-        from colony import boot
-
-        boot.publish_quietly(config)
         return 0
-    words = (args.words or "").strip()
-    person = person_of(config, args)
-    rules = [check_rule(rule) for rule in args.rule or []]
-    comment = persons_comment(config, args.comment, person) if args.comment else None
-    if comment and not words:
-        words = " ".join(comment["body"].split())[:500]
-    if not words or not rules:
-        raise cli.ColonyError("give the person's words, in quotes, or --comment with their own comment, and each "
-                              "--rule they cover, such as --rule \"Bash(npm run migrate:*)\"")
-    if comment and squash(words) not in squash(comment["body"]):
-        raise cli.ColonyError(f"the person's comment {comment['id']} doesn't say those words: give their words as "
-                              "the comment says them")
-    if found := profile.looks_secret(words):
-        raise cli.ColonyError(f"the words hold what looks like {found}, and an approval never carries a secret")
+    rules = [check_rule(rule) for rule in args.rules]
     hours = args.hours if args.hours is not None else APPROVAL_HOURS
     if not 0 < hours <= APPROVAL_MOST:
         raise cli.ColonyError(f"an approval lasts more than 0 and at most {APPROVAL_MOST:g} hours")
-    items = read_approvals(config)
+    only = list(dict.fromkeys(name.lower() for name in args.only or []))
+    if not all(cli.SESSION_NAME.fullmatch(name) for name in only):
+        raise cli.ColonyError("--only names a session, such as builder-2 or lead")
+    lead = (args.lead or "").lower()
+    whom = (f"{lead} and its helpers" if lead else f"every lead and helper of {person}'s here") + \
+        (f", only {', '.join(only)}" if only else "")
+    print(f"This lets {whom} run, without a permission question, for {hours:g} hours:")
+    print("\n".join(f"  {rule}" for rule in rules))
+    if input("Type yes to approve: ").strip().lower() != "yes":
+        print("Not approved: nothing changed.")
+        return 1
     number = 1 + max([int(i["id"][1:]) for i in items if re.fullmatch(r"A\d+", str(i.get("id")))] + [0])
-    whom = args.for_ or ["all"]
-    if not all(name == "all" or cli.SESSION_NAME.fullmatch(name) for name in whom):
-        raise cli.ColonyError("--for names a helper, such as builder-2, or lead")
-    item = {"id": f"A{number}", "words": words, "rules": rules, "lead": lead, "for": whom, "at": time.time(),
-            "until": time.time() + hours * 3600, "by": me(),
-            **({"comment": comment["id"], "comment_url": comment["url"]} if comment else {})}
+    item = {"id": f"A{number}", "rules": rules, "person": person, "lead": lead, "only": only, "at": time.time(),
+            "until": time.time() + hours * 3600}
     write_approvals(config, [*items, item])
-    print(f"Recorded {item['id']}: {approval_lines([item])[0]}. The permission checks of {lead} and "
-          + ("its helpers" if item["for"] == ["all"] else ", ".join(item["for"])) + " on this computer let it through "
-          "until then" + (", and so do those of its helpers on other computers, since it points to the person's own "
-                          "comment." if comment else ". Helpers on other computers get it only with --comment, the "
-                                                     "person's own comment that says it."))
-    if person:
-        record_item = {"id": item["id"], "lead": lead, "person": person, "status": "approved", "issue": None}
-        post_record(config, record_item, f"{cli_title(person)} approved {item['id']}: \"{words}\", as "
-                                         f"{', '.join(rules)}, until {now_text(item['until'])}", full=words)
-    from colony import boot
-
-    boot.publish_quietly(config)
+    print(f"Approved {approval_lines([item])[0]}. `{cli.NAME} approve --revoke {item['id']}` ends it.")
     return 0
 
 
@@ -929,17 +856,15 @@ def register(sub) -> None:
     p.add_argument("what", help="what it buys, in quotes")
     p.add_argument("--approved", metavar="ID", help="the decision in which the person said yes to it")
     p.set_defaults(run=spend_cmd)
-    p = sub.add_parser("allow", help="record what the person approved, so the permission checks of the lead and its "
-                                     "helpers let it through")
-    p.add_argument("words", nargs="?", help="the person's words, exactly as they said them")
-    p.add_argument("--rule", action="append", metavar="RULE", help="a Claude Code permission rule the words cover, "
-                                                                   "such as Bash(npm run migrate:*); repeat it")
-    p.add_argument("--comment", metavar="REF", help="the person's own comment that says it, by id or address; "
-                                                    "without one it stays on this computer")
-    p.add_argument("--for", dest="for_", action="append", metavar="HELPER", help="only this helper, or lead; repeat")
-    p.add_argument("--hours", type=float, help=f"how long it lasts, {APPROVAL_HOURS:g} by default, at most "
-                                               f"{APPROVAL_MOST:g}")
+    p = sub.add_parser("approve", help="the person, at their own terminal: let their sessions here run what a "
+                                       "permission rule covers, until it expires")
+    p.add_argument("rules", nargs="*", metavar="rule", help="a Claude Code permission rule, such as "
+                                                            "Bash(npm run migrate:*)")
+    p.add_argument("--for", dest="hours", type=float, metavar="HOURS",
+                   help=f"how long it lasts, {APPROVAL_HOURS:g} hours by default, at most {APPROVAL_MOST:g}")
+    p.add_argument("--only", action="append", metavar="SESSION", help="only this session, such as builder-2; repeat")
+    p.add_argument("--lead", help="only this lead and its helpers, such as ana-main-lead")
     p.add_argument("--list", action="store_true", help="the approvals in force")
-    p.add_argument("--revoke", metavar="ID", help="take one back, such as A2")
-    p.add_argument("--person", help="whose session this is")
-    p.set_defaults(run=allow_cmd)
+    p.add_argument("--revoke", metavar="ID", help="end one at once, such as A2")
+    p.add_argument("--person", help="whose approval, when $COLONY_PERSON is not set")
+    p.set_defaults(run=approve_cmd)

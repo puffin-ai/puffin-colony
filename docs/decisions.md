@@ -55,7 +55,7 @@ Every question goes on your `Needs <You>` issue as one line, `for <lead>: <You> 
 
 The lead records your answer exactly as you said it, every word and space: `colony answer D<n> "<your words>"`, with `--on-issue` when you answered there. The record goes on the same issue, so the issue holds every question and every answer. `colony decisions` lists what waits on you, with how long each has waited and what to do once one is past its wait; `--log` lists what the lead decided alone; `--all` lists every one; `--json` prints them for a script. The ledger lives in `~/.colony/<project>/decisions.json`, and the briefing a lead starts with names the oldest.
 
-Other sessions, such as the spec agent and the researcher, still post their questions with `colony needs`. Only a lead runs `ask`, `answer` and `allow`.
+Other sessions, such as the spec agent and the researcher, still post their questions with `colony needs`. Only a lead runs `ask` and `answer`.
 
 ## Drafts first
 
@@ -63,19 +63,22 @@ Some work is drafted, shown to you, and built only after your yes: the kinds you
 
 ## Approvals reach helpers
 
-When you tell a lead yes to something a helper does, such as "yes, run the staging migration", the lead records it in your words, with the Claude Code permission rules it covers:
+You give an approval yourself, at your own terminal. No agent can give one for you, and nothing posted on the code host carries one.
+
+When a helper will need to run something you have said yes to, such as the staging migration, run this in your own terminal, outside any agent's session:
 
 ```sh
-colony allow "Yes, run the staging migration." --rule "Bash(make migrate-staging:*)" --hours 4
+colony approve "Bash(make migrate-staging:*)" --for 4
 ```
 
-From then until it expires, the PreToolUse hook lets a matching call of that lead, and of its helpers, through their permission check, so no helper waits on a permission question you already answered. The approval and your words also go into each helper's first prompt, and onto your Needs issue as a record.
+It shows what it lets through, for whom and for how long, and asks you to type `yes`. From then until it expires, the PreToolUse hook lets a matching call of your leads and helpers on this computer through their permission check, so no helper waits on a permission question you already answered. Each helper's first prompt names the approvals that cover it.
 
-- **A rule** is `Bash(<command>)` for one exact command, `Bash(<command>:*)` for a command and its arguments, `WebFetch(domain:<domain>)` for one domain, or a file tool, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` or `Read`, with a path pattern inside the repo, such as `Edit(docs/**)`. Only `Read`, `Glob`, `Grep` and `WebSearch`, which change nothing, may stand alone. Every other rule is refused: a tool with no argument, an MCP tool, a wildcard command, a path with `..`, `~` or `/` at its start.
+- **Only at your own terminal.** `colony approve` refuses unless its input and output are an interactive terminal, and nothing in its environment says an agent's session runs it (`CLAUDECODE`, `COLONY_SESSION` or `CLAUDE_CODE_SESSION_ID`). An agent can list the approvals, `colony approve --list`, and never make or revoke one. A lead that needs one asks you to run the command.
+- **On this computer only.** An approval lives in `~/.colony/<project>/approvals.json`, readable by you alone, and covers your own sessions here: your leads and their helpers, or with `--lead <lead>` one lead and its helpers, or with `--only <session>` named sessions. Another person's sessions on a shared computer never use it. A helper on another computer needs your approval there.
+- **A rule** is `Bash(<command>)` for one exact command, `Bash(<command>:*)` for a command and its arguments, `WebFetch(domain:<domain>)` for one domain, or a file tool, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` or `Read`, with a path pattern inside the repo, such as `Edit(docs/**)`. Only `Read`, `Glob`, `Grep` and `WebSearch`, which change nothing, may stand alone. Every other rule is refused: a tool with no argument, an MCP tool, a wildcard command, a path with `..`, `~` or `/` at its start. The hook checks each rule again, so a rule written into the file by hand that fails the check lets nothing through.
 - **A Bash call matches only alone.** A command joined to others with `&&`, `;`, `|`, a redirect or `$(…)` never matches, so an approval can't carry another command through.
 - **A path matches segment by segment.** The path is resolved against the session's folder, with its links followed, and must stay inside it. `*` matches within one folder level, and `**` across levels, so `Edit(docs/*)` covers `docs/a.md` but not `docs/deep/a.md`.
 - **It only ever allows.** A guard that refuses a call, such as the wait guard or the merge guard, still refuses it: Claude Code takes a hook's refusal over its allow. A merge still needs its own yes, read from GitHub ([safety.md](safety.md)).
-- **It lasts** 8 hours by default, at most 24 (`--hours`). `--for <helper>` limits it to one helper, or to `lead`. `colony allow --list` lists the live ones, and `colony allow --revoke A<n>` ends one at once.
-- **Helpers on other computers** get it only when it points to your own comment on the code host. Write it on your Needs issue, such as `yes, run the staging migration`, and the lead records it with `colony allow --comment <its address or id> --rule …`, which takes your words from it. Colony checks that one of your logins wrote that comment, `[people.<you>] login` or a `[people] logins` login whose name is yours, that it carries no agent's signature or note, and that it says the approval's words. A helper that joins on another computer checks all of it again, checks every rule, and keeps it at most 24 hours from then; it drops anything else. An approval you gave in chat reaches the helpers on the lead's own computer only.
+- **It lasts** 8 hours by default, at most 24 (`--for <hours>`). `colony approve --revoke A<n>`, at your terminal, ends one at once.
 
-Approvals are kept in `~/.colony/<project>/approvals.json`, readable by you alone. The hook costs nothing while no approval is live: it checks for `~/.colony/approvals.live` before it runs.
+The terminal check stops an agent's command from approving, not an agent that sets out to get around it, such as one that edits the file itself: on your own computer, the file is as safe as your account. The hook costs nothing while no approval is live: it checks for `~/.colony/approvals.live` before it runs.

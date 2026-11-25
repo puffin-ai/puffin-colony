@@ -19,8 +19,10 @@ request intake, and the standing orders a lead passes its helpers (docs/boot.md)
 - **Request intake** (`colony plan`) turns one request into task groups, each with the folders it owns, its done-when
   results and its helpers, and starts them: an orchestrator opens one lead per group, which reports to it, and a lead
   gets one card per group. It shows the plan first only when the profile, the mode or the request asks.
-- **Orders reach helpers**: a helper's first prompt carries its lead's standing orders for helpers and what the person
-  approved for it (helper_brief), and the lead publishes them for helpers on other computers (publish_orders).
+- **Orders reach helpers**: a helper's first prompt carries its lead's standing orders for helpers and the approvals
+  the person gave at their own terminal on that computer (helper_brief). The lead publishes its standing orders, as
+  text alone, for helpers on other computers, which read them only from the lead's own person's comment
+  (publish_orders, published_orders). No approval ever travels on the code host.
 
 Python 3.11+ standard library only.
 """
@@ -979,44 +981,46 @@ def orders_path(config: dict, lead: str) -> Path:
     return state(config, f"{lead}-helper-orders")
 
 
+def person_of_lead(lead: str) -> str:
+    """The person a lead belongs to: its name starts with theirs, such as ana in ana-main-lead."""
+    return lead.split("-", 1)[0] if lead else ""
+
+
 def own_orders(config: dict, lead: str) -> dict:
     """The orders this lead's session passes its helpers: its standing orders for helpers, with its session and its
-    mode, and what the person approved for its helpers."""
+    mode, and, for its helpers on this computer, the approvals the person gave here at their own terminal."""
     from colony import decisions
 
     merged = profile.load(config=config)
     orders = profile.render(merged, "helper") if profile.order_lines(merged, "helper") else ""
-    approvals = decisions.live_approvals(config, lead)
-    shared = [{key: item[key] for key in ("id", "words", "rules", "for", "until", "comment") if key in item}
-              for item in approvals if item.get("comment") and not item.get("published")]
-    return {"lead": lead, "text": with_approvals(orders, approvals), "orders": orders, "approvals": shared,
-            "at": time.time()}
+    person = os.environ.get(cli.PERSON_ENV, "").lower() or person_of_lead(lead)
+    approvals = decisions.live_approvals(config, person, lead) if person else []
+    return {"lead": lead, "text": with_approvals(orders, approvals), "orders": orders, "at": time.time()}
 
 
 def with_approvals(orders: str, approvals: list[dict]) -> str:
-    """A helper's orders, then a line for each approval it may use."""
+    """A helper's orders, then a line for each approval that covers it on this computer."""
     from colony import decisions
 
     lines = [orders] if orders else []
-    return "\n".join(lines + [f"The person approved for you: {line}" for line in decisions.approval_lines(approvals)])
+    return "\n".join(lines + [f"The person approved at their own terminal, so it runs without a permission question: "
+                              f"{line}" for line in decisions.approval_lines(approvals)])
 
 
 def publish_orders(config: dict, lead: str, post: bool = True) -> dict:
-    """Keep this lead's orders for helpers where its helpers read them: a file on this computer, and, when they
-    changed, a comment on the coordination issue for helpers on other computers."""
+    """Keep this lead's orders for helpers where its helpers read them: a file on this computer, and, when its
+    standing orders changed, a comment on the coordination issue for helpers on other computers. The comment carries
+    the orders as text alone: an approval never travels."""
     from colony import board, transport
 
     held = own_orders(config, lead)
-    key = hashlib.sha256(json.dumps([held["orders"], held["approvals"]], sort_keys=True).encode()).hexdigest()
+    key = hashlib.sha256(held["orders"].encode()).hexdigest()
     path = orders_path(config, lead)
     before = wait.read_json(path, {})
     held["key"], held["posted"] = key, (before or {}).get("posted", "") if isinstance(before, dict) else ""
-    if post and held["posted"] != key and (held["orders"] or held["approvals"] or held["posted"]) \
-            and not wait.hack(config):
-        # Only approvals that point to the person's own comment travel, and a helper elsewhere checks each one.
+    if post and held["posted"] != key and (held["orders"] or held["posted"]) and not wait.hack(config):
         body = (f"{ORDERS_HEAD.format(lead=lead)}, {board.stamp(board.utcnow())}\n"
-                + transport.attachment("the orders", json.dumps({"orders": held["orders"],
-                                                                 "approvals": held["approvals"]})))
+                + transport.attachment("the orders", json.dumps({"orders": held["orders"]})))
         transport.send(config, cli.LEAD, body)
         held["posted"] = key
     wait.write_json(path, held)
@@ -1046,31 +1050,46 @@ def known_coordination(config: dict) -> int | None:
     return numbers[-1] if numbers else None
 
 
-def published_orders(config: dict, lead: str) -> dict | None:
-    """A lead's orders for helpers as the team last published them on the coordination issue, or None. A comment an
-    outsider wrote is never read (team_comments)."""
-    number = known_coordination(config)
+def person_logins(config: dict, person: str) -> frozenset[str]:
+    """A person's own logins on the code host: `[people.<person>] login`, and the [people] logins whose name is
+    theirs. Empty when colony.toml names none."""
+    if not person:
+        return frozenset()
+    table = config.get("people", {}).get(person)
+    own = {str(table["login"]).lower()} if isinstance(table, dict) and table.get("login") else set()
+    return frozenset(own | set(wait.person_logins(config, person)))
+
+
+def published_orders(config: dict, lead: str) -> str:
+    """A lead's standing orders for helpers as it last published them on the coordination issue: only from a comment
+    one of the lead's own person's logins wrote, and "" when colony.toml names none of their logins, so a comment
+    by an outsider or another person never reaches a helper's prompt. Anything but the orders' text is ignored."""
+    logins = person_logins(config, person_of_lead(lead))
+    number = known_coordination(config) if logins else None
     if number is None:
-        return None
+        return ""
+    repo = config["project"]["repo"]
+    out = wait.gh("api", "--paginate", f"repos/{repo}/issues/{number}/comments?per_page=100", "--jq", ".[]")
+    comments = [json.loads(line) for line in out.splitlines() if line.strip()]
     head = ORDERS_HEAD.format(lead=lead) + ","
-    for comment in reversed(team_comments(config, number)):
-        body = comment.get("body", "")
+    for comment in reversed(comments):
+        author = str((comment.get("user") or {}).get("login") or "").lower() if isinstance(comment, dict) else ""
+        body = str(comment.get("body", "")) if author in logins else ""
         found = ORDERS_FENCE.search(body) if body.startswith(head) else None
         if found:
             try:
                 data = json.loads(found[2].replace("&lt;!--", "<!--").replace("--&gt;", "-->"))
             except ValueError:
-                return None
-            return data if isinstance(data, dict) else None
-    return None
+                return ""
+            return str(data.get("orders") or "") if isinstance(data, dict) else ""
+    return ""
 
 
 def helper_brief(config: dict, lead: str = "", fetch: bool = False) -> str:
     """The orders a helper's first prompt carries: the lead's own, when the lead opens it on this computer; else the
-    copy its lead keeps on this computer, else, with `fetch`, the one the team published on the coordination issue.
-    Of a published copy's approvals, only those that point to the person's own comment, and pass every check, are
-    kept here for the helper's permission hook and named in its orders (decisions.accept_published). "" when there
-    are none."""
+    copy its lead keeps on this computer; else, with `fetch`, the standing orders its lead published on the
+    coordination issue, as text alone (published_orders), with the approvals the person gave on this computer. ""
+    when there are none."""
     from colony import decisions
 
     lead = (lead or os.environ.get(wait.LEAD_ENV, "")).lower()
@@ -1085,12 +1104,10 @@ def helper_brief(config: dict, lead: str = "", fetch: bool = False) -> str:
             return str(held.get("text", ""))
         if not (fetch and lead and config["project"].get("repo") and not wait.hack(config)):
             return ""
-        data = published_orders(config, lead)
-        if not data:
-            return ""
-        person = lead.split("-", 1)[0]  # a lead's name starts with its person's, such as ana-main-lead
-        accepted = decisions.accept_published(config, lead, data.get("approvals") or [], person)
-        return with_approvals(str(data.get("orders") or ""), accepted)
+        orders = published_orders(config, lead)
+        person = person_of_lead(lead)
+        here = decisions.live_approvals(config, person, lead) if orders and person else []
+        return with_approvals(orders, here) if orders else ""
     except (wait.GhError, *EXPIRED) as e:
         print(f"{cli.NAME}: the helper's orders were not read: {e}", file=sys.stderr)
         return ""

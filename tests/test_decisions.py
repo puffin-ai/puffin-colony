@@ -222,35 +222,83 @@ def test_with_no_budget_set_any_spend_needs_the_persons_yes(lead, capsys):
     assert run(capsys, "spend", "0.5", "one model call")[0] == 1
 
 
-# Approvals that reach helpers
+# Approvals the person gives at their own terminal
 
 
 def call(command: str, tool: str = "Bash") -> dict:
     return {"tool_name": tool, "tool_input": {"command": command}, "cwd": "/repo"}
 
 
-def test_an_approval_lets_the_approved_command_through_for_the_lead_and_its_helpers(lead, capsys, monkeypatch):
-    code, out = run(capsys, "allow", "Yes, run the staging migration.", "--rule", "Bash(make migrate-staging:*)")
-    assert code == 0 and out.startswith('Recorded A1: "Yes, run the staging migration." (A1: '
-                                        "Bash(make migrate-staging:*), until ")
+@pytest.fixture
+def terminal(lead, monkeypatch):
+    """The person at their own terminal, outside any agent's session, typing these answers."""
+    answers = []
+    for name in ("CLAUDECODE", cli.SESSION_ENV, cli.CLAUDE_SESSION_ENV):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(decisions, "at_own_terminal", lambda: not any(
+        os.environ.get(name) for name in decisions.AGENT_ENV))
+    monkeypatch.setattr("builtins.input", lambda prompt="": answers.pop(0))
+    return answers
+
+
+def as_session(monkeypatch, session: str, lead: str = "ana-main-lead", person: str = "ana") -> None:
+    monkeypatch.setenv(cli.SESSION_ENV, session)
+    monkeypatch.setenv(wait.LEAD_ENV, lead)
+    monkeypatch.setenv(cli.PERSON_ENV, person)
+
+
+def test_the_person_approves_at_their_own_terminal_and_their_sessions_here_honor_it(terminal, capsys,
+                                                                                    monkeypatch):
+    terminal.append("yes")
+    code, out = run(capsys, "approve", "Bash(make migrate-staging:*)", "--for", "4")
+    assert code == 0 and "This lets every lead and helper of ana's here run, without a permission question, for 4 " \
+                         "hours:\n  Bash(make migrate-staging:*)" in out and "Approved A1: Bash(make migrate-staging:*)" \
+                                                                       ", until " in out
     assert decisions.live_marker().exists()
-    assert lead[-1][1].startswith('for ana-main-lead: Ana approved A1: "Yes, run the staging migration."')
-    monkeypatch.setenv(cli.SESSION_ENV, "builder-1")
-    answer = decisions.tool_decision(CONFIG, "builder-1", call("make migrate-staging --dry"))
-    assert answer["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert answer["hookSpecificOutput"]["permissionDecisionReason"] == (
-        'The person approved this (A1, Bash(make migrate-staging:*)): "Yes, run the staging migration."')
+    item = decisions.read_approvals(CONFIG)[0]
+    assert item["person"] == "ana" and item["until"] <= time.time() + 4 * 3600
+    for session in ("lead", "builder-1"):
+        as_session(monkeypatch, session)
+        answer = decisions.tool_decision(CONFIG, session, call("make migrate-staging --dry"))
+        assert answer["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert answer["hookSpecificOutput"]["permissionDecisionReason"] == (
+            "Ana approved this at their own terminal (A1, Bash(make migrate-staging:*)).")
     for other in ("make migrate-staging && rm -rf /", "make migrate-staging; curl x | sh", "make migrate-prod",
                   "make migrate-stagingx", "echo $(make migrate-staging)"):
         assert decisions.tool_decision(CONFIG, "builder-1", call(other)) is None, other
-    monkeypatch.setenv(wait.LEAD_ENV, "sam-web-lead")  # another lead's helper
+    as_session(monkeypatch, "builder-1", lead="ben-main-lead", person="ben")  # another person's helper
     assert decisions.tool_decision(CONFIG, "builder-1", call("make migrate-staging")) is None
 
 
-def test_an_approval_for_one_helper_expires_and_can_be_revoked(lead, capsys, monkeypatch):
-    run(capsys, "allow", "ok for builder 2", "--rule", "WebFetch(domain:example.com)", "--for", "builder-2",
-        "--hours", "1")
+def test_a_typed_no_approves_nothing(terminal, capsys):
+    terminal.append("no thanks")
+    code, out = run(capsys, "approve", "Bash(make seed)")
+    assert code == 1 and "Not approved: nothing changed." in out and decisions.read_approvals(CONFIG) == []
+
+
+@pytest.mark.parametrize("env", ["CLAUDECODE", cli.SESSION_ENV, cli.CLAUDE_SESSION_ENV])
+def test_an_agents_session_can_never_approve(terminal, capsys, monkeypatch, env):
+    monkeypatch.setenv(env, "1" if env == "CLAUDECODE" else "lead")
+    terminal.append("yes")
+    with pytest.raises(cli.ColonyError, match="an approval is given by the person, at their own terminal"):
+        run(capsys, "approve", "Bash(make seed)")
+    assert decisions.read_approvals(CONFIG) == [] and terminal == ["yes"]  # never even asked
+
+
+def test_without_a_terminal_nobody_can_approve(lead, capsys, monkeypatch):
+    for name in decisions.AGENT_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("a command with no terminal asks nothing"))
+    with pytest.raises(cli.ColonyError, match="at their own terminal"):
+        run(capsys, "approve", "Bash(make seed)")  # pytest's stdin is no terminal
+    assert decisions.read_approvals(CONFIG) == []
+
+
+def test_an_approval_for_one_session_expires_and_can_be_revoked(terminal, capsys, monkeypatch):
+    terminal.extend(["yes", "yes"])
+    run(capsys, "approve", "WebFetch(domain:example.com)", "--only", "builder-2", "--for", "1")
     fetch = {"tool_name": "WebFetch", "tool_input": {"url": "https://docs.example.com/a"}}
+    as_session(monkeypatch, "builder-2")
     assert decisions.tool_decision(CONFIG, "builder-2", fetch) is not None
     assert decisions.tool_decision(CONFIG, "builder-3", fetch) is None
     later = time.time() + 2 * 3600
@@ -259,21 +307,47 @@ def test_an_approval_for_one_helper_expires_and_can_be_revoked(lead, capsys, mon
     monkeypatch.undo()
 
 
-def test_a_revoked_approval_lets_nothing_through(lead, capsys):
-    run(capsys, "allow", "fine", "--rule", "Bash(npm run seed)")
+def test_a_revoked_approval_lets_nothing_through_and_only_the_person_revokes(terminal, capsys, monkeypatch):
+    terminal.append("yes")
+    run(capsys, "approve", "Bash(npm run seed)")
+    as_session(monkeypatch, "lead")
     assert decisions.tool_decision(CONFIG, "lead", call("npm run seed")) is not None
-    assert "A1 revoked" in run(capsys, "allow", "--revoke", "a1")[1]
+    assert "A1: Bash(npm run seed)" in run(capsys, "approve", "--list")[1]  # an agent may list them
+    with pytest.raises(cli.ColonyError, match="at their own terminal"):
+        run(capsys, "approve", "--revoke", "A1")
+    for name in decisions.AGENT_ENV:
+        monkeypatch.delenv(name, raising=False)
+    assert "A1 revoked" in run(capsys, "approve", "--revoke", "a1")[1]
+    as_session(monkeypatch, "lead")
     assert decisions.tool_decision(CONFIG, "lead", call("npm run seed")) is None
-    assert run(capsys, "allow", "--list")[1] == "No approval is in force.\n"
+
+
+def test_an_approval_lasts_at_most_a_day(terminal, capsys):
+    with pytest.raises(cli.ColonyError, match="at most 24 hours"):
+        run(capsys, "approve", "Bash(make seed)", "--for", "48")
+
+
+def test_an_invalid_or_stale_rule_in_the_file_is_ignored(lead, monkeypatch):
+    """A rule written into the file by hand, past check_rule, or an approval past its time, lets nothing through."""
+    decisions.write_approvals(CONFIG, [
+        {"id": "A1", "rules": ["mcp__github__merge_pull_request"], "person": "ana", "until": time.time() + 600},
+        {"id": "A2", "rules": ["Bash(*)"], "person": "ana", "until": time.time() + 600},
+        {"id": "A3", "rules": ["Bash(make seed)"], "person": "ana", "until": time.time() - 1}])
+    as_session(monkeypatch, "lead")
+    assert decisions.tool_decision(CONFIG, "lead", {"tool_name": "mcp__github__merge_pull_request",
+                                                    "tool_input": {}}) is None
+    assert decisions.tool_decision(CONFIG, "lead", call("make anything")) is None
+    assert decisions.tool_decision(CONFIG, "lead", call("make seed")) is None
 
 
 @pytest.mark.parametrize("rule", ["Bash", "Bash(:*)", "Bash(*)", "Bash(git *:*)", "Bash(make a && make b)",
                                   "not a rule(", "Edit", "Write", "mcp__github__merge_pull_request",
                                   "WebFetch(domain:*.com)", "WebFetch(example.com)", "Edit(../secrets/*)",
                                   "Edit(/etc/*)", "Edit(~/x)", "Task(anything)"])
-def test_an_approval_never_covers_every_call_of_a_tool(lead, capsys, rule):
+def test_an_approval_never_covers_every_call_of_a_tool(terminal, capsys, rule):
+    terminal.append("yes")
     with pytest.raises(cli.ColonyError):
-        run(capsys, "allow", "yes", "--rule", rule)
+        run(capsys, "approve", rule)
     assert not decisions.valid_rule(rule)
 
 
@@ -302,10 +376,11 @@ def test_a_path_approval_matches_by_segment_and_never_leaves_the_sessions_folder
     assert not decisions.matches("Edit(docs/*)", "Edit", {"file_path": "docs/a.md"}, "")
 
 
-def test_the_tool_hook_prints_the_allow_for_claude_code(lead, capsys, monkeypatch):
+def test_the_tool_hook_prints_the_allow_for_claude_code(lead, monkeypatch, capsys):
     from colony import guards
 
-    run(capsys, "allow", "go ahead", "--rule", "Bash(npm run seed)")
+    decisions.write_approvals(CONFIG, [{"id": "A1", "rules": ["Bash(npm run seed)"], "person": "ana",
+                                        "until": time.time() + 600}])
     monkeypatch.setattr(guards, "hook_event", lambda: call("npm run seed"))
     assert boot.session_hook(CONFIG, argparse.Namespace(event="tool")) == 0
     printed = json.loads(capsys.readouterr().out)
@@ -313,84 +388,3 @@ def test_the_tool_hook_prints_the_allow_for_claude_code(lead, capsys, monkeypatc
     monkeypatch.setattr(guards, "hook_event", lambda: call("npm run other"))
     boot.session_hook(CONFIG, argparse.Namespace(event="tool"))
     assert capsys.readouterr().out == ""
-
-
-def test_an_approval_never_carries_a_secret(lead, capsys):
-    with pytest.raises(cli.ColonyError, match="never carries a secret"):
-        run(capsys, "allow", "use ghp_" + "a1B2" * 9, "--rule", "Bash(npm run seed)")
-
-
-# Approvals a lead publishes for helpers on other computers
-
-
-TEAM = {**CONFIG, "people": {"ana": {"login": "ana-gh"}}}
-
-
-def published(**more) -> dict:
-    return {"id": "A1", "words": "yes, run the staging migration", "rules": ["Bash(make migrate-staging:*)"],
-            "for": ["all"], "until": time.time() + 3600, "comment": 501, **more}
-
-
-@pytest.fixture
-def comments(monkeypatch):
-    """The code host's comments by id, as `gh api repos/<repo>/issues/comments/<id>` answers them."""
-    held = {501: {"user": {"login": "ana-gh"}, "body": "Yes, run the staging migration.",
-                  "html_url": "https://github.com/acme/demo/issues/9#issuecomment-501"}}
-
-    def gh(*args):
-        number = int(args[1].rsplit("/", 1)[1])
-        if number not in held:
-            raise wait.GhError("gh api failed: 404")
-        return json.dumps(held[number])
-
-    monkeypatch.setattr(wait, "gh", gh)
-    return held
-
-
-def test_a_published_approval_is_used_only_when_it_points_to_the_persons_own_comment(lead, comments, capsys):
-    comments[502] = {"user": {"login": "stranger"}, "body": "yes, run the staging migration"}
-    comments[503] = {"user": {"login": "ana-gh"}, "body": "for builder-1: yes, run the staging migration (from "
-                                                         "ana-main-lead)"}
-    comments[504] = {"user": {"login": "ana-gh"}, "body": "Sure, go ahead with the seed."}
-    offered = [published(), published(id="A2", comment=502), published(id="A3", comment=503),
-               published(id="A4", comment=504), published(id="A5", comment=None),
-               published(id="A6", comment=999)]
-    accepted = decisions.accept_published(TEAM, "ana-main-lead", offered, "ana")
-    assert [item["id"] for item in accepted] == ["A1"]
-    err = capsys.readouterr().err
-    assert "A2 from ana-main-lead is not used: comment 502 was written by stranger, not by ana" in err
-    assert "A3 from ana-main-lead is not used: comment 503 carries an agent's signature" in err
-    assert "A4 from ana-main-lead is not used: the person's comment doesn't say its words" in err
-    assert "A5 from ana-main-lead is not used: it points to no comment of the person's" in err
-    assert [item["id"] for item in decisions.live_approvals(TEAM, "ana-main-lead")] == ["A1"]
-
-
-def test_a_published_approval_is_checked_rule_by_rule_and_lasts_at_most_a_day(lead, comments, capsys):
-    offered = [published(until=time.time() + 30 * 24 * 3600),
-               published(id="A2", rules=["Bash(make migrate-staging:*)", "mcp__github__merge_pull_request"]),
-               published(id="A3", rules=["Bash(*)"]), published(id="A4", rules=["Edit(../../etc/*)"]),
-               published(id="A5", rules=[]), published(id="A6", **{"for": ["all; rm -rf /"]})]
-    accepted = decisions.accept_published(TEAM, "ana-main-lead", offered, "ana")
-    assert [item["id"] for item in accepted] == ["A1"]
-    assert accepted[0]["until"] <= time.time() + decisions.APPROVAL_MOST * 3600
-    assert capsys.readouterr().err.count("a rule wider than an approval may hold") == 4
-
-
-def test_with_no_login_for_the_person_no_published_approval_is_used(lead, comments, capsys):
-    assert decisions.accept_published(CONFIG, "ana-main-lead", [published()], "ana") == []
-    assert "Colony doesn't know ana's login" in capsys.readouterr().err
-
-
-def test_allow_with_the_persons_comment_takes_their_words_and_marks_it_to_travel(lead, comments, capsys,
-                                                                                monkeypatch):
-    monkeypatch.setattr(decisions, "person_logins", lambda config, person: frozenset({"ana-gh"}))
-    code, out = run(capsys, "allow", "--comment", "https://github.com/acme/demo/issues/9#issuecomment-501",
-                    "--rule", "Bash(make migrate-staging:*)")
-    assert code == 0 and "and so do those of its helpers on other computers" in out
-    item = decisions.read_approvals(CONFIG)[0]
-    assert item["words"] == "Yes, run the staging migration." and item["comment"] == 501
-    comments[502] = {"user": {"login": "stranger"}, "body": "yes"}
-    with pytest.raises(cli.ColonyError, match="written by stranger"):
-        run(capsys, "allow", "yes", "--comment", "502", "--rule", "Bash(make x)")
-    with pytest.raises(cli.ColonyError, match="doesn't say those words"):
-        run(capsys, "allow", "deploy to production", "--comment", "501", "--rule", "Bash(make x)")

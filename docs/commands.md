@@ -161,7 +161,7 @@ Accounts, usage limits, services, this computer, locks, and sleep. See [capacity
 
 ## Starting a session and decisions
 
-The startup routine, the project summary, modes, request intake, and what a lead asks you. See [boot.md](boot.md) and [decisions.md](decisions.md). `ask`, `answer`, `allow` and `plan`, except `plan show`, refuse to run outside a lead's session, and a helper never switches or defines a mode.
+The startup routine, the project summary, modes, request intake, and what a lead asks you. See [boot.md](boot.md) and [decisions.md](decisions.md). `ask`, `answer` and `plan`, except `plan show`, refuse to run outside a lead's session, `approve` runs only at the person's own terminal, and a helper never switches or defines a mode.
 
 | Command | What it does |
 | --- | --- |
@@ -181,8 +181,8 @@ The startup routine, the project summary, modes, request intake, and what a lead
 | `colony answer <id> "<the person's words>" [--on-issue]`, `colony answer <id> --took-default \| --withdraw` | Records the person's answer exactly as they said it, on the Needs issue too; for a draft, says whether it reads as a yes or a no. `--took-default` records that no answer came in time and the pick stands, never for a stop or gate question; `--withdraw` takes the question back. |
 | `colony never-raise ["<topic>"] [--remove] [--team]` | The topics never raised with the person: lists them, adds one to your personal profile, or takes one off. |
 | `colony spend <dollars> "<what>" [--approved <id>]` | Checks a spend against today's `budgets.dollars_per_day` and records it. Past the budget it ends with 1, unless `--approved` names a decision the person said yes to. |
-| `colony allow ["<the person's words>"] --rule "<permission rule>" … [--comment <their comment>] [--for <helper>] [--hours <h>]` | Records what the person approved, so the permission checks of the lead and its helpers let a matching call through until it expires, 8 hours by default. A rule names its command, domain or path; a joined command never matches. With `--comment`, the person's own comment on the code host, which it checks and takes the words from, it reaches helpers on other computers too. |
-| `colony allow --list`, `colony allow --revoke <id>` | The approvals in force, or ends one at once. |
+| `colony approve "<rule>" … [--for <hours>] [--lead <lead>] [--only <session> …]` | The person, at their own terminal: lets their leads and helpers on this computer run what each Claude Code permission rule covers, such as `Bash(npm run migrate:*)`, without a permission question, until it expires, 8 hours by default, at most 24. It refuses unless it runs at an interactive terminal outside any agent's session, and asks the person to type yes. A rule names its command, domain or path; a joined command never matches. |
+| `colony approve --list`, `colony approve --revoke <id>` | The approvals in force, which any session may list, or, at the person's terminal, ends one at once. |
 | `colony session-hook start\|compact\|end\|turn\|tool` | The startup, handover and approval hooks. Claude Code runs them. |
 
 ## Flags
