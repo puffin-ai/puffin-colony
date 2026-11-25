@@ -68,7 +68,7 @@ Colony writes `[person] name`, whose profile it is, and `[person] setup`, the da
 | `monitoring.check_minutes` | whole number | the smaller wins | How often a lead checks on its helpers and the team |
 | `monitoring.report` | `quiet`, `progress` or `detailed` | you are asked once | How a lead keeps you posted |
 | `pool.accounts` | list | only what both name applies | The AI accounts to use, by their names in `colony.toml`, in your order, as `[people.<person>] accounts` lists them there. Names only, never a credential |
-| `pool.order` | `reset` or `listed` | you are asked once | Which account goes first: the one whose weekly window resets soonest, or your listed order |
+| `pool.order` | `pace`, `reset` or `listed` | you are asked once | Which account goes first: the one with the most weekly room an hour until its reset, the one whose weekly window resets soonest, or your listed order |
 | `pool.out_at` | 1 to 100 | the smaller wins | The percent of a usage window at which an account counts as out of room, and a session switches to the next one |
 | `pool.max_busy` | whole number | the smaller wins | The most helpers busy on one account at once |
 | `machine.max_helpers` | whole number | the smaller wins | The most helpers on one computer |

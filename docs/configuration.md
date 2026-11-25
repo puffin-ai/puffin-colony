@@ -54,7 +54,7 @@ config_dir = "~/.claude"
 person = "ben"
 ```
 
-**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one whose weekly window resets soonest goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing. `[pool]`, below, sets the order of use, the percentages at which a session switches, the accounts kept free, and how many helpers one account runs at once. [capacity.md](capacity.md) says more.
+**How a session picks its account.** `--account <name>` names one outright. Otherwise the person is `--person`, else `$COLONY_PERSON`, else the one person the config names, else the one git's user matches, else the one the `gh` login maps to through `[people.<person>] login`. Their accounts are `[people.<person>] accounts`, in order, else every account whose person is theirs or `any`. Each account's 5-hour and weekly use, with their reset times, come from its folder's `.claude.json`. An account out of 5-hour room (95%), near it (80%) with the reset over an hour off, or out of weekly room (95%) is skipped. Of the rest, the one with the most weekly room left for each hour until its weekly reset goes first, "use it or lose it", then the one with the most 5-hour room. An account with no reading comes after those, and `last_resort` accounts only when nothing else has room. Every session prints why its account was picked. `prefer_account` and `drain` are gone; an old config that has them still loads, and they do nothing. `[pool]`, below, sets the order of use, the percentages at which a session switches, the accounts kept free, and how many helpers one account runs at once. [capacity.md](capacity.md) says more.
 
 **How much the lead tells the person.** `[people.<person>] quiet_lead = true` makes that person's lead act on notifications silently, and write to them only to converse or when they must act; its own status lines go on the board, never in chat. `colony` prints the line when it starts a lead for that person. It is false by default, and the lead keeps the person posted on progress.
 
@@ -297,7 +297,7 @@ Optional. The team's rules for its pool of accounts. Every key has a default. Se
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `order` | `"reset"` | The order accounts with room are used in: `"reset"`, the soonest weekly reset first, so usage about to expire gets spent, then the most 5-hour room; or `"listed"`, the person's own order in `[people.<person>] accounts`. |
+| `order` | `"pace"` | The order accounts with room are used in: `"pace"`, the most weekly room an hour until its reset first, the room left divided by the hours to the weekly reset, so usage about to expire gets spent, then the most 5-hour room; `"reset"`, the soonest weekly reset first, then the most 5-hour room; or `"listed"`, the person's own order in `[people.<person>] accounts`. |
 | `out_at` | `95` | A window at or past this percent has no room, and a new session switches to the next account. |
 | `near_at` | `80` | A 5-hour window at or past this percent, with its reset more than `near_hours` away, is skipped too. |
 | `near_hours` | `1` | How far off a reset must be for `near_at` to skip the account. |
@@ -312,7 +312,7 @@ Optional. The team's rules for its pool of accounts. Every key has a default. Se
 
 ```toml
 [pool]
-order = "reset"
+order = "pace"
 reserve = ["admin"]
 max_busy = 3
 ```

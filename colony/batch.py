@@ -774,7 +774,7 @@ def check_settings(config: dict) -> None:
 
 def _account(config: dict, args) -> tuple[str, str]:
     """Pick the agents' account as (name, config_dir) (capacity.agent_account): --account, else the person's
-    accounts with room, the soonest weekly reset first, then their last-resort accounts, a live lead's own in its
+    accounts with room, the most weekly room an hour first, then their last-resort accounts, a live lead's own in its
     place there while the lead keeps its room.
 
     The person is --person, else the session's COLONY_PERSON, else cli.default_person.

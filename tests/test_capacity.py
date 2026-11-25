@@ -101,11 +101,26 @@ def stub(home: Path, name: str, body: str) -> Path:
 # 5. The account pool's policy
 
 
-def test_the_pool_takes_the_soonest_weekly_reset_by_default_and_the_listed_order_when_asked(host):
+def test_the_pool_takes_the_most_weekly_room_an_hour_by_default_and_the_other_orders_when_asked(host):
+    """The person's call: rank accounts by the weekly room left over the hours until the reset, a soft pace to use
+    it at, so an account with the same room resetting sooner goes first, and one with much more room left goes before
+    one that resets sooner with little."""
     usage(host.parent / "main", five=10, week=10, week_resets_in=timedelta(days=6))
     usage(host.parent / "team", five=10, week=10, week_resets_in=timedelta(hours=5))
-    assert cli.pick(load(), "ana")[0] == "team"
+    assert cli.pick(load(), "ana")[0] == "team"  # the same room, in 5 hours: the most to use each hour
     assert cli.pick(load('[pool]\norder = "listed"\n'), "ana")[0] == "main"
+    usage(host.parent / "team", five=10, week=90, week_resets_in=timedelta(days=1))  # 10% in a day: 0.4% an hour
+    usage(host.parent / "main", five=10, week=10, week_resets_in=timedelta(days=2))  # 90% in 2 days: 1.9% an hour
+    name, _, why = cli.pick(load(), "ana")
+    assert name == "main" and "90% left, 1.9% an hour to use until then" in why, why
+    assert cli.pick(load('[pool]\norder = "reset"\n'), "ana")[0] == "team"  # the soonest reset, whatever is left
+
+
+def test_the_weekly_pace_is_the_room_left_over_the_hours_to_the_reset(host):
+    now = datetime.now(timezone.utc)
+    assert capacity.weekly_pace(96, now + timedelta(days=4), now) == pytest.approx(1.0)
+    assert capacity.weekly_pace(30, now + timedelta(minutes=10), now) == 30  # at least one hour
+    assert capacity.weekly_pace(100, None, now) == pytest.approx(100 / 168)  # no week running yet: all 7 days ahead
 
 
 def test_the_pools_thresholds_decide_when_a_session_switches_account(host):
@@ -129,7 +144,7 @@ def test_a_reserved_account_is_never_picked_but_still_opens_when_named(host):
 
 
 @pytest.mark.parametrize("table, message", [
-    ('order = "random"', 'order is "reset" or "listed"'),
+    ('order = "random"', 'order is "pace", "reset" or "listed"'),
     ('reserve = ["nobody"]', "reserve names 'nobody'"),
     ("max_busy = 0", "max_busy is a whole number"),
     ("out_at = 120", "out_at is a number from 1 to 100"),

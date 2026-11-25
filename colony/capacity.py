@@ -74,7 +74,7 @@ def read(project: str, name: str) -> dict:
 # The account pool: [pool] and each account's own keys
 
 
-ORDERS = ("reset", "listed")
+ORDERS = ("pace", "reset", "listed")
 POOL_KEYS = ("order", "out_at", "near_at", "near_hours", "reserve", "max_busy", "wave", "wave_seconds", "stale_minutes",
              "share_lead_accounts", "helper_rate", "scan_folders")
 SCAN_FOLDERS = ("~/.claude", "~/.claude-*", "~/.claude_*")  # where `colony accounts scan` looks for settings folders
@@ -84,7 +84,8 @@ SCAN_FOLDERS = ("~/.claude", "~/.claude-*", "~/.claude_*")  # where `colony acco
 class Policy:
     """The team's rules for its pool of accounts, from [pool]."""
 
-    order: str = "reset"  # "reset": the soonest weekly reset first, "use it or lose it"; "listed": the person's order
+    order: str = "pace"  # "pace": the most weekly room an hour until its reset first (weekly_pace); "reset": the
+    # soonest weekly reset first; "listed": the person's order
     out_at: float = 95.0  # a window at or past this percent has no room: the session switches account
     near_at: float = 80.0  # the 5-hour window at or past this, with its reset more than near_hours off, is skipped
     near_hours: float = 1.0
@@ -121,9 +122,9 @@ def policy(config: dict) -> Policy:
     unknown = sorted(set(table) - set(POOL_KEYS))
     if unknown:
         raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] has no key {unknown[0]!r}: its keys are {', '.join(POOL_KEYS)}")
-    order = table.get("order", "reset")
+    order = table.get("order", "pace")
     if order not in ORDERS:
-        raise cli.ColonyError(f'{cli.CONFIG_NAME}: [pool] order is "reset" or "listed", not {order!r}')
+        raise cli.ColonyError(f'{cli.CONFIG_NAME}: [pool] order is "pace", "reset" or "listed", not {order!r}')
     reserve = table.get("reserve", [])
     if not isinstance(reserve, list) or not all(isinstance(name, str) for name in reserve):
         raise cli.ColonyError(f"{cli.CONFIG_NAME}: [pool] reserve is a list of account names")
@@ -217,12 +218,25 @@ def stale(config: dict, name: str, pool: Policy | None = None, now: float | None
     return age if age is not None and age > (pool or policy(config)).stale_minutes * 60 else None
 
 
+def weekly_pace(left: float, reset: datetime | None, now: datetime) -> float:
+    """The weekly room an account has to use each hour so none of it goes to waste at the reset: the percent left over
+    the hours until the weekly window resets, at least one hour; a week with no reset yet has all 7 days ahead. A
+    soft aim for ranking accounts, never a limit."""
+    hours = (reset - now).total_seconds() / 3600 if reset else WEEK_HOURS
+    return left / max(1.0, hours)
+
+
+WEEK_HOURS = 7 * 24.0
+
+
 def judge(config: dict, name: str, now: datetime, pool: Policy | None = None) -> tuple[int, tuple, str]:
     """One account's standing for the pick, as (tier, rank, why): tier 0 has room, 1 has no reading, or one older than
     [pool] stale_minutes, which never places a session, 2 is out of room or near it with a reset far off, 3 has no
-    folder on this computer. Within tier 0, [pool] order "reset" ranks the soonest weekly reset first, "use it or
-    lose it", counting resets in the same hour as a tie, then the most 5-hour room; "listed" leaves the person's
-    order alone. A reading's age counts from now on the clock, whatever `now` the windows are judged at."""
+    folder on this computer. Within tier 0, [pool] order "pace", the default, ranks the most weekly room an hour until
+    the reset first (weekly_pace), "use it or lose it", counting paces within 0.1% an hour as a tie, then the most
+    5-hour room; "reset" ranks the soonest weekly reset first, counting resets in the same hour as a tie, then the
+    most 5-hour room; "listed" leaves the person's order alone. A reading's age counts from now on the clock, whatever
+    `now` the windows are judged at."""
     pool = pool or policy(config)
     far = datetime.max.replace(tzinfo=timezone.utc)
     if not Path(config["accounts"][name]["config_dir"]).expanduser().is_dir():
@@ -243,7 +257,12 @@ def judge(config: dict, name: str, now: datetime, pool: Policy | None = None) ->
     if week_used >= pool.out_at:
         return 2, (), (f"{name}: no weekly room left (weekly {week_used:g}% used, resets in "
                        f"{cli.in_hours(week_reset, now)})")
-    why = f"{name}: weekly resets in {cli.in_hours(week_reset, now)}, {100 - week_used:g}% left; {five}"
+    left = 100 - week_used
+    if pool.order == "pace":
+        pace = weekly_pace(left, week_reset, now)
+        return 0, (-round(pace, 1), five_used), (f"{name}: weekly resets in {cli.in_hours(week_reset, now)}, {left:g}% "
+                                                 f"left, {pace:.1f}% an hour to use until then; {five}")
+    why = f"{name}: weekly resets in {cli.in_hours(week_reset, now)}, {left:g}% left; {five}"
     hour = int((week_reset or far).timestamp() // 3600)  # resets within the same hour tie
     return 0, ((hour, five_used) if pool.order == "reset" else ()), why
 
@@ -433,7 +452,7 @@ def agent_account(config: dict, args) -> tuple[str, str, str]:
 def pick_keeping_lead_room(config: dict, person: str, skip=(), kept: dict[str, list[str]] | None = None
                            ) -> tuple[str, str, str] | None:
     """The person's best account with room for a headless agent, as (name, config_dir, why), or None: the ranking
-    cli.pick_with_room keeps for every account, the soonest weekly reset first, with a live lead's own account
+    cli.pick_with_room keeps for every account, the most weekly room an hour first, with a live lead's own account
     (`kept`, kept_for_leads by default) in its place there, taken only while the lead and the agent last until each
     window resets with the lead's share of it kept (forecast.fits with lead)."""
     from colony import forecast
@@ -485,7 +504,7 @@ def place(config: dict, args, counts: dict[str, set[str]],
     Otherwise the person's pick (cli.pick_with_room) among their accounts under their cap of busy helpers, leaving out
     the ones [pool] reserve keeps free, and taking the first where one more helper lasts until its windows reset
     (forecast.fits). A live lead's or orchestrator's own account (`kept`, lead_accounts by default) takes its place
-    in that same ranking, the soonest weekly reset first, under a lower cap (lead_cap) and a fit check that keeps the
+    in that same ranking, the most weekly room an hour first, under a lower cap (lead_cap) and a fit check that keeps the
     lead room (forecast.fits with lead), and the why starts with SHARED. [pool] share_lead_accounts = true treats it
     as any other. When every account with room would run out before its reset, or every one is out of room, none (NO_FIT):
     the helper waits for the soonest reset, or opens on an account named with --account."""
@@ -1683,7 +1702,8 @@ def show(config: dict, args) -> int:
     print(f"At once: {room['helpers']} helpers ({room['running']} running, {room['open_now']} more now), "
           f"{room['tests']} test runs, {room['builds']} builds.")
     print(f"Busy: {'; '.join(room['why'])}." if room["busy"] else "Busy: no.")
-    print(f"Accounts, in the order {'of the soonest weekly reset' if pool.order == 'reset' else 'listed'}:")
+    order = {"pace": "of the most weekly room an hour until each reset", "reset": "of the soonest weekly reset"}
+    print(f"Accounts, in the order {order.get(pool.order, 'listed')}:")
     for account in accounts:
         if account["reserved"]:
             print(f"- {account['name']}: reserved, used only with --account. {account['room']}.")

@@ -393,8 +393,8 @@ def pick(config: dict, person: str, now: datetime | None = None) -> tuple[str, s
     """The person's account for a new session, as (name, config_dir, why).
 
     The person's accounts, in their order (person_accounts), are judged on this computer by the team's [pool] policy
-    (capacity.judge). An account with room wins: by default the soonest weekly reset first, then the most 5-hour
-    room, then the person's order. Next comes an account with no reading, in order. A last-resort account counts only
+    (capacity.judge). An account with room wins: by default the most weekly room an hour first
+    (capacity.weekly_pace), then the most 5-hour room, then the person's order. Next comes an account with no reading, in order. A last-resort account counts only
     when none of those has room, and an account [pool] reserve keeps free never counts. When every account is out of
     room, the first in order is named, and why says so. Stale readings are fetched first (refresh_usage).
     """
@@ -1902,7 +1902,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="from_branch", metavar="BRANCH", help="build on this branch instead of origin/<base>")
     p.add_argument("--person", help="whose accounts the agents use")
     p.add_argument("--account", metavar="NAME", help="the account the agents run on, instead of the pick "
-                                                     "([people.<person>] accounts by room, soonest weekly reset first)")
+                                                     "([people.<person>] accounts by room, the most weekly room an hour first)")
     p.add_argument("--review", action="store_true",
                    help="add a fresh reviewer to a gate whose [gate] review is false, as in hack mode")
     p.add_argument("--fast", action="store_true",

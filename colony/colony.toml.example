@@ -24,7 +24,7 @@ release = ""                       # optional: the branch `colony release` relea
 deploy_workflow = ""               # optional: the workflow `colony release --after` watches, such as deploy.yml
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
-# --account, else the first of its person's [people.<person>] accounts with room (the soonest weekly reset first),
+# --account, else the first of its person's [people.<person>] accounts with room (the most weekly room an hour first),
 # else an account of theirs with no reading, else a last_resort account.
 [accounts.main]
 config_dir = "~/.claude"
@@ -155,7 +155,8 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 
 # Capacity (docs/capacity.md): every table below is optional, and each key shown holds its default.
 # [pool]                           # the team's rules for its pool of accounts
-# order = "reset"                  # "reset": the soonest weekly reset first; "listed": the person's own order
+# order = "pace"                   # "pace": the most weekly room an hour until its reset first; "reset": the
+                                   # soonest weekly reset first; "listed": the person's own order
 # out_at = 95                      # a window at or past this percent has no room: a new session switches account
 # near_at = 80                     # a 5-hour window this full, with its reset over near_hours off, is skipped too
 # near_hours = 1

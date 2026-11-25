@@ -83,7 +83,7 @@ Merge the PR, pull, and run `colony` again. `colony --dry-run` shows the setup p
 After setup, `colony` opens your lead.
 
 1. **It works out who you are:** `--person`, else `$COLONY_PERSON`, else the one person `colony.toml` names, else the person whose name matches your git user.
-2. **It picks your account.** `--account <name>` names one. Otherwise it takes your `[people.<you>] accounts` in order, skips any out of 5-hour or weekly room, and puts the one whose weekly window resets soonest first, so usage about to expire gets spent. Accounts with no reading come next, and `last_resort` accounts only when nothing else has room. It prints why, such as `admin: weekly resets in 20 h, 30% left`. `[pool]` can change the order and the switch points, and keep accounts free; see [capacity.md](capacity.md).
+2. **It picks your account.** `--account <name>` names one. Otherwise it takes your `[people.<you>] accounts` in order, skips any out of 5-hour or weekly room, and puts the one with the most weekly room left for each hour until its weekly reset first, so usage about to expire gets spent. Accounts with no reading come next, and `last_resort` accounts only when nothing else has room. It prints why, such as `admin: weekly resets in 20 h, 30% left, 1.5% an hour to use until then`. `[pool]` can change the order and the switch points, and keep accounts free; see [capacity.md](capacity.md).
 3. **It sets the session's environment:** `COLONY_SESSION=lead`, `COLONY_PERSON`, `CLAUDE_CONFIG_DIR` (left unset for `~/.claude`, since Claude Code ties a login to that value), the retry watchdog settings, and `CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000`.
 4. **It starts Claude Code:**
    ```sh

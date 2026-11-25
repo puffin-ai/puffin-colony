@@ -10,7 +10,7 @@ An account is one AI login a session can run on. For Claude Code it is a setting
 
 `[pool]` holds the team's rules for that pool:
 
-- **The order of use.** `order = "reset"`, the default, uses the account whose weekly window resets soonest first, so usage about to expire gets spent. `order = "listed"` uses the person's own order: the first account with room.
+- **The order of use.** `order = "pace"`, the default, works out each account's weekly pace: the weekly room it has left divided by the hours until its weekly window resets, at least one hour. That is how much it would have to use each hour so none of its week goes to waste. The account with the highest pace goes first, then the one with the most 5-hour room. It is a soft aim for choosing, never a limit: the caps and the fit check still decide how many helpers an account takes. So 95% left with a reset tomorrow, about 4% an hour, goes before 95% left over 5 days, under 1% an hour, and 90% left over 2 days goes before 10% left over 1 day. `order = "reset"` uses the account whose weekly window resets soonest first, whatever it has left. `order = "listed"` uses the person's own order: the first account with room.
 - **When to switch.** An account with any window at or past `out_at` percent (95 by default) has no room. One whose 5-hour window is at or past `near_at` (80) with its reset more than `near_hours` (1) away is skipped too.
 - **Accounts kept free.** An account in `reserve` is never picked. A session uses it only when you name it with `--account`.
 - **Helpers per account.** At most `max_busy` helpers (3 by default) run on one account at once, so they don't all hit its limit together. One account can set its own `max_busy`.
@@ -33,7 +33,7 @@ So a lead or an orchestrator never starts a subagent to build, and a helper star
 
 ## The lead's own account
 
-Every account you have is used by its room and its reset times, the account a live lead or orchestrator runs on included. They all stand in one ranking, the soonest weekly reset first ([The right account](#the-right-account)), and a lead's own account takes its place there like any other. So three accounts at 5% of the week, the lead's resetting tomorrow and the others in 5 and 6 days, put the next helpers on the lead's account first, since its unused week is lost tomorrow. Two accounts at 95% of the week and the lead's at 5% put them on the lead's account too.
+Every account you have is used by its room and its reset times, the account a live lead or orchestrator runs on included. They all stand in one ranking, the most weekly room an hour until the reset first ([the order of use](#the-account-pool)), and a lead's own account takes its place there like any other. So three accounts at 5% of the week, the lead's resetting tomorrow and the others in 5 and 6 days, put the next helpers on the lead's account first: about 4% an hour to use against under 1%, since its unused week is lost tomorrow. Two accounts at 95% of the week and the lead's at 5% put them on the lead's account too.
 
 A lead's own account takes helpers with two limits that leave the lead room, so its own team never cuts it off:
 

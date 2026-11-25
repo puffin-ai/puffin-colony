@@ -148,11 +148,12 @@ KEYS = (
     # name means one thing in both places. pool.accounts is the person's order, [people.<person>] accounts there.
     Key("pool.accounts", "names", "common", "The AI accounts to use, by their names in colony.toml, in the person's "
         "order. Names only, never a credential.", "Use these accounts: {value}.", ["main"], roles=LEAD_ROLES),
-    Key("pool.order", "choice", "ask", "Which account goes first: `reset`, the one whose weekly window resets "
-        "soonest, or `listed`, the person's order.",
-        {"reset": "Use the account whose weekly window resets soonest first.",
+    Key("pool.order", "choice", "ask", "Which account goes first: `pace`, the one with the most weekly room an hour "
+        "until its reset, `reset`, the one whose weekly window resets soonest, or `listed`, the person's order.",
+        {"pace": "Use the account with the most weekly room an hour until its reset first.",
+         "reset": "Use the account whose weekly window resets soonest first.",
          "listed": "Use the accounts in the listed order."},
-        "reset", choices=("reset", "listed"), roles=LEAD_ROLES),
+        "pace", choices=("pace", "reset", "listed"), roles=LEAD_ROLES),
     Key("pool.out_at", "whole", "smaller", "The percent of a usage window at which an account counts as out of room, "
         "and a session switches to the next one.",
         "Switch to the next account when one reaches {value}% of a usage window.", 95, low=1, high=100,
