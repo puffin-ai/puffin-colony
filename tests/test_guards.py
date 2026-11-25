@@ -995,6 +995,43 @@ def test_env_options_programs_that_run_commands_and_more_shell_names_close_the_g
     assert run.returncode == 2, (command, run.stderr)
 
 
+@pytest.mark.parametrize("command, reason", [
+    # A word env takes as a value that equals the program, before env's -C: the folder move hid behind it.
+    ("env -u ./run.sh -C sub ./run.sh", "script guard: refused, the script ./run.sh runs from a folder the guard can't"),
+    # --c is a prefix only --chdir has, so getopt takes it for --chdir.
+    ("env --c=sub ./run.sh", "script guard: refused, the script ./run.sh runs from a folder the guard can't name"),
+    ("env --c sub ./run.sh", "script guard: refused, the script ./run.sh runs from a folder the guard can't name"),
+    # env -S drops the rest of its string from a #, so the program after it is the one env runs.
+    ("env -S '#x' ./run.sh", "script guard: refused, `env` holds an option or a string the guard can't read"),
+    ("env -S 'true #' bash run.sh", "script guard: refused, `env` holds an option or a string the guard can't read"),
+    # A folder move in a short option group, a --chdir prefix or an -S string moves a push too.
+    ("env -iC /tmp git push origin HEAD:refs/heads/ana/login", "push guard: refused"),
+    ("env --c=/tmp git push origin HEAD:refs/heads/ana/login", "push guard: refused"),
+    ("env -S '-C /tmp git push origin HEAD:refs/heads/ana/login'", "push guard: refused"),
+    ("env -S 'GIT_DIR=/tmp/x git push origin HEAD:refs/heads/ana/login'", "push guard: refused"),
+])
+def test_env_reads_its_head_by_position_its_chdir_prefixes_and_refuses_a_comment_in_s(command, reason, on_feature):
+    """Regression (security review of 5b9d3af): the words before a command's program were found by the program's
+    value, so an earlier equal word, such as -u's value, hid a later -C; a --chdir prefix shorter than --ch, or -C in
+    a short option group, moved a push or a merge unseen; and env -S's # comment made env run a program the guard read
+    as an argument."""
+    (on_feature / "run.sh").write_text("echo harmless\n")
+    (on_feature / "run.sh").chmod(0o755)
+    (on_feature / "sub").mkdir()
+    executable(on_feature / "sub" / "run.sh", "#!/bin/sh\ngit push origin HEAD:refs/heads/main\n")
+    run = push_guard(command, on_feature)
+    assert run.returncode == 2 and run.stderr.startswith(reason), (command, run.stderr)
+
+
+@pytest.mark.parametrize("command", ["env -iC /tmp gh pr merge 5", "env --c=/tmp gh pr merge 5",
+                                     "env -S '-C /tmp gh pr merge 5'"])
+def test_a_pr_merge_moved_by_an_env_option_group_or_prefix_is_refused(command, hosted, tmp_path):
+    """Regression (security review of 5b9d3af): the merge guard's folder check read only whole option words."""
+    (hosted / ".colony" / "colony.toml").write_text(ALLOW_DEV)
+    stub = github(tmp_path / "gh", default=ALLOW_DEV, pr="dev https://github.com/acme/demo/pull/5")
+    assert merge_refused(push_guard(command, hosted, path=stub), "`gh pr merge` shares its line with"), command
+
+
 @pytest.mark.parametrize("command", ["command -v bash", "which bash", "type sh", "grep -rn bash scripts/",
                                      "chsh -s /bin/zsh", "echo use bash", "sed -i s/foo/bar/ notes.txt",
                                      "bash --version", "bash -lc 'echo hi'"])

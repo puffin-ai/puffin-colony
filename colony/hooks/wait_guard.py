@@ -415,27 +415,42 @@ def without_repo_flag(arguments: list[str]) -> list[str]:
 def program_words(words: list[str]) -> list[str]:
     """One simple command's words from the program it runs, past assignments, keywords and wrappers. `command -v`
     runs nothing, and `env -S` splits its string into the command it runs."""
+    return program_parts(words)[1]
+
+
+def program_parts(words: list[str]) -> tuple[list[str], list[str]]:
+    """A simple command's words before its program (assignments, keywords, wrappers and their options, with env's
+    -S strings split as env splits them), and the program with its arguments (program_words)."""
+    head: list[str] = []
     index = 0
     while index < len(words):
         word = words[index]
         if ASSIGNMENT.match(word) or word in KEYWORDS:
+            head.append(word)
             index += 1
             continue
         name = PurePath(word).name
         if name not in WRAPPERS:
             break
         value_options, plain_words = WRAPPERS[name]
+        head.append(word)
         index += 1
         while index < len(words) and words[index].startswith("-"):
             option = words[index]
             if name == "command" and option in ("-v", "-V"):
-                return []  # command -v names a program and runs none
+                return [*head, *words[index:]], []  # command -v names a program and runs none
             if name == "env":
-                command = env_command(words[index:])
-                return program_words(command) if command is not None else ["env", *words[index:]]
-            index += 2 if option in value_options else 1
+                parts = env_parts(words[index:])
+                if parts is None:
+                    return head[:-1], ["env", *words[index:]]
+                inner_head, program = program_parts(parts[1])
+                return [*head, *parts[0], *inner_head], program
+            step = 2 if option in value_options else 1
+            head += words[index:index + step]
+            index += step
+        head += words[index:index + plain_words]
         index += plain_words
-    return words[index:]
+    return head, words[index:]
 
 
 # env's long options, as getopt matches any unique prefix: each a flag, one that takes a value, one that takes one only
@@ -446,9 +461,9 @@ ENV_LONG = {"--ignore-environment": "flag", "--null": "flag", "--debug": "flag",
 
 
 def env_split(value: str) -> list[str] | None:
-    """env -S's string as the words env splits it into, or None when it holds an escape or a variable, which env reads
-    its own way and the guard can't be sure of."""
-    if "\\" in value or "$" in value:
+    """env -S's string as the words env splits it into, or None when it holds an escape, a variable or a #, which env
+    reads its own way (a # starts a comment that drops the rest of the string) and the guard can't be sure of."""
+    if "\\" in value or "$" in value or "#" in value:
         return None
     try:
         return shlex.split(value)
@@ -456,15 +471,19 @@ def env_split(value: str) -> list[str] | None:
         return None
 
 
-def env_command(arguments: list[str]) -> list[str] | None:
+def env_parts(arguments: list[str]) -> tuple[list[str], list[str]] | None:
     """The command env runs, from the words after `env`, as getopt reads env's options: bundled short options such as
     -iS, a long option's unique prefix, -u, -C, -P and -a with their values, and -S's string split into more words
-    that env reads again. None when env holds an option the guard doesn't know, or a string it can't be sure of."""
+    that env reads again. It gives the words env reads as its own (options, their values and assignments, a split
+    string's words among them), then the command. None when env holds an option the guard doesn't know, or a string
+    it can't be sure of."""
     queue = list(arguments)
+    own: list[str] = []
     while queue:
         word = queue.pop(0)
+        own.append(word)
         if word == "--":
-            return queue
+            return own, queue
         if word == "-":
             continue  # the same as -i
         if word.startswith("--"):
@@ -476,7 +495,7 @@ def env_command(arguments: list[str]) -> list[str] | None:
             if kind == "value" and not equals:
                 if not queue:
                     return None
-                queue.pop(0)
+                own.append(queue.pop(0))
             elif kind == "split":
                 if not equals:
                     if not queue:
@@ -497,7 +516,7 @@ def env_command(arguments: list[str]) -> list[str] | None:
                     if not rest:
                         if not queue:
                             return None
-                        queue.pop(0)
+                        own.append(queue.pop(0))
                     break
                 if letter == "S":
                     if not rest:
@@ -513,8 +532,8 @@ def env_command(arguments: list[str]) -> list[str] | None:
             continue
         if ASSIGNMENT.match(word):
             continue
-        return [word, *queue]
-    return []
+        return own[:-1], [word, *queue]
+    return own, []
 
 
 def command_waits(words: list[str], in_loop: bool) -> list[str]:
@@ -996,13 +1015,29 @@ def simple_commands(line: list[str]) -> list[list[str]]:
 def run_program(words: list[str]) -> list[str]:
     """A simple command's program and its arguments, past program_words' assignments and wrappers, and past sudo or
     doas with their options."""
-    program = program_words(words)
+    return command_parts(words)[1]
+
+
+def command_parts(words: list[str]) -> tuple[list[str], list[str]]:
+    """A simple command's words before the program it runs, found by position, with env's -S strings split and sudo
+    or doas and their options among them, and the program with its arguments (run_program)."""
+    head, program = program_parts(words)
     while program and PurePath(program[0]).name in ELEVATORS:
         options, index = ELEVATORS[PurePath(program[0]).name], 1
         while index < len(program) and program[index].startswith("-"):
             index += 2 if program[index] in options else 1
-        program = program_words(program[index:])
-    return program
+        inner_head, inner = program_parts(program[index:])
+        head, program = [*head, *program[:index], *inner_head], inner
+    return head, program
+
+
+def moving_word(word: str) -> bool:
+    """Whether a word before a command's program moves the command to another folder: -C, -D, --chdir, --git-dir or
+    --work-tree (FOLDER_OPTIONS), -C or -D inside a short option group such as env's -iC, or any prefix of --chdir
+    that getopt takes for it, such as env's --c."""
+    name = word.partition("=")[0]
+    return (name in FOLDER_OPTIONS or bool(MOVING_GROUP.match(word))
+            or (len(name) > 2 and name.startswith("--") and "--chdir".startswith(name)))
 
 
 def shell_lines(name: str, arguments: list[str]) -> list[str]:
@@ -1103,8 +1138,7 @@ def line_variable(line: list[str], pattern: re.Pattern) -> str:
     """The first variable a line sets that `pattern` names, before a command, alone, or through export, unset,
     declare, typeset or readonly, as `NAME`, or ""."""
     for words in simple_commands(line):
-        program = run_program(words)
-        head = words[:len(words) - len(program)]
+        head, program = command_parts(words)
         named = [word.partition("=")[0] for word in head if pattern.match(word)]
         name = PurePath(program[0]).name if program else ""
         if name in ("export", "unset", "declare", "typeset", "readonly"):
@@ -1135,11 +1169,9 @@ def pushes(command: str, cwd: str, depth: int = 0, changed: str = "", moved: str
     updates: list[str] = []
     moved = moved or line_variable(line, GIT_VARIABLE)  # where git finds its repo and config, for the whole line
     for words in simple_commands(line):
-        program = run_program(words)
-        head = words[:len(words) - len(program)]  # assignments and wrappers, such as sudo -D or env -C
+        head, program = command_parts(words)  # assignments and wrappers, such as sudo -D or env -C
         name = PurePath(program[0]).name if program else ""
-        wrapped = next((f"`{word.partition('=')[0]}`" for word in head
-                        if word.partition("=")[0] in FOLDER_OPTIONS), "")
+        wrapped = next((f"`{word.partition('=')[0]}`" for word in head if moving_word(word)), "")
         if name == "git":
             index, overrides, elsewhere = 1, [], moved or wrapped
             expanded = 0
@@ -1574,9 +1606,7 @@ def shell_segments(line: list[str], cwd: str = "") -> list[tuple[list[str], str,
 def moves_folder(words: list[str]) -> bool:
     """Whether a simple command's wrapper runs its program in another folder: -C, -D, --chdir and the rest
     (FOLDER_OPTIONS), also inside a short option group such as env's -iC, or as a --chdir prefix."""
-    program = run_program(words)
-    head = words[:words.index(program[0])] if program and program[0] in words else words
-    return any(word.partition("=")[0] in FOLDER_OPTIONS or MOVING_GROUP.match(word) for word in head)
+    return any(moving_word(word) for word in command_parts(words)[0])
 
 
 def writer(words: list[str]) -> bool:
@@ -1838,7 +1868,7 @@ def scripts(command: str, cwd: str, depth: int = 0, probe: bool = False,
                 else:
                     found += [item for text in inner for item in scripts(text, here or cwd, depth + 1)]
                 continue
-        if name == "env":  # env_command couldn't read env's options or its -S string
+        if name == "env":  # env_parts couldn't read env's options or its -S string
             found.append(("script", "", "`env` holds an option or a string the guard can't read, so it can't tell what "
                                         "env runs: run the command without env, or with plain options"))
             continue
@@ -1901,12 +1931,11 @@ def context_change(line: list[str]) -> str:
     exported anywhere on it, since gh finds its repo through git; "" for none."""
     variable = line_variable(line, GH_VARIABLE) or line_variable(line, GIT_VARIABLE)
     for words in simple_commands(line):
-        program = run_program(words)
-        head = words[:len(words) - len(program)]
+        head, program = command_parts(words)
         name = PurePath(program[0]).name if program else ""
         if name in LINE_CHANGES:
             return f"`{name}`"
-        moving = [word for word in head if word.partition("=")[0] in FOLDER_OPTIONS]
+        moving = [word for word in head if moving_word(word)]
         if moving:
             return f"`{moving[0].partition('=')[0]}`"
     return variable
