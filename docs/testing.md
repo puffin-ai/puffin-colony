@@ -26,7 +26,7 @@ Each release has one findings issue on the code host, titled `test: findings for
 
 | Step | Command |
 | --- | --- |
-| Find the release's findings issue, or make it with the release's cards | `colony findings open <release>`. The cards are the ones each batch the release lists closes, or the ones `--card <n>` names. |
+| Find the release's findings issue, or make it with the release's cards | `colony findings open <release>`. The cards are the ones each pull request the release carries closes, or the ones `--card <n>` names. A partial release's work left for a later release is not in it, so its cards are left out. |
 | Claim the next card that no tester holds and none has tested | `colony findings next <release>` |
 | Record what you saw | `colony findings report <release> <card> pass\|fail\|blocked "<what you saw>"`. A fail or a block needs the note. |
 | Claim one card by its number, such as a blocked one to test again, or renew your own claim | `colony findings claim <release> <card>` |

@@ -40,6 +40,8 @@ from colony import batch, board, branches, cli, freeze, merge, wait
 CLOSES = re.compile(r"\bCloses #(\d+)")  # how a batch pull request names its cards (batch.pr_body)
 PICKED = re.compile(r"\(cherry picked from commit ([0-9a-f]{40})\)")  # git cherry-pick -x's line
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
+LEFT = "Left for a later release"  # the description's heading for the work a partial release leaves out
+LISTED_PR = re.compile(r"^\s*[-*]\s*#(\d+)\b")  # a description's `- #<n>` line, which names a pull request
 NONE = re.compile(r"^\W*(none|n/?a|no|nothing)\W*$", re.I)
 MIGRATION_HEADING = re.compile(r"\bmigrations?\b", re.I)
 # A heading on tests that left or changed, such as a batch's "Removed tests", never one such as "Test plan".
@@ -290,7 +292,7 @@ def body(config: dict, found: branches.Names, carried: dict, theirs: list[dict],
         lines += ["", f"## {title}", *(found_lines or ["None."])]
     lines += ["", f"## Checks on `{carried['head'][:9]}`", *carried["checks"]]
     if carried["left"]:
-        lines += ["", "## Left for a later release",
+        lines += ["", f"## {LEFT}",
                   *[f"- #{pr['number']} {pr['title']}, from {', '.join(pr['leads'])}" for pr in carried["left"]]]
     if theirs:
         lines += ["", "## Other leads' work", *[f"- #{pr['number']}, from {', '.join(pr['leads'])}" for pr in theirs]]
@@ -303,6 +305,19 @@ def body(config: dict, found: branches.Names, carried: dict, theirs: list[dict],
     if len(text) > BODY_MAX and notes_kept:
         return body(config, found, carried, theirs, notes_kept=False)
     return text if len(text) <= BODY_MAX else text[:BODY_MAX] + "\n\n(cut here: the description was too long)\n"
+
+
+def carried_prs(text: str) -> list[int]:
+    """The pull requests a release's description says it carries: each `- #<n>` line, in What changed and every
+    other section, except under Left for a later release, where a partial release names the ones it leaves out.
+    testers.release_cards reads a release's cards through it, so the format has one owner."""
+    found, current = [], ""
+    for line in text.splitlines():
+        if heading := HEADING.match(line):
+            current = heading[1].strip()
+        elif current != LEFT and (listed := LISTED_PR.match(line)):
+            found.append(int(listed[1]))
+    return list(dict.fromkeys(found))
 
 
 def warning(source: str, target: str, theirs: list[dict], me: str, frozen: str = "") -> str:

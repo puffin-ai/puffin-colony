@@ -414,8 +414,8 @@ def need_findings(config: dict, release: int) -> Findings:
 
 def release_cards(config: dict, release: int) -> list[int]:
     """The cards a release carries: each `Closes #<n>` in its pull request's body, and in the body of each pull
-    request it lists, which is how a release lists its batches."""
-    from colony import cards
+    request its description says it carries (release.carried_prs), never one a partial release leaves for later."""
+    from colony import cards, release as releases
 
     repo = config["project"]["repo"]
     try:
@@ -424,9 +424,9 @@ def release_cards(config: dict, release: int) -> list[int]:
         raise cli.ColonyError(f"#{release} is no pull request here: name its cards with --card") from None
     body = pull.get("body") or ""
     found = [int(n) for n in cards.CLOSING.findall(body)]
-    for listed in re.findall(r"^\s*[-*]\s*#(\d+)\b", body, re.M):
+    for listed in releases.carried_prs(body):
         try:
-            inner = json.loads(wait.gh("pr", "view", listed, "--repo", repo, "--json", "body") or "{}")
+            inner = json.loads(wait.gh("pr", "view", str(listed), "--repo", repo, "--json", "body") or "{}")
         except (cli.ColonyError, ValueError):
             continue
         found += [int(n) for n in cards.CLOSING.findall(inner.get("body") or "")]

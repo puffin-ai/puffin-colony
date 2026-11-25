@@ -250,6 +250,28 @@ def host(root, monkeypatch):
     return found
 
 
+def test_a_release_carries_the_cards_of_the_work_it_lists_never_of_the_work_it_leaves(root, monkeypatch):
+    """The housekeeping and release join: release_cards reads the description release.body writes. A partial release
+    lists the work it leaves for later in `- #<n>` lines too, under Left for a later release, and those cards ship
+    later, so the findings list leaves them out. Other leads' work is in the release, and its cards are in."""
+    from colony import release
+
+    notes = {"migrations": [], "removed": [], "changed": [], "added": 0, "own_migrations": [], "own_tests": []}
+
+    def pr(number: int, lead: str) -> dict:
+        return {"number": number, "title": f"the batch {number}", "leads": [lead], "notes": notes}
+
+    carried = {"work": [pr(40, "@ana"), pr(42, "@sam")], "left": [pr(41, "@ana")], "commits": [], "head": "a" * 40,
+               "checks": ["- passed"], "partial": True, "commit_notes": notes}
+    config = {**CONFIG, "roles": {"fixer": {"model": "m"}}}
+    text = release.body(config, release.branches.Names("dev", "dev", "main", ()), carried, [pr(42, "@sam")])
+    assert "## Left for a later release\n- #41 the batch 41" in text and "## Other leads' work\n- #42" in text
+    found = Host({50: text, 40: "- Closes #11", 41: "- Closes #12", 42: "- Closes #13"}, {})
+    monkeypatch.setattr(wait, "gh", found.gh)
+    assert testers.release_cards(config, 50) == [11, 13]
+    assert release.carried_prs(text) == [40, 42]
+
+
 def as_tester(name):
     return {"release": "50", "as_name": name}
 
