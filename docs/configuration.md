@@ -286,21 +286,22 @@ Each `[services.<name>]` table, named in lowercase letters, digits and dashes:
 
 | Key | Required | Example | What it does |
 | --- | --- | --- | --- |
-| `command` | yes | `"aws sts get-caller-identity"` | The check. It runs through your shell, from the temp folder. Its output is read, never printed. |
+| `check` | yes | `"aws sts get-caller-identity"` | The command that checks the service. It runs through your shell, from the temp folder. Its output is read, never printed. |
 | `exit` | no | `0` | The exit code that passes. Default `0`. |
 | `expect` | no | `"Logged in"` | A regular expression the output must match. |
 | `at_least`, `at_most` | no | `500` | The first number in the output must be at least, or at most, this, such as requests left on an API. |
 | `every_minutes` | no | `30` | How often the lead's wait runs it. Default 30. |
 | `timeout` | no | `20` | Seconds it may run. Default 20. |
 | `fix` | no | `"aws sso login"` | What the person does when it fails. The alert names it. |
+| `restart` | no | `"docker start test-db"` | For a local service, a command that brings it back when its check fails. Colony's recovery runs it; the checks here never do. |
 
 ```toml
 [services.aws]
-command = "aws sts get-caller-identity"
+check = "aws sts get-caller-identity"
 fix = "aws sso login"
 
 [services.github-api]
-command = "gh api rate_limit --jq .resources.core.remaining"
+check = "gh api rate_limit --jq .resources.core.remaining"
 at_least = 500
 fix = "wait for GitHub's hourly reset"
 ```

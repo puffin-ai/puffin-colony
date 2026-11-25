@@ -762,11 +762,12 @@ class Service:
     every: float = SERVICE_EVERY  # minutes between checks in the lead's wait
     timeout: float = SERVICE_TIMEOUT
     fix: str = ""  # what the person does when it fails, such as `gh auth login`
+    restart: str = ""  # a command that brings a local service back, which Colony's recovery runs; never run here
     account: str = ""  # a built-in check of one account
     part: str = ""  # which: "sign-in", or "room", its usage limits
 
 
-SERVICE_KEYS = ("command", "expect", "at_least", "at_most", "exit", "every_minutes", "timeout", "fix")
+SERVICE_KEYS = ("check", "expect", "at_least", "at_most", "exit", "every_minutes", "timeout", "fix", "restart")
 
 
 def services(config: dict) -> list[Service]:
@@ -797,18 +798,21 @@ def services(config: dict) -> list[Service]:
         if unknown:
             raise cli.ColonyError(f"{cli.CONFIG_NAME}: {where} has no key {unknown[0]!r}: its keys are "
                                   f"{', '.join(SERVICE_KEYS)}")
-        if not isinstance(item.get("command"), str) or not item["command"].strip():
-            raise cli.ColonyError(f"{cli.CONFIG_NAME}: {where} needs 'command', the check to run")
+        if not isinstance(item.get("check"), str) or not item["check"].strip():
+            raise cli.ColonyError(f"{cli.CONFIG_NAME}: {where} needs 'check', the command to run")
+        if not isinstance(item.get("restart", ""), str):
+            raise cli.ColonyError(f"{cli.CONFIG_NAME}: {where} restart is a command")
         expect = item.get("expect", "")
         try:
             re.compile(expect)
         except (re.error, TypeError):
             raise cli.ColonyError(f"{cli.CONFIG_NAME}: {where} expect is a regular expression") from None
-        found.append(Service(name, item["command"], expect, number(item, "at_least", None, -1e18, where=where),
+        found.append(Service(name, item["check"], expect, number(item, "at_least", None, -1e18, where=where),
                              number(item, "at_most", None, -1e18, where=where),
                              number(item, "exit", 0, 0, 255, whole=True, where=where),
                              number(item, "every_minutes", SERVICE_EVERY, 1, where=where),
-                             number(item, "timeout", SERVICE_TIMEOUT, 1, 600, where=where), str(item.get("fix", ""))))
+                             number(item, "timeout", SERVICE_TIMEOUT, 1, 600, where=where), str(item.get("fix", "")),
+                             restart=item.get("restart", "")))
     return found
 
 

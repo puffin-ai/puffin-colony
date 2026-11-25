@@ -135,7 +135,7 @@ archive_days = 7                   # `colony tidy` archives a board item Done th
 # busy_load = 1                    # at or past this load per core, it is busy: no new helper opens here
 #
 # [services.aws]                   # a check for a service the team relies on; accounts and gh are checked already
-# command = "aws sts get-caller-identity"
+# check = "aws sts get-caller-identity"
 # fix = "aws sso login"            # what you do when it fails; expect, at_least, at_most and exit set the pass
 #
 # [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`

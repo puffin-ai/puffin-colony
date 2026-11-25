@@ -330,7 +330,8 @@ def test_a_busy_session_and_one_at_a_prompt_are_left_alone(home):
 def test_services_hold_the_built_in_checks_and_the_teams_own(home):
     config = {"accounts": {"main": {"config_dir": str(home / "main"), "person": "ana"},
                            "gone": {"config_dir": str(home / "gone"), "person": "ana"}},
-              "services": {"aws": {"command": "aws sts get-caller-identity", "fix": "aws sso login"}}}
+              "services": {"aws": {"check": "aws sts get-caller-identity", "fix": "aws sso login",
+                                      "restart": ""}}}
     names = [s.name for s in capacity.services(config)]
     assert names == ["account main sign-in", "account main room", "github", "aws"]  # gone's folder isn't here
     config["services"]["builtin"] = False
@@ -338,10 +339,11 @@ def test_services_hold_the_built_in_checks_and_the_teams_own(home):
 
 
 @pytest.mark.parametrize("table, message", [
-    ({"fix": "x"}, "needs 'command'"),
-    ({"command": "x", "expect": "("}, "expect is a regular expression"),
-    ({"command": "x", "every": 5}, "no key 'every'"),
-    ({"command": "x", "timeout": 0}, "timeout is a number"),
+    ({"fix": "x"}, "needs 'check'"),
+    ({"check": "x", "expect": "("}, "expect is a regular expression"),
+    ({"check": "x", "every": 5}, "no key 'every'"),
+    ({"check": "x", "timeout": 0}, "timeout is a number"),
+    ({"check": "x", "restart": 1}, "restart is a command"),
 ])
 def test_a_wrong_service_table_is_named_in_one_line(table, message):
     with pytest.raises(cli.ColonyError, match=message):
@@ -363,7 +365,7 @@ def test_a_service_passes_by_its_exit_code_its_output_and_its_number_and_never_s
 
 
 def test_the_lead_hears_once_when_a_service_fails_and_once_when_it_passes_again(home, monkeypatch):
-    config = {"accounts": {}, "services": {"builtin": False, "npm": {"command": "npm whoami", "fix": "npm login",
+    config = {"accounts": {}, "services": {"builtin": False, "npm": {"check": "npm whoami", "fix": "npm login",
                                                                      "every_minutes": 1}}}
     results = iter([(False, "it ended with 1"), (False, "it ended with 1"), (True, "")])
     monkeypatch.setattr(capacity, "run_service", lambda config, service: next(results))
@@ -389,8 +391,8 @@ def test_an_account_signed_out_or_out_of_room_fails_its_own_check(home):
 
 
 def test_colony_services_prints_each_result_and_fails_when_one_fails(host, monkeypatch, capsys):
-    load('[services]\nbuiltin = false\n[services.ok]\ncommand = "true"\n[services.bad]\ncommand = "false"\n'
-         'fix = "sign in again"\n')
+    load('[services]\nbuiltin = false\n[services.ok]\ncheck = "true"\n[services.bad]\ncheck = "false"\n'
+         'fix = "sign in again"\nrestart = "start-it"\n')
     assert cli.main(["services"]) == 1
     assert capsys.readouterr().out.splitlines() == ["pass: ok", "fail: bad: it ended with 1. To fix it: sign in again."]
 
