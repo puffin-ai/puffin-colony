@@ -39,7 +39,7 @@ walk = true
 [budget]
 provider_dollars = 0
 """
-ENV_NAMES = ("COLONY_SESSION COLONY_PERSON CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
+ENV_NAMES = ("COLONY_SESSION COLONY_PERSON COLONY_ACCOUNT CLAUDE_CONFIG_DIR CLAUDE_CODE_RETRY_WATCHDOG "
              "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS CLAUDE_CODE_AUTO_COMPACT_WINDOW")
 LEAD_PROMPT = "'Run `colony` and do what it prints, then read .colony/playbook.md, Lead section, and start.'"
 
@@ -509,7 +509,7 @@ def test_cli_dry_run_on_the_default_folder_leaves_config_dir_unset(home, host, c
     # Windows has no `env`, so there the session drops CLAUDE_CONFIG_DIR from its own environment instead.
     unset = "" if portable.WINDOWS else "env -u CLAUDE_CONFIG_DIR "
     assert f"command: {unset}claude --remote-control demo-lead" in run.stdout
-    assert "env: COLONY_SESSION COLONY_PERSON CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
+    assert "env: COLONY_SESSION COLONY_PERSON COLONY_ACCOUNT CLAUDE_CODE_RETRY_WATCHDOG " in run.stdout
     assert "on account first, in a background session" in run.stdout  # a subprocess has no terminal
     assert not claude_log.exists()
 
@@ -532,9 +532,14 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
 
-COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
-            "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "who", "whoami",
-            "tidy", "idea", "card", "release", "setup", "fix-links", "skill-install", "tools")
+COMMANDS = ("join", "open", "helpers", "view", "claim", "image", "take", "research", "spec", "tester", "wait", "say", "private", "post", "batch", "status", "fast-check", "check", "ci", "merge", "share", "need", "stop", "handoff", "live", "gate", "sync", "tier",
+            "needs", "handover", "stats", "retro", "board", "check-docs", "suppressions", "hooks", "upgrade", "safety", "who", "whoami",
+            "tidy", "idea", "card", "release", "freeze", "branches", "health", "step", "plain", "profile", "prefer", "capacity", "services", "lock", "wake", "open-later", "accounts",
+            "crash-report", "resume",
+            "boot", "summary", "mode", "plan", "orders", "session-hook", "ask", "decisions", "answer", "never-raise",
+            "spend", "approve", "intent", "report", "watch", "progress", "watchdog",
+            "leads", "lend", "borrow", "worktree", "config", "setup", "fix-links", "skill-install", "tools", "ack", "redeliver", "waits", "nudge",
+            "fixtures", "findings")
 
 
 def test_the_command_line_holds_every_tracks_commands(capsys):
@@ -558,13 +563,29 @@ def test_research_opens_a_researcher_whose_brief_holds_the_question(config, caps
     assert "dry run: demo-researcher on account first" in out
 
 
+def test_a_leads_researcher_starts_with_its_leads_standing_orders(config, capsys, monkeypatch):
+    """The profile and boot join: a researcher, spec agent or tester a lead opens is its helper, and its first prompt
+    carries the lead's standing orders for helpers, read through profile.py (boot.helper_brief)."""
+    from colony import profile
+
+    (profile.config_home() / profile.PERSONAL_FILE).parent.mkdir(parents=True, exist_ok=True)
+    (profile.config_home() / profile.PERSONAL_FILE).write_text('[tests]\nfull_suite = "batch"\n')
+    for key, value in ((cli.SESSION_ENV, "lead"), (cli.PERSON_ENV, "ana"), ("COLONY_LEAD", "ana-main-lead")):
+        monkeypatch.setenv(key, value)
+    assert cli.main(["research", "Which queue fits?", "--dry-run", "--person", "ana"]) == 0
+    command = capsys.readouterr().out.split("command: ", 1)[1].split("\nenv: ", 1)[0]  # the prompt spans lines
+    [prompt] = [arg for arg in shlex.split(command) if "The question: Which queue fits?" in arg]
+    assert "\n\nStanding orders for ana's helper" in prompt and "the full suite once per batch" in prompt
+
+
 def test_tester_opens_a_tester_whose_brief_holds_the_release(config, capsys):
     url = "https://github.com/acme/demo/pull/20"
     assert cli.main(["tester", url, "--dry-run", "--person", "ana"]) == 0
     out = capsys.readouterr().out
     assert "command: claude --remote-control demo-tester --model m --effort medium " in out
     assert "You are the tester for demo." in out and f"The release: {url}" in out
-    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings issue" in out
+    assert 'lead "blocked: <the step, and whose it is>"' in out and "one findings list" in out
+    assert "colony fixtures" in out and "colony findings next <release number>" in out
     assert "{release}" not in out and "{project}" not in out
     assert "dry run: demo-tester on account first" in out
 

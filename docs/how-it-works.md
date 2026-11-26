@@ -83,7 +83,7 @@ Merge the PR, pull, and run `colony` again. `colony --dry-run` shows the setup p
 After setup, `colony` opens your lead.
 
 1. **It works out who you are:** `--person`, else `$COLONY_PERSON`, else the one person `colony.toml` names, else the person whose name matches your git user.
-2. **It picks your account.** `--account <name>` names one. Otherwise it takes your `[people.<you>] accounts` in order, skips any out of 5-hour or weekly room, and puts the one whose weekly window resets soonest first, so usage about to expire gets spent. Accounts with no reading come next, and `last_resort` accounts only when nothing else has room. It prints why, such as `admin: weekly resets in 20 h, 30% left`.
+2. **It picks your account.** `--account <name>` names one. Otherwise it takes your `[people.<you>] accounts` in order, skips any out of 5-hour or weekly room, and puts the one with the most weekly room left for each hour until its weekly reset first, so usage about to expire gets spent. Accounts with no reading come next, and `last_resort` accounts only when nothing else has room. It prints why, such as `admin: weekly resets in 20 h, 30% left, 1.5% an hour to use until then`. `[pool]` can change the order and the switch points, and keep accounts free; see [capacity.md](capacity.md).
 3. **It sets the session's environment:** `COLONY_SESSION=lead`, `COLONY_PERSON`, `CLAUDE_CONFIG_DIR` (left unset for `~/.claude`, since Claude Code ties a login to that value), the retry watchdog settings, and `CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000`.
 4. **It starts Claude Code:**
    ```sh
@@ -93,7 +93,7 @@ After setup, `colony` opens your lead.
    Remote Control lets you follow the session from the Claude apps under that title.
 5. **It opens where it can.** It uses a new cmux workspace when cmux takes its commands (inside cmux). It uses this terminal when you run it at one, or when you pass `--here`. Otherwise, as when a lead opens builders from inside its own session, it starts a background Claude session under Remote Control. You follow that session in the Claude app, or with `claude attach <id>`.
 
-The lead first runs `colony handover --read`. When an earlier lead left a handover, it carries on from its `next:` line.
+The lead starts with the startup routine's briefing, which comes by itself: its orders and mode, the last handover, the project summary, the live leads, the open pull requests and cards, the decisions that wait on you, and the room for helpers. It resumes the plan or the handover without asking, or asks you one question. See [boot.md](boot.md).
 
 `colony --dry-run` prints the command line and the env names, never their values, and runs nothing.
 
@@ -114,11 +114,11 @@ colony card new "builder-2: dark mode switch in settings" \
   --body "<task, done-when list, folders, and predicted: S, 20 min>" --size S
 ```
 
-That opens the issue and puts it on the board as To do, with the lead and the size. A card is an issue only when its work starts this week: an idea for later is one line, `colony idea "<the idea>"`, in the future-work register. `colony card new` refuses past 10 open cards per lead, and refuses a duplicate of an open card. Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them, because finding code is a large part of a small change.
+That opens the issue and puts it on the board as To do, with the lead and the size. A card is an issue only when its work starts this week: an idea for later is one line, `colony idea "<the idea>"`, in the future-work register. `colony card new` refuses past 10 open cards per lead, and refuses a duplicate of an open card. Each card has up to 3 done-when results, the folders it touches, and a prediction line that `colony stats` compares with the actual time later. Cards that touch the same folders go to the same builder, which keeps conflicts down. When the lead knows the files, it names them on a `Files:` line, because finding code is a large part of a small change. `colony card new` names each open card that plans to touch the same folders or files, and a card can wait for others with `--waits-for`, so it starts once they land ([cycle.md](cycle.md#cards-that-wait-for-others)).
 
 ## 6. Builders build
 
-**The lead opens builders as cards need them.** Up to `max_builders` (default 4) run on this machine:
+**The lead opens builders as cards need them.** Up to `max_builders` (default 4) run on this machine, fewer while it is busy, and at most `[pool] max_busy` (3) on one account; `colony helpers <n> --open` opens them in waves ([capacity.md](capacity.md#helpers-in-waves)):
 
 ```sh
 colony open builder-2
@@ -137,7 +137,7 @@ Read .colony/playbook.md, Builder section. You are builder-2. Start the wait.
 **Each builder then:**
 1. keeps `colony wait` running in the background all session;
 2. stamps the card's Last update on the board, `colony board set 41 Last_update=now`, at the start and after each commit: progress goes there, never in a line;
-3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`;
+3. makes the change in its own worktree and branch, `<worktrees>/<project>-builder-2-<card>` on `builder-2/<card>`, cut from `origin/<base>`, with the command `colony take` prints; `<worktrees>` is `.worktrees` inside the repo by default ([folders.md](folders.md#worktrees));
 4. runs the fast check and fixes what it reports;
 5. writes a test for a bug fix or new logic (a style change needs none), and checks touch or layout work in a browser at phone width, 390×844;
 6. updates the living spec and wiki pages the change makes stale, in the same commit;
@@ -151,8 +151,8 @@ Builders run at medium effort by default, write no reports, and ask no person an
 When a `done` line arrives, the lead runs `colony tier --head origin/<branch>`. When the branch prints a higher tier than its card, it raises the card's Tier. Then it sets the card to In review and merges that branch into the batch so far, so a conflict shows now and not at the end:
 
 ```sh
-git fetch origin && git worktree add --detach <worktrees>/<project>-next-<batch> origin/<base>    # first card of a batch
-git fetch origin && git -C <worktrees>/<project>-next-<batch> merge --no-ff --no-edit origin/<branch>
+colony worktree add next-<batch> origin/<base> --detach    # first card of a batch
+git fetch origin && git -C "$(colony worktree path next-<batch>)" merge --no-ff --no-edit origin/<branch>
 ```
 
 `<batch>` is today's date, such as `2026-11-05`, with `-2` for a second batch that day. On a conflict, the lead aborts the merge and asks the builder to merge the other branch into its own, resolve it, push, and post `done` again.
@@ -178,7 +178,7 @@ colony batch --name 2026-11-05 --card 41=builder-2/41 --card 42=builder-3/42 --c
 
 Three things run in parallel:
 
-- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. With `[checks] areas`, a round runs only the areas its change touched: Colony maps each changed path to its areas and fills `{areas}` in the command with their names, or with `[checks] all` when every area runs. A path no area names runs every area, and a change only under `[checks] skip` runs none, so the round skips the checks. After a fix round, the next round runs the areas that failed plus the areas the fixes touched. A failing test whose every failure reason names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again; a failing test with no reason never reruns. The checks then pass only when nothing else in the output failed: no other failed step, no test runner `ERROR` line, and no sign such as make's `*** [lint] Error 1` or a compiler's `error:` outside the failing tests' own lines. When the checks still fail, the same command runs once on the batch's start commit alone, without the cards, in a worktree of its own that goes away after. A failure that shows there too isn't the cards' doing, so no fixer gets it, and `checks-<round>.md` says so. When it is the only failure left, the batch stops and says to fix the base, or the checks' setup, such as a database that is down.
+- **The checks.** The full `checks` run in the background, with `colony suppressions` among them. With `[checks] areas`, a round runs only the areas its change touched: Colony maps each changed path to its areas and fills `{areas}` in the command with their names, or with `[checks] all` when every area runs. A path no area names runs every area, and a change only under `[checks] skip` runs none, so the round skips the checks. After a fix round, the next round runs the areas that failed plus the areas the fixes touched. A failing test whose every failure reason names a timeout or a time limit runs once more by itself with `[checks] rerun`, and counts only when it fails again; a failing test with no reason never reruns. The checks then pass only when nothing else in the output failed: no other failed step, no test runner `ERROR` line, and no sign such as make's `*** [lint] Error 1` or a compiler's `error:` outside the failing tests' own lines. When the checks still fail, the same command runs once on the batch's start commit alone, without the cards, in a worktree of its own that goes away after. A failure that shows there too isn't the cards' doing, so no fixer gets it, and `checks-<round>.md` says so. When it is the only failure left, the batch stops and says to fix the base, or the checks' setup, such as a database that is down. In the related scope, a round runs the tests for its change and the guard tests instead of the whole suite, and `colony batch --full` runs the full suite. A pass on the same code is reused from the ledger, the first failing line shows in `colony status` the moment it streams, and `[checks] caps` stops a round that runs too long. See [checks.md](checks.md).
 - **A fresh reviewer.** A new headless session reads the round's diff and checks it against the rubric and the rules, the core and the essentials among them. It reads the places on the risk list first, which `colony batch` takes from `colony tier` at the round's head. It must try to refute each finding before it reports it. Its report starts with `open: N`, the confirmed problems still open, and lists each one as `path:line — what is wrong — the rule it breaks — the smallest fix`. From round 2, it reviews only that round's diff and marks each earlier finding `fixed` or `open`.
 - **A browser walk.** A headless walker starts your stack from a second worktree and walks each card's flows at desktop 1280×800 and phone 390×844, with touch input on the phone, in light and dark. It walks only the screens the round's changed files feed, as `[walk] screens` maps them, and traces any other changed screen file to its screens itself. It drives the browser `[walk] browser` names: the Playwright MCP, or the `agent-browser` CLI, which runs with no MCP server loaded. Its report starts with `walk: pass` or `walk: fail`. A round skips the walk when it changes none of the `walk_paths`, the user-facing files, unless the last walk failed.
 
@@ -273,5 +273,24 @@ Solo is one lead with cards and builders, as above, and a gate of the checks and
 | `<worktrees>/<project>-next-<batch>` | The lead's early-merge worktree |
 | `tools/board` | Hack only: the board script for Codex and other agents |
 | `~/.colony/<project>/<session>.json` | Each session's wait state: its read time, ETag and lines already seen, the lead's stale-card record, and `unread`, the lines the prompt hook prints next |
+| `.colony/colony.local.toml` | This computer's own settings over `.colony/colony.toml`, which git never tracks. See [configuration.md](configuration.md#layers) |
+| `.git/colony/leads.json` | The clone's lead registry: each lead's folders, the rest of the repo's owner, loans, borrows and asks, which every worktree of the clone reads. See [folders.md](folders.md) |
+| `.colony/team.toml`, `~/.config/colony/profile.toml` | The team's standing orders, committed, and your own, never committed. See [profiles.md](profiles.md) |
+| `~/.colony/<project>/waits/<pid>.json` | Each running `colony wait`: its session, and whether it follows. `colony waits` reads them |
+| `~/.colony/<project>/names.json` | The session names the waits learned from GitHub, which `colony post` and `colony say` check a recipient against |
+| `~/.colony/<project>/<session>-delivered.json`, `<session>-acked.json` | The lines shown to a session, and its last `colony ack`, for redelivery after a compaction or restart |
+| `~/.colony/<project>/<lead>-starts.json` | The lead's start lines that wait for an acknowledgement |
+| `~/.colony/<project>/sessions/<name>.json` | The session ledger: each session's Claude Code id, start folder, account and last sign of life, which `colony crash-report` and `colony resume` read |
+| `~/.colony/<project>/tasks/<pid>.json` | A long background command while it runs, such as `colony wait`; one left behind stopped from outside |
+| `~/.colony/<project>/summary.json`, `<session>-seen.json` | The project summary, and the commit each session last started on. See [boot.md](boot.md) |
+| `~/.colony/<project>/<session>-handover.json` | Each session's automatic handover, readable by you alone |
+| `~/.colony/<project>/plan-<lead>.json`, `<lead>-helper-orders.json` | A lead's plan for its request, and the orders it passes its helpers |
+| `~/.colony/<project>/decisions.json`, `spend.json`, `approvals.json`, `approvals.live` | The decisions asked, answered and taken alone, today's spending, what you approved for the helpers, and a marker that exists while one of this project's approvals is live, so the approvals hook runs only then. See [decisions.md](decisions.md) |
+| `<user config folder>/modes/<name>.toml`, `.colony/modes/<name>.toml` | Your own modes, and the team's |
+| `~/.colony/<project>/<session>-intent.json`, `<session>-pulse.json` | Each session's intent and last report, and the pulse its wait writes every minute: when its transcript last moved, the call it waits on, and its helper agents. See [watch.md](watch.md) |
+| `~/.colony/<project>/watchdog.json`, `watchdog.log` | The watchdog's heartbeat and log |
+| `~/.colony/<project>/usage-history.json` | Each account's fresh usage readings for a day, with the helpers it ran then, from which the burn rates and forecasts come. See [capacity.md](capacity.md#plan-around-resets) |
+| `~/.colony/subagents/<session id>.json` | The subagent calls the subagent guard let through whose files haven't appeared yet. See [safety.md](safety.md#the-subagent-guard) |
+| `~/.colony/<project>/progress.json`, `status-page.json`, `<lead>-folded.json` | The cards' progress as last read, the status page's issue and last writing, and the helper lines the lead's digest folded |
 
 Every command, with one line each, is in [commands.md](commands.md).

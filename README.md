@@ -50,7 +50,16 @@ cd your-repo && colony
 - [The cycle](docs/cycle.md): tiers, spec, research, the Needs issue, the board, handover, stats and retro
 - [The knowledge vault](docs/knowledge.md): page types, how research becomes rules, and the decision log
 - [Commands](docs/commands.md) and [Configuration](docs/configuration.md): every command and every key
+- [Profiles](docs/profiles.md): standing orders, yours and your team's, that every session follows from its start
+- [Starting a session](docs/boot.md): the briefing, the project summary, the automatic handover, modes and request intake
+- [Decisions](docs/decisions.md): what a lead asks you, what it decides alone, drafts first, and approvals that reach helpers
+- [Checks](docs/checks.md): tests in proportion to the change, time budgets, live failures, no repeated runs, and CI on any commit
 - [Presets](docs/presets.md), [Messages](docs/messages.md) and [Safety](docs/safety.md)
+- [Capacity](docs/capacity.md): accounts, usage limits, service checks, the computer's room, locks and sleep
+- [Watch](docs/watch.md): what each session does and why, reports, progress, the watchdog and a status page for your phone
+- [Folders and worktrees](docs/folders.md): one lead registry for every copy of the repo, lending and borrowing folders, silent leads, and worktrees inside the repo
+- [Real-use testing](docs/testing.md): the test accounts and fixtures a person prepared, and one findings list that testers on every computer share
+- [Releases](docs/releases.md): the release pull request, the merge freeze, partial releases, long-lived branches, a green shared branch, steps for the person, and plain status messages
 - [FAQ](docs/faq.md) and [Roadmap](docs/roadmap.md)
 
 ## The 3 setups
@@ -66,7 +75,7 @@ Every session you type into is a lead, over its own folders when another lead is
 - **A team, not one helper.** Claude Code plans, builds in parallel, checks its own work, and hands you one PR.
 - **You make the decisions, not the chores.** The lead asks you only what it can't decide, each time with a default.
 - **Quality is enforced.** Tests, a fresh reviewer and a real browser walk run in a loop of up to 3 rounds, each checking only what changed. A failing test always blocks, and a finding still open becomes a card.
-- **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, subagents split each card into pieces that run at the same time, and every minute and dollar is measured.
+- **Faster and cheaper over time.** Rules load only when needed, helpers build many cards at once, each on an account with room and a forecast of when it runs out, and every minute and dollar is measured.
 - **Knowledge stays.** Research, specs and decisions live as pages in your repo, not in a chat that ends.
 - **Nothing new to run.** No servers, standard-library Python, on your own machine and your own Claude accounts.
 
@@ -116,7 +125,7 @@ flowchart TD
 - **A knowledge vault**, `knowledge/`, of typed pages with `[[links]]` that Obsidian reads, checked by `colony check-docs`. See [docs/knowledge.md](docs/knowledge.md).
 - **Rules in three levels**, from a short core in every session to full rules on demand, from the `lean` or `puffin` preset or your own. See [docs/presets.md](docs/presets.md).
 - **A board and a Needs issue.** Cards live on a GitHub Project, and the decisions only you make go to `Needs <you>`, each with a default. See [docs/cycle.md](docs/cycle.md).
-- **Guards.** A wait guard, hooks that tell the lead when a builder is stuck, and a ledger that fails when lint suppressions grow. Colony never pushes to your base branch, except `colony merge` in Hack. See [docs/safety.md](docs/safety.md).
+- **Guards.** A wait guard, hooks that tell the lead when a builder is stuck, and a ledger that fails when lint suppressions grow. Colony never pushes to your base branch, except `colony merge` in Hack, and its merge guard keeps every agent from merging into a branch you haven't allowed. Its kill guard refuses a kill by name or pattern, and after a crash `colony crash-report` says what stopped and why, and `colony resume` reopens it. See [docs/safety.md](docs/safety.md).
 - **Messages.** Agents talk in one-line issue comments: on the card, on the coordination issue between leads, or on your Needs issue. See [docs/messages.md](docs/messages.md).
 
 ## Numbers from the first batch

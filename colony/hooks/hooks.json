@@ -3,11 +3,30 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|mcp__.*__(merge_pull_request|merge_merge_request|merge_pr|push_files|create_or_update_file|delete_file)",
         "hooks": [
           {
             "type": "command",
-            "command": "[ -f \"$CLAUDE_PROJECT_DIR/.colony/hooks/wait_guard.py\" ] && grep -qsF colony/hooks/wait_guard.py \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; f=\"${CLAUDE_PLUGIN_ROOT}/colony/hooks/wait_guard.py\"; [ -f \"$f\" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 \"$f\"; elif python -V >/dev/null 2>&1; then exec python \"$f\"; else exec py -3 \"$f\"; fi"
+            "command": "[ -f \"$CLAUDE_PROJECT_DIR/.colony/hooks/wait_guard.py\" ] && grep -qsF colony/hooks/wait_guard.py \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; f=\"${CLAUDE_PLUGIN_ROOT}/colony/hooks/wait_guard.py\"; [ -f \"$f\" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 \"$f\"; elif python -V >/dev/null 2>&1; then exec python \"$f\"; else exec py -3 \"$f\"; fi",
+            "timeout": 90
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -f \"$CLAUDE_PROJECT_DIR/.colony/hooks/agent_guard.py\" ] && grep -qsF colony/hooks/agent_guard.py \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; f=\"${CLAUDE_PLUGIN_ROOT}/colony/hooks/agent_guard.py\"; [ -f \"$f\" ] || exit 0; if python3 -V >/dev/null 2>&1; then exec python3 \"$f\"; elif python -V >/dev/null 2>&1; then exec python \"$f\"; else exec py -3 \"$f\"; fi"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook tool' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; set -- \"$HOME/.colony\"/*/approvals.live; [ -f \"$1\" ] || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook tool; exit 0",
+            "timeout": 10
           }
         ]
       }
@@ -60,7 +79,67 @@
         "hooks": [
           {
             "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook start' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook start; exit 0",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "command -v uv >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/uv\" ] && exit 0; if command -v curl >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh; else wget -qO- https://astral.sh/uv/install.sh; fi 2>/dev/null | sh >/dev/null 2>&1; if command -v uv >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/uv\" ]; then printf '%s\\n' '{\"systemMessage\": \"Puffin Colony installed uv, which runs the colony command, with Astral'\"'\"'s installer (https://astral.sh/uv/install.sh).\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Puffin Colony installed uv, which runs the colony command, with Astral'\"'\"'s installer (https://astral.sh/uv/install.sh).\"}}'; else printf '%s\\n' '{\"systemMessage\": \"Puffin Colony could not install uv, which runs the colony command: install it from https://docs.astral.sh/uv/ and start a new session.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Puffin Colony could not install uv, which runs the colony command: install it from https://docs.astral.sh/uv/ and start a new session.\"}}'; fi; exit 0"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks ended' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks ended; exit 0",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook end' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook end; exit 0",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'hooks tasks' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" hooks tasks; exit 0",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook turn' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook turn; exit 0",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$CLAUDE_PROJECT_DIR/.colony/bin/colony\" ] && grep -qsF 'session-hook compact' \"$CLAUDE_PROJECT_DIR/.claude/settings.json\" \"$CLAUDE_PROJECT_DIR/.claude/settings.local.json\" && exit 0; { [ -n \"$COLONY_SESSION\" ] || [ -f \"$HOME/.colony/sessions/${CLAUDE_CODE_SESSION_ID:-none}.json\" ]; } && command -v \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" >/dev/null 2>&1 || exit 0; cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null && \"${CLAUDE_PLUGIN_ROOT}/bin/colony\" session-hook compact; exit 0",
+            "timeout": 20
           }
         ]
       }

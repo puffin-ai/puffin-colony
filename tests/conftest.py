@@ -80,9 +80,31 @@ def with_the_retry_watchdog(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def own_check_ledger(monkeypatch, tmp_path):
+    """Each test keeps its check runs and its ledger of results in its own folder, so a pass one test records is
+    never reused by another, and no test writes to the real ~/.colony."""
+    from colony import checks
+    monkeypatch.setattr(checks, "HOME", tmp_path / "colony-home")
+
+
+@pytest.fixture(autouse=True)
+def own_locks(monkeypatch, tmp_path):
+    """Each test keeps the computer's named locks, which every check run takes a slot of, in its own folder, so no
+    test waits on another's slot or writes to the real ~/.colony/locks."""
+    from colony import capacity
+    monkeypatch.setattr(capacity, "locks_dir", lambda: tmp_path / "colony-locks")
+
+
+@pytest.fixture(autouse=True)
 def no_usage_refresh(monkeypatch, outside_a_colony_session):  # after the clearing, which would drop it
     """No test runs the real `claude -p /usage`. A test of refresh_usage clears this and puts a stub on PATH."""
     monkeypatch.setenv(cli.NO_REFRESH_ENV, "1")
+
+
+@pytest.fixture(autouse=True)
+def no_real_profile(monkeypatch, tmp_path, outside_a_colony_session):  # after the clearing, which would drop it
+    """No test reads or writes the real personal profile: its folder, $COLONY_CONFIG_HOME, is a fresh one per test."""
+    monkeypatch.setenv("COLONY_CONFIG_HOME", str(tmp_path / "colony-config"))
 
 
 if portable.WINDOWS:

@@ -39,6 +39,7 @@ def sessions(tmp_path, monkeypatch):
               {"kind": "background", "name": "demo-auth", "id": "bg3", "sessionId": "s3", "cwd": str(dirty),
                "config_dir": "~/.claude"}]
     monkeypatch.setattr(cli, "running_sessions", lambda config: listed)
+    monkeypatch.setenv("HOME", str(tmp_path))  # the session ledger, where colony stop notes each stop
     stopped = []
     monkeypatch.setattr(stop, "stop_background", lambda agent: stopped.append(agent["name"]))
     monkeypatch.setattr(stop, "stop_interactive", lambda agent: stopped.append(agent["name"]))

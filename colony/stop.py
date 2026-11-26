@@ -2,9 +2,11 @@
 one, and after a handoff the other person's builders keep asking the side that closed.
 
 `colony stop [<name> ...]` stops this project's Colony sessions on this computer: a background one with `claude stop`,
-which keeps its conversation, and an interactive one with a terminate signal. It never stops the session that runs
-it, and keeps one whose folder holds uncommitted work unless --force. The board hears who stopped, or outside
-hack mode the coordination issue, except in solo mode, which has one person.
+which keeps its conversation, and an interactive one with a terminate signal to the one process id `claude agents`
+lists for it. It is the safe way to close a session by name, where a kill by pattern, which the kill guard refuses,
+can end every session on the computer. It never stops the session that runs it, and keeps one whose folder holds
+uncommitted work unless --force. The session ledger notes each stop as on purpose, so `colony resume` leaves it be.
+The board hears who stopped, or outside hack mode the coordination issue, except in solo mode, which has one person.
 
 `colony handoff @<login>` hands this person's open work to another person's lead: the branches not yet in the base,
 with their commits, a warning for each one never pushed, and this lead's claimed paths, which it releases. The board
@@ -30,8 +32,12 @@ def stop_background(agent: dict) -> None:
 
 
 def stop_interactive(agent: dict) -> None:
-    """Ask an interactive session to end: a terminate signal, which Claude Code ends on, keeping the conversation."""
-    os.kill(int(agent["pid"]), signal.SIGTERM)
+    """Ask an interactive session to end: a terminate signal, which Claude Code ends on, keeping the conversation. It
+    signals one process id over 1 alone: 0, -1 or a negative id would reach a whole group, or every process."""
+    pid = int(agent["pid"])
+    if pid <= 1:
+        raise ValueError(f"{pid} is no single session's process id")
+    os.kill(pid, signal.SIGTERM)
 
 
 def uncommitted(agent: dict) -> bool:
@@ -45,7 +51,7 @@ def uncommitted(agent: dict) -> bool:
 
 def stop(config: dict, args) -> int:
     """`colony stop [<name> ...] [--force]`: see the module's docstring. Returns 1 when it kept a session."""
-    from colony import transport
+    from colony import recover, transport
 
     me = os.environ.get(cli.CLAUDE_SESSION_ENV, "")
     project = config["project"]["name"]
@@ -75,9 +81,16 @@ def stop(config: dict, args) -> int:
             continue
         stopped.append(name)
         print(f"stopped {name}")
+        try:
+            recover.note_stopped(config, agent, recover.session_name() or "a person")
+        except (OSError, ValueError) as e:
+            print(f"{cli.NAME} stop: the session ledger didn't note {name}'s stop: {e}", file=sys.stderr)
     if not stopped and not kept:
         print(f"No other {cli.DISPLAY} session of {project} runs on this computer.")
         return 0
+    from colony import capacity
+
+    capacity.forget_seen(config, [name.removeprefix(f"{project}-").lower() for name in stopped])  # no restart after sleep
     if cli.mode(config) != "solo" and stopped:  # other people's leads hear it: on the board, or the coordination issue
         line = f"@{wait.ALL} {' and '.join(stopped)} stopped on {presence.computer()}"
         if kept:

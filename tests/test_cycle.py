@@ -349,6 +349,17 @@ def test_needs_makes_the_issue_and_posts_the_line(gh, lead, capsys):  # noqa: F8
     assert capsys.readouterr().out.strip() == f"#9 {line}"
 
 
+def test_needs_checks_its_line_for_plain_words_and_posts_it_anyway(gh, lead, capsys):  # noqa: F811
+    """Regression (audit, Job A task 58): the Needs flow never ran the plain-words check on what the person reads. Its
+    findings now print as a warning beside the line, which is posted anyway."""
+    gh.answer("issue list", [{"number": 9, "title": "Needs Ana"}])
+    args = parse("needs", "ship TD236 w/ the old page", "--default", "yes")
+    assert args.run(CONFIG, args) == 0 and gh.called("issue", "comment")
+    out = capsys.readouterr().out
+    assert "Warning: the person may not understand 2 things in this message, which went out anyway." in out
+    assert '- "TD236": an internal code.' in out and '- "w/": a chat abbreviation.' in out
+
+
 def test_needs_for_another_person_posts_on_their_issue(gh, lead):  # noqa: F811
     gh.answer("issue list", [{"number": 4, "title": "Needs Ana"}, {"number": 6, "title": "Needs Sam"}])
     args = parse("needs", "Ship the bundle today?", "--default", "tomorrow.", "--person", "sam")

@@ -32,7 +32,7 @@ A repo that runs Colony pins it the way a package file pins a dependency, so a t
 
 - **The launcher.** `.colony/bin/colony` is a short shell script that names one Colony version, its pin. `colony setup` writes it through `colony hooks install`, and so does every later `colony hooks install`, pinned to the version that ran. The first time it runs on a computer, it installs that version from its tag on GitHub (`git+https://github.com/puffin-ai/puffin-colony@v<pin>`) through uv, into `~/.cache/puffin-colony/v<pin>/`. Every run after that starts Colony from there, so a run costs one Python start. If the computer has no uv, the launcher installs it first with Astral's official installer and says so.
 - **The PATH.** The repo's `.claude/settings.json` carries a SessionStart hook that adds `export PATH="<repo>/.colony/bin:$PATH"` to the `CLAUDE_ENV_FILE` Claude Code runs before each Bash command. So a plain `colony` in any session in the repo runs the pinned version. Colony's other hooks run `"$CLAUDE_PROJECT_DIR/.colony/bin/colony"` directly, because a hook doesn't read that file.
-- **A newer release.** At most once a day, the lead's session shows one line when a newer Colony tag than the pin exists, with a link to its CHANGELOG. `colony upgrade` creates a branch, `colony/upgrade-v<new>`, and moves the pin. Then, running under the new version, it rewrites the files Colony copied into the repo: the launcher, the wait guard, the hooks, and the role skills the repo has. It commits all of that, ready for you to push and open a PR. `colony upgrade --to v<version>` pins a release other than the newest.
+- **A newer release.** At most once a day, the lead's session shows one line when a newer Colony tag than the pin exists, with a link to its CHANGELOG. `colony upgrade` creates a branch, `colony/upgrade-v<new>`, and moves the pin. Then, running under the new version, it rewrites the files Colony copied into the repo: the launcher, the wait guard, the hooks, and the role skills the repo has. It migrates `.colony/colony.toml` too: a renamed setting moves to its new place, and a removed one is commented out with what replaces it. Your own uncommitted edits of `.colony/colony.toml` stop the upgrade; `colony config local --from-edits` moves them into `.colony/colony.local.toml`, which git never tracks, so no upgrade or pull meets them again. It commits all of that, ready for you to push and open a PR. `colony upgrade --to v<version>` pins a release other than the newest.
 
 The plugin and a `colony` you installed yourself still work beside the launcher. In a repo that carries Colony, the plugin's `colony` hands over to the repo's launcher, and the plugin's hooks step aside, so each hook runs once.
 
@@ -105,10 +105,11 @@ A pushed tag `v*` publishes nothing by itself: the plugin and `uv tool install g
 5. **Release.** With the version in `colony/__init__.py`, `npm/package.json` and `.claude-plugin/` all at `0.3.0`, on the main branch:
 
    ```sh
-   git tag v0.3.0 && git push --tags
+   git tag v0.3.0
+   git push origin refs/tags/v0.3.0
    ```
 
-   That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
+   Run these in your own terminal: Colony's push guard lets an agent push only its own branch, never a tag. That releases it on GitHub. To publish it to PyPI and npm too, run the workflow: Actions → release → Run workflow, with tag `v0.3.0`, or `gh workflow run release.yml -f tag=v0.3.0`. Watch the run under the repo's Actions tab. Then check `uvx puffin-colony --help` and `npx puffin-colony --help`.
 
 For each later release, raise the version in `colony/__init__.py`, `npm/package.json`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, regenerate `colony/hooks/hooks.json` from `guards.plugin_hooks()`, add a CHANGELOG.md entry, commit, and tag `v<version>`.
 

@@ -622,12 +622,13 @@ def accounts(home, *specs, last=()):
             "people": {"ana": {"accounts": order, "last_resort": [name for name, _ in last]}}}
 
 
-def test_use_it_or_lose_it_the_soonest_weekly_reset_with_room_comes_first(home):
+def test_use_it_or_lose_it_the_most_weekly_room_an_hour_until_the_reset_comes_first(home):
     config = accounts(home, ("team", {"five": 5, "week": 10, "week_resets_in": timedelta(days=5)}),
                       ("admin", {"five": 40, "week": 70, "week_resets_in": timedelta(hours=20)}),
                       ("ana", {"five": 0, "week": 0, "week_resets_in": timedelta(days=6)}))
     name, _, why = cli.pick(config, "ana")
-    assert name == "admin" and why == "admin: weekly resets in 19 h, 30% left; 5h 40% used, resets in 1 h"
+    assert name == "admin" and why == ("admin: weekly resets in 19 h, 30% left, 1.5% an hour to use until then; 5h 40% "
+                                       "used, resets in 1 h")
 
 
 def test_a_tie_on_the_weekly_reset_goes_to_the_most_five_hour_room(home):
@@ -681,7 +682,8 @@ def test_every_account_out_of_room_names_the_first_and_says_why(home):
 def test_a_session_prints_why_its_account_was_picked(home, config, capsys):
     usage(home, ".claude-work", five=10, week=40, week_resets_in=timedelta(hours=30))
     cli.lead(config, argparse.Namespace(person="ana", here=True, dry_run=True, account=None))
-    assert "why: admin: weekly resets in 29 h, 60% left; 5h 10% used" in capsys.readouterr().out
+    assert "why: admin: weekly resets in 29 h, 60% left, 2.0% an hour to use until then; 5h 10% used" in \
+        capsys.readouterr().out
 
 
 def test_the_person_comes_from_the_gh_login_through_people(home, monkeypatch):
@@ -900,7 +902,8 @@ def test_every_new_session_is_told_to_take_its_role_name_in_the_sidebar(home, co
     github.add(lead(name="ana-main-lead"))
     assert cli.main(["join", "--in-session", "--person", "ana"]) == 0
     assert rename.format("builder-1") in capsys.readouterr().out
-    assert cli.main(["claim", "web", "--person", "ana"]) == 0
+    # ana-main-lead holds the rest of the repo, and one lead holds it at a time, so the new lead names its folders.
+    assert cli.main(["claim", "web", "apps/web/", "--person", "ana"]) == 0
     assert rename.format("ana-web-lead") in capsys.readouterr().out
 
 

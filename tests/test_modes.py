@@ -177,7 +177,10 @@ def test_a_hack_config_needs_only_what_setup_asks(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     config = load(tmp_path, HACK)
     project, gate = config["project"], config["gate"]
-    assert (project["mode"], project["base"], project["worktrees"]) == ("hack", "main", str(tmp_path / "worktrees"))
+    # Hack's worktrees folder is `.worktrees` inside the repo (docs/folders.md), read from the clone: the folder above
+    # the one that holds colony.toml, as for `<repo>/.colony/colony.toml`.
+    assert (project["mode"], project["base"], project["worktrees"]) == ("hack", "main",
+                                                                        str(tmp_path.resolve().parent / ".worktrees"))
     assert (gate["check"], gate["review"], gate["walk"], gate["merge_after_fast_check"]) == ("fast", False, False, True)
     assert config["messages"] == {"lead_digest_minutes": 2, "board": 12}
     assert not any(config["features"].values())

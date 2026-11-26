@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from colony import batch, cli, portable, transport, wait
+from colony import batch, cli, folders, portable, transport, wait
 
 TRIES = 2  # merges in a row before a base that keeps moving under the check sends the branch to a pull request
 REJECTED = re.compile(r"\[rejected\]|non-fast-forward|fetch first", re.I)
@@ -73,8 +73,10 @@ def _git(cwd, *args: str, check: bool = True) -> str:
 
 
 def _exists(root: Path, ref: str) -> bool:
-    """Whether the ref names a commit."""
-    return batch._run(["git", "rev-parse", "--verify", "--quiet", ref], root, check=False).returncode == 0
+    """Whether the ref names a commit this clone has. `^{commit}` makes git read the object: alone, `rev-parse
+    --verify` passes any full 40-character id, even one this clone lacks."""
+    return batch._run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], root,
+                      check=False).returncode == 0
 
 
 def _behind(root: Path, ref: str, other: str) -> bool:
@@ -110,7 +112,7 @@ def ready(root: Path, wt: Path, base: str) -> None:
         _git(wt, "clean", "-fdq")
     else:
         _git(root, "worktree", "prune")
-        _git(root, "worktree", "add", "--detach", str(wt), f"origin/{base}")
+        _git(root, *folders.worktree_arguments(root, wt, "--detach", start=f"origin/{base}"))
 
 
 def readable(output: str) -> list[str]:
@@ -159,19 +161,26 @@ def log_path(config: dict, name: str, run: str) -> Path:
     return folder / f"{safe_name}-{time.strftime('%Y%m%d-%H%M%S')}-{run}.log"
 
 
-def run_check(command: str, cwd: Path, env: dict, log: Path) -> Check:
-    """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests."""
+def run_check(command: str, cwd: Path, env: dict, log: Path, cap: float = 0) -> Check:
+    """Run the fast check, keep its whole output in `log`, and read its summary line and its failing tests. A run
+    past `cap` seconds, `[checks] caps` (configs.merge_plan), is stopped with everything it started, and fails."""
+    from colony import checks
+
     shell_command, shell, env = portable.shell(command, env)
     started = time.monotonic()
-    run = subprocess.run(shell_command, shell=shell, cwd=cwd, env=env, capture_output=True, text=True)
+    with log.open("w") as out:
+        proc = subprocess.Popen(shell_command, shell=shell, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, **portable.own_group())
+        code = checks.wait_capped(proc, cap)
     seconds = time.monotonic() - started
-    output = f"{run.stdout}\n{run.stderr}"
-    log.write_text(output)
+    output = log.read_text(errors="replace")
     lines = readable(output)
     summaries = [line for line in lines if SUMMARY.search(line)]
     summary = (summaries[-1] if summaries else lines[-1] if lines else "no output")[:200]
+    if code is None:
+        summary = f"stopped past its cap of {checks.span(cap)}, [checks] caps"
     failing = list(dict.fromkeys(line[:120] for line in lines if FAILING.match(line) and not transport.holds_secret(line)))
-    return Check(run.returncode == 0, safe(summary, "summary line"), failing[:NAMED], log, seconds)
+    return Check(code == 0, safe(summary, "summary line"), failing[:NAMED], log, seconds)
 
 
 def checked_bases(config: dict) -> tuple[Path, dict]:
@@ -189,7 +198,8 @@ def remember_green(config: dict, head: str) -> None:
     wait.write_json(path, found)
 
 
-def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dict, command: str) -> Check | None:
+def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dict, command: str,
+               cap: float = 0) -> Check | None:
     """The fast check's run on origin/<base> alone, at `sha`, when it fails there too, else None. A base Colony
     landed green itself, or one whose install fails here, isn't run."""
     path, found = checked_bases(config)
@@ -198,7 +208,7 @@ def base_fails(config: dict, root: Path, wt: Path, base: str, sha: str, env: dic
     ready(root, wt, base)
     if config["project"].get("install") and not _shell(config["project"]["install"], wt, env)[0]:
         return None
-    result = run_check(command, wt, env, log_path(config, base, "base"))
+    result = run_check(command, wt, env, log_path(config, base, "base"), cap)
     if result.passed:
         remember_green(config, sha)
         return None
@@ -341,9 +351,10 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
     own gets no pull request, since the branch is not to blame; for several branches, run() lands each alone."""
     branches = [branches] if isinstance(branches, str) else list(branches)
     branch, names = branches[0], " and ".join(branches)
+    from colony import configs
+
     project = config["project"]
     base, env = project["base"], batch.checks_env(config, root)
-    command = batch.every_area(config, batch.fast_check(project))
     for attempt in range(TRIES):
         if attempt:
             _git(root, "fetch", "origin")
@@ -368,6 +379,10 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
             if not REJECTED.search(push.stderr):
                 raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}")
             continue
+        # The fast check for the merged change, in [checks] scope, stopped past the fast cap (configs.merge_plan).
+        # A change that touches no check area still runs the whole fast check: the merge pushes the base itself.
+        plan, cap = configs.merge_plan(config, wt, _git(wt, "diff", "--name-only", before, head).splitlines())
+        command = plan.cmd or batch.every_area(config, batch.fast_check(project))
         if project.get("install"):
             installed, last = _shell(project["install"], wt, env)
             if not installed:
@@ -376,18 +391,19 @@ def land(config: dict, root: Path, wt: Path, branches: str | list[str]) -> Lande
             note_once(config, "database", f"the fast check's env names a database on {', '.join(hosts)}, which isn't "
                       "on this computer: every check writes to it, and a shared one slows as checks pile up; give the "
                       "checks a database of their own")
-        first = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together", "check"))
+        first = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together", "check"),
+                          cap)
         if first.seconds > SLOW_CHECK_SECONDS:
             note_once(config, "slow", f"the fast check took {int(first.seconds)} s; in a hackathon keep it under a "
                       "minute, and move slow tests, such as ones that use a database, to [project] checks")
         passed, note = f"({first.summary})", ""
         if not first.passed:
             second = run_check(command, wt, env, log_path(config, branch if len(branches) == 1 else "together",
-                                                          "again"))
+                                                          "again"), cap)
             if not second.passed and len(branches) > 1:
                 return Landed(False, second.failed("twice on the merged result"), log=second.log, pr=False)
             if not second.passed:
-                red = base_fails(config, root, wt, base, before, env, command)
+                red = base_fails(config, root, wt, base, before, env, command, cap)
                 if red is not None:
                     warn_red_base(config, base, before, red)
                     return Landed(False, f"{base} itself fails the fast check at {before[:9]}, so {branch} is not "
@@ -566,28 +582,6 @@ def one_at_a_time(config: dict):
         yield
 
 
-def merge_back(config: dict, root: Path, ref: str) -> str:
-    """`colony release --after`'s merge: merge `ref`, the released branch, into origin/<base> in the merge worktree
-    and push the base, never forced. A conflict, or a base that moved on, stops it with the base untouched."""
-    base = config["project"]["base"]
-    with one_at_a_time(config):
-        wt = worktree(config)
-        ready(root, wt, base)
-        if _behind(root, ref, f"origin/{base}"):
-            return f"{base} already holds {ref}: nothing to merge back"
-        if batch._run(["git", "merge", "--no-ff", "--no-edit", ref], wt, check=False).returncode:
-            paths = _git(wt, "diff", "--name-only", "--diff-filter=U", check=False).split()
-            _git(wt, "merge", "--abort", check=False)
-            raise cli.ColonyError(f"merging {ref} back into {base} conflicts in {', '.join(paths) or 'the merge'}: "
-                                  "merge it by hand")
-        head = _git(wt, "rev-parse", "HEAD")
-        push = batch._run(["git", "push", "origin", f"HEAD:refs/heads/{base}"], wt, check=False)
-        if push.returncode:
-            raise cli.ColonyError(f"git push to {base} failed: {push.stderr.strip()[-300:]}: run "
-                                  f"`{cli.NAME} release --after` again")
-    return f"merged {ref} back into {base} at {head[:9]}"
-
-
 def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     """What the merge would run, for --dry-run."""
     project = config["project"]
@@ -595,7 +589,8 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     pr = ["gh", "pr", "create", "--repo", project["repo"], "--base", base, "--head", branch]
     lines = [f"{cli.NAME} merge {branch}: dry run, nothing runs.", "  $ git fetch origin"]
     if why:
-        return "\n".join(lines + [f"  it opens a pull request, since {why}:", f"  $ git push origin {branch}",
+        return "\n".join(lines + [f"  it opens a pull request, since {why}:",
+                                  f"  $ git push origin refs/heads/{branch}:refs/heads/{branch}",
                                   "  $ " + shlex.join(pr)])
     lines += [f"  in {wt}, at origin/{base}:", "  $ " + shlex.join(["git", "merge", "--no-ff", "--no-edit", branch])]
     if project.get("install"):
@@ -603,7 +598,7 @@ def plan(config: dict, branch: str, wt: Path, why: str | None) -> str:
     return "\n".join(lines + [f"  the fast check: $ {batch.every_area(config, batch.fast_check(project))}",
                               f"  when it passes: $ git push origin HEAD:refs/heads/{base}, and it posts "
                               f"`[merged] {branch} → {base} <short sha>, fast check passed` on the board",
-                              f"  on a conflict or a failing check: $ git push origin {branch}, then",
+                              f"  on a conflict or a failing check: $ git push origin refs/heads/{branch}:refs/heads/{branch}, then",
                               "  $ " + shlex.join(pr)])
 
 
@@ -663,7 +658,8 @@ def sync(config: dict, args) -> int:
     if head == before:
         print(f"{branch} already holds origin/{base}: nothing to merge")
     else:
-        print(f"merged origin/{base} into {branch} at {head[:9]} in {wt}{took}; push it with `git push origin {branch}`")
+        print(f"merged origin/{base} into {branch} at {head[:9]} in {wt}{took}; push it from {wt}, as a command of its "
+              f"own, with `git push -u origin HEAD:refs/heads/{branch}`")
     return 0
 
 
@@ -695,6 +691,9 @@ def run(config: dict, args) -> int:
         for branch in branches:
             print(f"pull request: {open_pr(config, root, branch, why)} ({why})")
         return 0
+    from colony import freeze
+
+    freeze.guard_merge(config, root, base, branches)  # a merge freeze or a red base pauses every lead's landing
     results: list[tuple[str, Landed]] = []
     with one_at_a_time(config), team_turn(config, root, branches):
         if len(branches) > 1:

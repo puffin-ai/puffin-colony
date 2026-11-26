@@ -1,0 +1,8 @@
+# The plan-first mode: every request's plan is shown to the person, and work starts on their yes.
+description = "Show the plan for every request, its task groups, owners and done-when results, and start only after the person's yes."
+
+[intake]
+plan = "show"
+
+[monitoring]
+report = "progress"

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from colony import batch, cli
+from colony import batch, checks, cli
 from colony.batch import Finding
 
 RUBRIC = ["bugs", "security and privacy", "data loading", "contract and write path",
@@ -258,6 +258,16 @@ def test_a_batch_loops_a_fix_to_its_card_and_opens_the_pr(repo, config, stubs, c
     assert batch.batch_status(config, Namespace(name="b1", repo=str(repo))) == 0
     status = capsys.readouterr().out
     assert "round 2, open 0 (round 2), walk none yet" in status and "running: nothing" in status
+
+
+def test_a_batch_with_its_worktrees_inside_the_repo_leaves_git_status_clean(repo, config, stubs, capsys):
+    """Regression (audit, Job B finding 3): a batch made its worktrees with plain git, so in a clone where nothing
+    else had kept the worktrees folder out of `git status`, the batch, walk and fix worktrees showed there as an
+    untracked folder that a `git add -A` would add."""
+    config["project"]["worktrees"] = str(repo / ".worktrees")
+    assert batch.run_batch(config, batch_args(repo, "11=card/a", "12=card/b")) == 0
+    assert (repo / ".worktrees" / "demo-batch-b1").is_dir()
+    assert git(repo, "status", "--porcelain") == ""
 
 
 def test_a_fixer_that_commits_nothing_stops_the_batch(repo, config, stubs, capsys, monkeypatch):
@@ -696,7 +706,7 @@ def fast_card(repo, config, monkeypatch):
             for name, text in files.items():
                 (repo / name).parent.mkdir(parents=True, exist_ok=True)
                 (repo / name).write_text(text)
-        code = batch.run_fast_check(config, Namespace(dry_run=False))
+        code = checks.run_fast_check(config, Namespace(dry_run=False))
         return code, capsys.readouterr().out
     return run
 
@@ -748,11 +758,17 @@ def test_minutes_table_lists_what_each_kind_of_skipped_step_saved_below_the_tota
                           "| **saved** | 3 | 84.5 | $10.50 |")
 
 
-def test_the_settings_refuse_web_checks_areas_without_areas_and_an_unknown_browser(repo, config):
-    config["project"]["web_checks"] = "npm test"
-    with pytest.raises(SystemExit, match=r"web_checks is gone: name each check area's paths in \[checks\] areas"):
-        batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
-    del config["project"]["web_checks"]
+def test_the_settings_refuse_areas_without_areas_and_an_unknown_browser_and_skip_web_checks(repo, config, tmp_path):
+    # [project] web_checks is gone: loading skips it with a note that names its replacement, so a batch still runs.
+    # It stopped every batch before, which broke `colony batch` for a repo that upgraded.
+    from colony import configs
+
+    text = (tmp_path / "colony.toml").read_text().replace('checks = "true"', 'checks = "true"\nweb_checks = "x"')
+    (tmp_path / "colony.toml").write_text(text)
+    loaded = cli.load_config(tmp_path / "colony.toml")
+    assert "web_checks" not in loaded["project"]
+    assert any("[project] web_checks" in note and "[checks] areas" in note for note in configs.LAST)
+    batch.Batch.from_args(loaded, batch_args(repo, "11=card/a"))
     config["project"]["checks"] = "run {areas}"
     with pytest.raises(SystemExit, match=r"\[checks\] areas names none"):
         batch.Batch.from_args(config, batch_args(repo, "11=card/a"))
@@ -846,7 +862,11 @@ def test_a_fixer_gets_only_the_cards_own_failures_and_the_start_points_stop_the_
     assert batch.run_batch(config, batch_args(repo, "12=card/b")) == 1
     out = capsys.readouterr().out
     assert stubs["claude"].read_text().count("You are a fast builder") == 1
-    assert "every failing check also fails on origin/main alone" in out and "round 2" not in out.split("stopped")[0]
+    # Each round prints its checks' first failure as it streams; apart from those lines, nothing before the stop
+    # line speaks of round 2.
+    before = [line for line in out.split("stopped")[0].splitlines() if "checks: first failure at" not in line]
+    assert "every failing check also fails on origin/main alone" in out and "round 2" not in "\n".join(before)
+    assert "round 1's checks: first failure at" in out
     reports = Path(config["project"]["worktrees"]) / "demo-batch-b1" / ".colony" / "reports" / "b1"
     state = json.loads((reports / "state.json").read_text())
     assert [x["on_start"] for x in state["rounds"]] == [["failing test tests/test_db.py::test_connects"]] * 2

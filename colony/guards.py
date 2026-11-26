@@ -1,11 +1,13 @@
 """colony suppressions and colony hooks: the guards a repo keeps on its agents.
 
 `colony suppressions` holds each file's count of lint and type suppressions to `.colony/suppressions.json`, a record
-that only shrinks. `colony hooks install` merges five hooks into `.claude/settings.json`, keeping the hooks already
-there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), two that post a line on the coordination
-issue, `asking` when a builder waits on a permission pop-up and `stopped` when a turn ends on an error, and the prompt
-hook, `unread`, which shows a session the lines addressed to it that it hasn't read, when it starts and before each
-prompt. Every mode installs all five.
+that only shrinks. `colony hooks install` merges Colony's hooks into `.claude/settings.json`, keeping the hooks already
+there: the wait guard (hooks/wait_guard.py, copied into `.colony/hooks/`), which also holds the push, merge and kill
+guards; two that post a line on the coordination issue, `asking` when a builder waits on a permission pop-up and
+`stopped` when a turn ends on an error; the prompt hook, `unread`, which shows a session the lines addressed to it
+that it hasn't read, when it starts and before each prompt; `ended`, when a session ends; and `tasks`, at the end of
+each turn, which tells a session when one of its background tasks stopped. The last two, `stopped` and `unread` also
+keep the session ledger that `colony crash-report` and `colony resume` read (recover.py). Every mode installs them all.
 
 A hook's line that can't post, because gh fails, waits in the outbox, ~/.colony/<project>/outbox.json, and the next
 hook run or wait poll on the computer posts it, oldest first (flush_outbox), so it is never lost. The prompt hook also
@@ -33,11 +35,16 @@ from colony import __version__, cli, portable
 
 LEDGER = "suppressions.json"  # in .colony/
 GUARD = "wait_guard.py"  # in the package's hooks/, copied to .colony/hooks/
+AGENT_GUARD = "agent_guard.py"  # the subagent guard, beside it (hooks/agent_guard.py, docs/safety.md)
+AGENT_MATCHER = "Agent|Task"  # the tool that starts a subagent; Task in older Claude Code versions
 ASKING_REPEAT = 600  # a builder posts at most one asking line per 10 minutes
 ERROR_CODE = re.compile(r"[a-z_]{1,40}")
 UNREAD_EVERY = 30  # with no wait running, the prompt hook reads GitHub itself at most once per 30 seconds
 WAIT_FRESH = 60  # a wait whose last poll is under a minute old is running, and the prompt hook leaves GitHub to it
 HOOK_TIMEOUT = 20  # seconds Claude Code gives the prompt hook before it goes on without it
+# Seconds Claude Code gives the wait guard. Claude Code runs a call whose hook runs past its timeout, so this sits
+# above the guard's own deadline (wait_guard.DEADLINE), past which the guard refuses the call itself.
+GUARD_TIMEOUT = 90
 OUTBOX = "outbox"  # ~/.colony/<project>/outbox.json: the hooks' lines that failed to post, oldest first
 WATCHDOG_ENV = "CLAUDE_CODE_RETRY_WATCHDOG"
 WATCHDOG_EVERY = 24 * 3600  # the prompt hook says a session runs without the watchdog at most once a day
@@ -226,6 +233,12 @@ def path_command() -> str:
             f"printf '{line}' \"$CLAUDE_PROJECT_DIR\" >> \"$CLAUDE_ENV_FILE\"; exit 0")
 
 
+# The tools the guard reads before they run: every Bash call, and the GitHub tools that merge a pull request or commit
+# straight onto a branch, which the merge guard checks (wait_guard.MCP_PR_MERGES and MCP_COMMITS).
+GUARD_MATCHER = ("Bash|mcp__.*__(merge_pull_request|merge_merge_request|merge_pr|push_files|create_or_update_file"
+                 "|delete_file)")
+
+
 def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]]:
     """Colony's hooks: (event, matcher, hook, the marker that finds the hook in a settings file). The repo's run the
     wait guard `colony hooks install` copies and the repo's launcher, and put the launcher on PATH. The `plugin`'s run
@@ -235,22 +248,36 @@ def hook_entries(plugin: bool = False) -> list[tuple[str, str | None, dict, str]
     root = "${CLAUDE_PLUGIN_ROOT}" if plugin else "$CLAUDE_PROJECT_DIR"
     program = PLUGIN_BIN if plugin else REPO_BIN
     unread_hook = {"type": "command", "command": quiet_command("unread", program), "timeout": HOOK_TIMEOUT}
+    agents = f"colony/hooks/{AGENT_GUARD}" if plugin else f"{cli.DIR}/hooks/{AGENT_GUARD}"
     entries = [
-        ("PreToolUse", "Bash", {"type": "command", "command": python_command(guard, root=root)}, guard),
+        ("PreToolUse", GUARD_MATCHER, {"type": "command", "command": python_command(guard, root=root),
+                                        "timeout": GUARD_TIMEOUT}, guard),
+        ("PreToolUse", AGENT_MATCHER, {"type": "command", "command": python_command(agents, root=root)}, agents),
         ("Notification", "permission_prompt",
          {"type": "command", "command": colony_command("asking", program), "async": True}, "hooks asking"),
         ("StopFailure", None, {"type": "command", "command": colony_command("stopped", program), "async": True},
          "hooks stopped"),
         ("UserPromptSubmit", None, unread_hook, "hooks unread"),
         ("SessionStart", None, dict(unread_hook), "hooks unread"),
+        ("SessionEnd", None, {"type": "command", "command": quiet_command("ended", program), "timeout": HOOK_TIMEOUT},
+         "hooks ended"),
+        ("Stop", None, {"type": "command", "command": quiet_command("tasks", program), "timeout": HOOK_TIMEOUT},
+         "hooks tasks"),
     ]
+    from colony import boot  # the startup routine, the automatic handover, and the approvals hook (boot.py)
+
     if not plugin:
-        return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE")]
-    # The repo's guard needs only its copied script, and its other hooks need its launcher.
-    repo_guard = f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{GUARD}" ]'
+        return [*entries, ("SessionStart", None, {"type": "command", "command": path_command()}, "CLAUDE_ENV_FILE"),
+                *boot.hook_entries(program)]
+    entries += boot.hook_entries(program)
+    # The repo's guards need only their copied scripts, and its other hooks need its launcher.
     launcher = f"[ -x {REPO_BIN} ]"
-    return [(event, matcher, {**hook, "command": step_aside(marker, repo_guard if GUARD in marker else launcher)
-                              + hook["command"]}, marker)
+
+    def ready(marker: str) -> str:
+        script = marker.rsplit("/", 1)[-1]
+        return f'[ -f "$CLAUDE_PROJECT_DIR/{cli.DIR}/hooks/{script}" ]' if script in (GUARD, AGENT_GUARD) else launcher
+
+    return [(event, matcher, {**hook, "command": step_aside(marker, ready(marker)) + hook["command"]}, marker)
             for event, matcher, hook, marker in entries]
 
 
@@ -329,7 +356,8 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
     """Merge Colony's hooks into a Claude Code settings file, keeping every other key and every hook already there,
     and return the events whose hook was added and those whose hook was brought up to date.
 
-    A Colony hook already in the file, found by its marker, is updated in place. A file that is not a JSON object with
+    A Colony hook already in the file, found by its marker, is updated in place, and so is the matcher of a group that
+    holds that hook alone, such as the guard's, which once read Bash calls only. A file that is not a JSON object with
     a `hooks` object of lists is left as it is, with an error that says so.
     """
     data: dict = {}
@@ -345,15 +373,22 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
         groups = data["hooks"].setdefault(event, [])
         if not isinstance(groups, list):
             raise cli.ColonyError(f"{path}: hooks.{event} must be a list: fix it, then run this again")
-        mine = [entry for group in groups if isinstance(group, dict) for entry in group.get("hooks", [])
+        mine = [(group, entry) for group in groups if isinstance(group, dict) for entry in group.get("hooks", [])
                 if isinstance(entry, dict) and marker in str(entry.get("command", ""))]
         if not mine:
             groups.append({**({"matcher": matcher} if matcher else {}), "hooks": [hook]})
             added.append(event)
-        elif any(entry != hook for entry in mine):
-            for entry in mine:
+            continue
+        stale = False
+        for group, entry in mine:
+            if entry != hook:
                 entry.clear()
                 entry.update(hook)
+                stale = True
+            if matcher and group.get("matcher") != matcher and len(group.get("hooks", [])) == 1:
+                group["matcher"] = matcher  # a group that also holds the person's own hooks keeps its matcher
+                stale = True
+        if stale:
             updated.append(event)
     if added or updated:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -362,10 +397,14 @@ def merge_hooks(path: Path) -> tuple[list[str], list[str]]:
 
 
 def install(config: dict, args) -> int:
-    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, copy the wait guard into
-    .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the same
-    hooks."""
+    """`colony hooks install`: merge Colony's hooks into .claude/settings.json, copy the wait guard and the subagent
+    guard into .colony/hooks/, and write the launcher, .colony/bin/colony, pinned to this version. Every mode gets the
+    same hooks."""
     root = cli.repo_root()
+    if not args.dry_run and config.get("project", {}).get("worktrees"):
+        from colony import folders  # setup's step: a worktrees folder inside the repo stays out of `git status`
+
+        folders.keep_out(config["project"]["worktrees"], folders.main_checkout(root))
     # --local writes this machine's settings.local.json, which git ignores, so the hooks don't reach a CI job.
     name = "settings.local.json" if getattr(args, "local", False) else "settings.json"
     settings, guard = root / ".claude" / name, root / cli.DIR / "hooks" / GUARD
@@ -374,11 +413,14 @@ def install(config: dict, args) -> int:
         print(f"hooks plan for {root}:")
         print(f"  .claude/{name}: merge the {events} hooks, keeping every hook already there")
         print(f"  {cli.DIR}/hooks/{GUARD}: the wait guard, copied from the package")
+        print(f"  {cli.DIR}/hooks/{AGENT_GUARD}: the subagent guard, copied from the package")
         print(f"  {LAUNCHER}: the launcher, pinned to {cli.DISPLAY} {__version__}")
         print("Nothing ran.")
         return 0
     added, updated = merge_hooks(settings)
+    agents = root / cli.DIR / "hooks" / AGENT_GUARD
     for path, text in ((guard, resources.files(__package__).joinpath("hooks", GUARD).read_text()),
+                       (agents, resources.files(__package__).joinpath("hooks", AGENT_GUARD).read_text()),
                        (root / LAUNCHER, launcher())):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
@@ -386,6 +428,7 @@ def install(config: dict, args) -> int:
     done = f"added {', '.join(added) or 'nothing'}" + (f", updated {', '.join(updated)}" if updated else "")
     print(f"wrote .claude/{name}: {done}, and kept every hook already there")
     print(f"wrote {cli.DIR}/hooks/{GUARD}")
+    print(f"wrote {cli.DIR}/hooks/{AGENT_GUARD}")
     print(f"wrote {LAUNCHER}, pinned to {cli.DISPLAY} {__version__}")
     return 0
 
@@ -435,12 +478,16 @@ def upgrade(config: dict, args) -> int:
     the files Colony copied into the repo (`colony upgrade --refresh`), and commit, ready for a PR."""
     from colony import merge
 
+    from colony import configs
+
     root = cli.repo_root()
     if args.refresh:
         install(config, argparse.Namespace(dry_run=False, local=False))
         present = [name for name in cli.ROLE_SKILLS if (root / ".claude" / "skills" / name).is_dir()]
         if present:
             print("wrote", ", ".join(cli.copy_skills(root, present)[0]))
+        for line in configs.refresh(root):  # old settings migrated, and the local file kept out of git
+            print(line)
         return 0
     tag = args.to or latest_release()
     if not tag or not version_of(tag):
@@ -453,8 +500,9 @@ def upgrade(config: dict, args) -> int:
         print(f"upgrade plan: on a new branch {branch}, pin {LAUNCHER} to {tag}, run `{cli.NAME} upgrade --refresh` "
               f"under it to refresh the copied files, and commit. Nothing ran.")
         return 0
-    if merge._git(root, "status", "--porcelain"):
-        raise cli.ColonyError("the working tree has changes: commit or set them aside, then upgrade")
+    if changes := merge._git(root, "status", "--porcelain"):
+        raise cli.ColonyError("the working tree has changes: commit or set them aside, then upgrade"
+                              + configs.upgrade_hint(changes))
     merge._git(root, "switch", "-c", branch)
     (root / LAUNCHER).parent.mkdir(parents=True, exist_ok=True)  # a repo from before the launcher has no bin/ yet
     (root / LAUNCHER).write_text(launcher(tag.removeprefix("v")))
@@ -610,16 +658,58 @@ def asking(config: dict, args) -> int:
 def stopped(config: dict, args) -> int:
     """`colony hooks stopped`, the StopFailure hook: a line saying the turn ended on an error, for a builder's lead,
     or for the lead's person. It names the error's code word alone, never text that could quote a secret."""
+    from colony import recover
+
     error = str(hook_event().get("error") or "")
     me, person, lead = session_names(config, args)
     if not me:
         return 0
     cause = error if ERROR_CODE.fullmatch(error) else "unknown error"
+    from colony import capacity
+
+    capacity.note_limited(config, me, cause)  # a usage limit: wake the session once its account resets
+    keep_ledger("stopped", lambda: recover.note_error(config, cause.replace(" ", "_")))
     at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if me == cli.LEAD:
         sender = lead if person else cli.LEAD
         return post(config, person or cli.LEAD, f"{sender} stopped on an error ({cause}) at {at}", sender)
     return post(config, lead, f"{me} stopped on an error ({cause}) at {at}", me)
+
+
+def keep_ledger(action: str, record) -> None:
+    """Run one write to the session ledger (recover.py), which never stops a hook: a problem goes to stderr."""
+    try:
+        record()
+    except (cli.ColonyError, OSError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME} hooks {action}: the session ledger was not written: {e}", file=sys.stderr)
+
+
+def ended(config: dict, args) -> int:
+    """`colony hooks ended`, the SessionEnd hook: the session ledger notes when this session ended and Claude Code's
+    reason, so `colony crash-report` can tell a person's exit from a signal or a crash."""
+    from colony import recover
+
+    event = hook_event()
+    keep_ledger("ended", lambda: recover.note_end(config, event))
+    return 0
+
+
+def tasks(config: dict, args) -> int:
+    """`colony hooks tasks`, the Stop hook, at the end of each turn: stamp the session ledger, and when one of this
+    session's background tasks, such as its `colony wait`, stopped without finishing, block the stop once with a
+    note that says to start it again, so the session carries on and does."""
+    from colony import recover
+
+    event = hook_event()
+    keep_ledger("tasks", lambda: recover.note_session(config, event, "turn"))
+    try:
+        note = recover.task_note(config, event)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"{cli.NAME} hooks tasks: {e}", file=sys.stderr)
+        return 0
+    if note:
+        print(json.dumps({"decision": "block", "reason": note}))
+    return 0
 
 
 def save_state(path: Path, state: dict) -> None:
@@ -693,13 +783,22 @@ def unread(config: dict, args) -> int:
     The cache is `unread` in the state file `colony wait` keeps, ~/.colony/<project>/<session>.json. While a wait runs,
     which its last poll (`polled_at`, under WAIT_FRESH seconds old) shows, the hook makes no network call. Otherwise it
     reads GitHub itself through wait.poll, with the wait's read time and ETag, at most once per UNREAD_EVERY seconds,
-    so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr."""
-    from colony import wait
+    so the lines it shows never print again in a later wait. It never stops the prompt: a problem goes to stderr. It
+    also stamps the session ledger (recover.note_session), from the event's ids alone."""
+    from colony import messages, recover, wait
 
-    hook_event()  # read and dropped: the prompt stays in the window
+    # The prompt stays in the window and is never kept: only the standing orders' correction reminder reads it
+    # (profile.py), and redelivery and the session ledger read only the event's name, source and ids.
+    event = hook_event()
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         return 0
+    kind = "start" if event.get("hook_event_name") == "SessionStart" else "prompt"
+    keep_ledger("unread", lambda: recover.note_session(config, event, kind))
+    from colony import profile  # the standing orders when a session starts, and any change since (profile.py)
+
+    for line in profile.hook_lines(config, me, str(event.get("prompt") or "")):
+        print(line)
     try:
         note = watchdog_note(config, me)
     except (OSError, ValueError, KeyError) as e:
@@ -723,6 +822,9 @@ def unread(config: dict, args) -> int:
     if entries:
         print(f"Unread lines for {me}, which colony wait won't print again:")
         print("\n".join(wait.unread_text(entry) for entry in entries))
+    # After a compaction or a restart, the lines shown before it that the session hasn't acknowledged (messages.py).
+    messages.redeliver_hook(config, me, {key: event.get(key) for key in ("hook_event_name", "source")},
+                            [wait.unread_text(entry) for entry in entries])
     return 0
 
 
@@ -755,3 +857,80 @@ def add_commands(sub) -> None:
     p = actions.add_parser("unread", help="the prompt hook: the lines this session hasn't read, when it starts and "
                                           "before each prompt (Claude Code runs it)")
     p.set_defaults(run=unread)
+    p = actions.add_parser("ended", help="the SessionEnd hook: the session ledger notes when and why this session "
+                                         "ended (Claude Code runs it)")
+    p.set_defaults(run=ended)
+    p = actions.add_parser("tasks", help="the Stop hook: a note to start again a background task of this session's "
+                                         "that stopped (Claude Code runs it)")
+    p.set_defaults(run=tasks)
+    safety = sub.add_parser("safety", help="the code host's own lock on the branches the merge guard protects")
+    steps = safety.add_subparsers(dest="action", metavar="action", required=True)
+    p = steps.add_parser("protect", help="the person turns on a GitHub ruleset for the base, the default branch and "
+                                         "[safety] protect: no direct, forced or deleting push")
+    p.add_argument("--reviews", type=int, default=0, metavar="N",
+                   help="approvals each pull request needs from someone other than its author; 0 by default")
+    p.add_argument("--dry-run", action="store_true", help="print the ruleset it would set, and run nothing")
+    p.set_defaults(run=protect)
+
+
+RULESET = f"{cli.DISPLAY}: protected branches"  # the ruleset's name on GitHub, which `colony safety protect` keeps
+
+
+def ruleset(config: dict, reviews: int) -> dict:
+    """The GitHub ruleset that locks the branches the merge guard protects: the default branch, the base, [safety]
+    protect and the project's other long-lived branches, [project] integration and release and [release] long_lived
+    (branches.py). It refuses a deletion and a force push, and asks for a pull request for every change, with
+    `reviews` approvals from someone other than its author. It never covers what Colony itself pushes for a release:
+    the freeze's holds, `refs/colony/holds`, which no branch ruleset reaches, and the branches of its own a partial
+    release and a branch sync push, `<project>/release-*` and `<project>/sync-*` (release.py, branches.py), which a
+    broad pattern in [safety] protect would otherwise lock."""
+    from colony import branches
+
+    include = ["~DEFAULT_BRANCH", *(f"refs/heads/{branch}" for branch in branches.protected(config))]
+    project = config["project"]["name"]
+    exclude = [f"refs/heads/{project}/release-*", f"refs/heads/{project}/sync-*"]
+    review = {"required_approving_review_count": reviews, "dismiss_stale_reviews_on_push": False,
+              "require_code_owner_review": False, "require_last_push_approval": False,
+              "required_review_thread_resolution": False}
+    return {"name": RULESET, "target": "branch", "enforcement": "active",
+            "conditions": {"ref_name": {"include": include, "exclude": exclude}},
+            "rules": [{"type": "deletion"}, {"type": "non_fast_forward"},
+                      {"type": "pull_request", "parameters": review}]}
+
+
+def protect(config: dict, args) -> int:
+    """`colony safety protect [--reviews N] [--dry-run]`: the person turns on the code host's own lock, which no agent
+    can switch off from its computer, as it can a hook. One ruleset, RULESET, made or brought up to date through `gh
+    api`. Returns 1 when GitHub refuses it, such as for a private repo on a plan without rulesets."""
+    if args.reviews < 0:
+        raise cli.ColonyError("--reviews is a count of approvals, 0 or more")
+    repo, body = config["project"]["repo"], ruleset(config, args.reviews)
+    branches = ", ".join(name.removeprefix("refs/heads/").replace("~DEFAULT_BRANCH", "the default branch")
+                         for name in body["conditions"]["ref_name"]["include"])
+    print(f"ruleset {RULESET!r} on {repo}: {branches}. It refuses a direct push, a force push and a deletion, and "
+          f"asks for a pull request with {args.reviews} approval{'s' if args.reviews != 1 else ''} from someone else.")
+    if not args.reviews:
+        print("A team where someone else reviews should add --reviews 1: GitHub never counts an author's own approval, "
+              "and agents act with their person's login.")
+    if cli.mode(config) == "hack" and config.get("gate", {}).get("merge_after_fast_check"):
+        print(f"Hack: `{cli.NAME} merge` pushes the base, which this ruleset refuses. Set [gate] "
+              "merge_after_fast_check = false, so it opens pull requests instead.")
+    if args.dry_run:
+        print(json.dumps(body, indent=2))
+        print("Nothing ran.")
+        return 0
+    from colony import wait
+
+    try:
+        found = wait.gh("api", f"repos/{repo}/rulesets", "--jq", f'.[] | select(.name == "{RULESET}") | .id').split()
+    except wait.GhError as e:
+        print(f"{cli.NAME} safety protect: GitHub's rulesets were not read: {e}", file=sys.stderr)
+        return 1
+    method, path = ("PUT", f"repos/{repo}/rulesets/{found[0]}") if found else ("POST", f"repos/{repo}/rulesets")
+    run = subprocess.run(["gh", "api", "-X", method, path, "--input", "-"], input=json.dumps(body),
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode:
+        print(f"{cli.NAME} safety protect: GitHub refused the ruleset: {run.stderr.strip()[:300]}", file=sys.stderr)
+        return 1
+    print(f"{'updated' if found else 'made'} the ruleset: https://github.com/{repo}/rules")
+    return 0

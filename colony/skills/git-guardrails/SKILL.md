@@ -14,7 +14,7 @@ A PreToolUse hook reads each Bash call before it runs, and exit code 2 refuses i
 - `git branch -D`
 - `git checkout .` and `git restore .`, which drop every change
 
-A builder's push of its own branch, `git push origin <builder>/<card>`, still runs.
+A builder's push of its own branch, `git push -u origin HEAD:refs/heads/<builder>/<card>`, still runs. It is the one form Colony's own push guard allows ([safety.md](https://github.com/puffin-ai/puffin-colony/blob/main/docs/safety.md#the-push-guard)).
 
 ## Steps
 
@@ -26,7 +26,7 @@ A builder's push of its own branch, `git push origin <builder>/<card>`, still ru
 
    For the personal scope, the command is `python3 ~/.claude/hooks/git_guard.py`.
 4. **Ask about the list**: does the person want a pattern added or removed? Edit `BLOCKED` to match.
-5. **Verify it.** Write a test call to a file, because a guard reads the whole command line, then run `python3 .claude/hooks/git_guard.py < call.json` for each case: `{"tool_input": {"command": "git push --force origin x"}}` must exit 2 with a refusal on stderr, and `{"tool_input": {"command": "git push origin builder-1/12"}}` must exit 0. Quote both results.
+5. **Verify it.** Write a test call to a file, because a guard reads the whole command line, then run `python3 .claude/hooks/git_guard.py < call.json` for each case: `{"tool_input": {"command": "git push --force origin x"}}` and `{"tool_input": {"command": "git push origin HEAD:refs/heads/main"}}`, with your base for `main`, must each exit 2 with a refusal on stderr, and `{"tool_input": {"command": "git push -u origin HEAD:refs/heads/builder-1/12"}}` must exit 0. Quote the results.
 
 ## The script
 
@@ -63,7 +63,7 @@ def main() -> int:
     except (ValueError, KeyError, TypeError):
         return 0
     base = re.escape(base_branch())
-    rules = BLOCKED + [(rf"\bpush\b.*[\s:]{base}(\s|$)", "a push to the base branch")]
+    rules = BLOCKED + [(rf"\bpush\b.*(?:[\s:]|refs/heads/){base}(\s|$)", "a push to the base branch")]
     for part in re.split(r"&&|\|\||;|\n", command):
         if not re.search(r"\bgit\b", part):
             continue

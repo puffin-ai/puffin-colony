@@ -23,6 +23,16 @@ addressed to this session that the wait gathered and hasn't printed. The hook pr
 wait then drops those lines (`listed` names the ones it put there), so the session never reads a line twice.
 `polled_at` is the time of the wait's last poll, which tells the hook a wait is running.
 
+Follow mode (`colony wait --follow`) keeps the wait running: it prints each line as it is due, flushed at once, and
+goes on polling, so a session watches its output as a stream and never restarts the wait. A session keeps one wait:
+a new wait for the same session stops the older one by its exact process id (waits.replace), and every wait on the
+computer is listed in ~/.colony/<project>/waits/, which `colony waits` reads.
+
+A start line can ask for an acknowledgement, in the sender's hidden note (transport.sender_note). The helper's wait
+gives it when it prints the line, as an `eyes` reaction on the comment, which wakes no one; the lead's wait sends the
+start again when none comes (messages.start_check). The lead's wait also raises a line signed with its own name that
+another session posted (an impostor line), by the claim in the sender's note.
+
 The lead's heartbeat: the lead's wait writes ~/.colony/<project>/lead.heartbeat at each poll, every 15 seconds, holding
 its session name, account, token and time. A heartbeat under HEARTBEAT_FRESH old means a lead is alive, so a session
 the person opens beside it claims another lead name (`colony`). The heartbeat is also the lock: `beat` writes it only when it is
@@ -42,6 +52,8 @@ import subprocess
 import sys
 import time
 import uuid
+import hashlib
+import signal
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -76,6 +88,12 @@ ALL = "all"  # @all reaches every lead, and every builder whose lead signed it
 CARRIED = "carried: "  # before a line a board move copied into its closing note, which every wait read already
 REDIRECTED = "redirected: "  # before a line for one of the lead's helpers that the lead didn't sign
 AGENT = "Claude"  # the agent in the post prefix, [<Name>'s Claude]
+ATTACHED = f"{cli.NAME}-attachment"  # the markers around a comment's attached file (transport.attachment)
+ATTACHMENT = re.compile(rf"<!--\s*{ATTACHED}\s*-->")  # where a comment's attachment starts: no line comes after it
+NOTE = f"{cli.NAME}-sent"  # the sender's hidden note after a comment's lines (transport.sender_note)
+NOTE_TEXT = re.compile(rf"<!--\s*{NOTE}\s+(\{{.*?\}})\s*-->", re.S)
+REPLACED = "{name} wait: a newer {name} wait for {me} runs, so this one stopped: start no other"
+KEEP_STARTED = 100  # the start lines a helper's wait remembers it printed, so a start sent again shows once
 CLOCK = SimpleNamespace(now=time.monotonic, sleep=time.sleep)  # the time a wait reads and sleeps on; tests pass a fake
 
 
@@ -179,9 +197,57 @@ def beat(project: str, session: str, account: str, token: str, now: float | None
         if fresh(held, now) and held.get("token", "") != token:
             raise LeadTaken(f"{held.get('session', 'a lead')} on account {held.get('account', 'unknown')} holds the "
                             f"lead: its heartbeat is {int(now - held['at'])} s old")
-        mine = {"session": session, "account": account, "token": token, "at": now}
+        since = held.get("since") if held and held.get("token", "") == token and \
+            isinstance(held.get("since"), (int, float)) else now  # when this claim began, for impostor lines
+        mine = {"session": session, "account": account, "token": token, "at": now, "since": since}
         write_json(heartbeat_path(project, name), mine)
     return mine
+
+
+def claim_of(token: str) -> str:
+    """A lead claim's public mark: a short hash of its token, which a line's sender note carries. The token itself
+    never leaves the computer."""
+    return hashlib.sha256(token.encode()).hexdigest()[:12] if token else ""
+
+
+def strip_extras(body: str) -> str:
+    """A comment's lines alone, without its attached file and its sender's note, which no wait reads as a line.
+    Everything from the attachment's start marker on is cut, so nothing an attached file holds can end the attachment
+    early and pass for a line."""
+    body = body or ""
+    start = ATTACHMENT.search(body)
+    return NOTE_TEXT.sub("", body[:start.start()] if start else body)
+
+
+def note_of(body: str) -> dict:
+    """The sender's note a comment carries, as {from, session, computer, claim, ack, resent}, or {} when it has none or
+    a broken one. The note counts only as the comment's very end, where transport.sender_note puts it, so a note
+    inside an attached file or among the lines is never read. On a public repo anyone can write one, so a reader uses
+    it only to warn or to acknowledge."""
+    body = body or ""
+    found = None
+    for found in NOTE_TEXT.finditer(body):
+        pass
+    if found is None or body[found.end():].strip():
+        return {}
+    try:
+        data = json.loads(found[1])
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def without_note(body: str) -> str:
+    """A comment without its sender's note at its end: its lines and its attachment."""
+    found = None
+    for found in NOTE_TEXT.finditer(body or ""):
+        pass
+    return body[:found.start()].rstrip() if found is not None and not body[found.end():].strip() else body
+
+
+def attached_hint(repo: str, comment: dict) -> str:
+    """What the wait adds to a line whose comment carries an attached file: the command that reads it."""
+    return f" [attached file: gh api repos/{repo}/issues/comments/{comment['id']} --jq .body]"
 
 
 def keep_beat(heartbeat) -> None:
@@ -217,7 +283,7 @@ def taken(body: str, me: Session, card: str) -> list[tuple[str, bool]]:
     `helpers`, even when the lead answers to its name alone, and never when the helper is one of its `others`.
     """
     lines = []
-    for raw in body.splitlines():
+    for raw in strip_extras(body).splitlines():
         line = MARKUP.sub("", raw)
         text = MARKUP.sub("", PREFIX.sub("", line))
         if text.startswith(CARRIED):
@@ -267,6 +333,9 @@ def learn_helpers(state: dict, comments: list, people: frozenset[str] = frozense
             known[status.name.lower()] = status.lead.lower()
             waiting[status.name.lower()] = [status.lead.lower(), status.waiting, status.waiting_since, status.computer]
             heard[status.name.lower()] = max(heard.get(status.name.lower(), ""), comment.get("updated_at") or "")
+            from colony import watch
+
+            watch.remember(state, status)  # the team watch's view of the helper: its intent, reports and agents
 
 
 def with_helpers(me: Session, state: dict) -> Session:
@@ -401,18 +470,84 @@ def poll(repo: str, state: dict, me: Session) -> bool:
     seen = state.setdefault("seen", [])
     for comment in comments:
         card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
+        note = note_of(body)
+        hint = attached_hint(repo, comment) if ATTACHMENT.search(body) else ""
         for line, cant_wait in taken(body, me, card):
             key = f"{comment['id']}:{line}"
             if key not in seen:
                 seen.append(key)
-                entry = unread_entry(repo, comment, card, line)
-                state["pending"].append([unread_text(entry), cant_wait])
+                entry = unread_entry(repo, comment, card, line + hint)
+                text = unread_text(entry)
+                if me.name != cli.LEAD and note.get("ack") is True and START.match(sentence_of(line)):
+                    if note.get("resent") and text in state.get("started", []):
+                        state.setdefault("acks", []).append(comment["id"])  # shown before: acknowledge it alone
+                        continue
+                    state.setdefault("ack_due", {})[text] = comment["id"]
+                state["pending"].append([text, cant_wait])
                 state.setdefault("unread", []).append(entry)
-                state.setdefault("listed", []).append(unread_text(entry))
+                state.setdefault("listed", []).append(text)
+        if me.name == cli.LEAD:
+            impostor(state, me, comment, card, note)
     if comments:
         state["since"] = comments[-1]["updated_at"]
+        from colony import messages
+
+        learned = messages.learn_names(comments, me.people)
+        if learned:
+            state["learned"] = {**(state.get("learned") or {}), **learned}
     del seen[:-KEEP_SEEN]
     return full
+
+
+def impostor(state: dict, me: Session, comment: dict, card: str, note: dict) -> None:
+    """Gather an urgent line when a comment from the team's own logins, signed with the lead's own name, carries
+    another claim than this session's, posted since this claim began (state["claimed_since"]): only one session acts
+    as a lead. A stranger's comment on a public repo never raises one."""
+    from colony import presence
+
+    mine = claim_of(os.environ.get(TOKEN_ENV, ""))
+    sender, claim = str(note.get("from", "")).lower(), str(note.get("claim", ""))
+    if not mine or not claim or claim == mine or sender not in me.names - {cli.LEAD}:
+        return
+    if not presence.by_team(comment, me.people):
+        return
+    if (comment.get("created_at") or comment.get("updated_at") or "") < state.get("claimed_since", ""):
+        return  # before this claim: the lead's own earlier session
+    key = f"impostor:{comment['id']}"
+    if key in state.setdefault("seen", []):
+        return
+    state["seen"].append(key)
+    where = str(note.get("computer") or "an unknown computer")[:60]
+    state["pending"].append([f"urgent: a line signed {sender} on #{card} came from another session, on {where}, "
+                             f"not this one: only one session acts as {sender}; find it with {cli.NAME} who and "
+                             f"{cli.NAME} waits, and stop it", True])
+
+
+def acknowledge(state: dict, texts) -> None:
+    """Queue the acknowledgement of each start line among `texts` that asked for one, now that the session has it,
+    and remember the start, so the same start sent again is acknowledged without showing twice."""
+    due = state.get("ack_due") or {}
+    for text in texts:
+        if text in due:
+            state.setdefault("acks", []).append(due.pop(text))
+            started = state.setdefault("started", [])
+            started.append(text)
+            del started[:-KEEP_STARTED]
+
+
+def send_acks(repo: str, state: dict) -> None:
+    """Acknowledge each queued start line with an `eyes` reaction on its comment, which wakes no one. One that fails
+    stays queued for the next poll, and says why on stderr once."""
+    left = []
+    for comment in state.get("acks") or []:
+        try:
+            gh("api", "-X", "POST", f"repos/{repo}/issues/comments/{comment}/reactions", "-f", "content=eyes")
+        except GhError as e:
+            if not left:
+                print(f"{cli.NAME} wait: a start line's acknowledgement waits for the next poll: {e}", file=sys.stderr)
+            left.append(comment)
+    if state.get("acks"):
+        state["acks"] = left
 
 
 def slim(comment: dict) -> dict:
@@ -462,7 +597,7 @@ def catch_up(repo: str, state: dict, me: Session) -> None:
         for comment in comments:
             card, body = str(comment.get("issue_url", "")).rsplit("/", 1)[-1], comment.get("body") or ""
             starts = {line for line, _ in taken(body, me, card) if START.match(sentence_of(line))}
-            for raw in reversed(body.splitlines()):  # a comment's later line is the newer one
+            for raw in reversed(strip_extras(body).splitlines()):  # a comment's later line is the newer one
                 line = MARKUP.sub("", raw)
                 signed = SIGNED.search(MARKUP.sub("", PREFIX.sub("", line)))
                 if signed and signed[1].lower() in me.names:
@@ -497,6 +632,7 @@ def drop_shown(path: Path, state: dict, listed: set[str]) -> None:
         return
     shown = listed - {unread_text(entry) for entry in cache if isinstance(entry, dict)}
     if shown:
+        acknowledge(state, shown)
         state["pending"] = [item for item in state["pending"] if item[0] not in shown]
         state["unread"] = [entry for entry in state.get("unread", []) if unread_text(entry) not in shown]
         state["listed"] = [text for text in state.get("listed", []) if text not in shown]
@@ -577,17 +713,71 @@ def silent_check(project: str, lead: str):
     return check
 
 
+class Stopped(Exception):
+    """A terminate signal reached the wait: a newer wait for the same session, `colony waits --stop`, or the system."""
+
+
+def _stopped(signum, frame):
+    raise Stopped()
+
+
+@contextmanager
+def stop_on_terminate():
+    """While it holds, a terminate signal ends the wait cleanly instead of killing it mid-write. Outside the main
+    thread, or where the system has no such signal, it changes nothing."""
+    try:
+        old = signal.signal(signal.SIGTERM, _stopped)
+    except (ValueError, OSError, AttributeError):
+        old = None
+    try:
+        yield
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGTERM, old)
+
+
 def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 60, clock=None,
-         stale=None, heartbeat=None, status=None, outbox=None, silent=None, freeze=None) -> int:
+         stale=None, heartbeat=None, status=None, outbox=None, silent=None, freeze=None, follow: bool = False,
+         starts=None) -> int:
     """Poll until `me` has lines due, print them and return 0; return 1 after GIVE_UP failed polls in a row. A builder's
     lines are due at once. The lead's are due at the end of the first `digest` seconds that gathered one, or at once
-    when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check (stale_check), runs at the start and at each digest, within its interval.
+    when one can't wait. Gathered lines stay in the state file until they print. `stale`, the lead's stale-card check
+    (stale_check), runs at the start and at each digest, within its interval.
     A gathered line the prompt hook showed from the unread cache meanwhile never prints (drop_shown). `heartbeat`, the
     lead's, runs at each poll (beat); a LeadTaken from it ends the wait, and any other failure goes to stderr.
     `outbox` posts the hooks' lines that failed to post (guards.flush_outbox) at each poll, and never raises. `silent`,
-    the lead's silent_check, gathers its `urgent:` lines at each poll."""
+    the lead's silent_check and every session's standing-orders check (profile.watcher), gathers lines that can't
+    wait at each poll, and so does `starts`, the lead's check of its unacknowledged start lines (messages.start_check).
+
+    With `follow`, the wait never ends on its lines: it prints each batch as it is due, flushed, and goes on, and past
+    GIVE_UP failed polls it says so once and keeps trying. Either way it ends when a newer wait for the same session
+    takes over, which stops this one by its process id or at its next poll, or on a terminate signal."""
+    from colony import waits
+
     clock = clock or CLOCK
-    path = state_path(project, state_name(me.name))
+    name = state_name(me.name)
+    listener = claim_listener(project, name, follow)  # first, so an older wait for this session stops before the read
+    try:
+        with stop_on_terminate():
+            return _wait(repo, project, me, digest, clock, stale, heartbeat, status, outbox, silent, freeze, follow,
+                         starts, listener)
+    except Stopped:
+        if still_listening(project, name, listener):
+            print(f"{cli.NAME} wait for {me.name} stopped on a terminate signal", flush=True)
+        else:
+            print(REPLACED.format(name=cli.NAME, me=me.name), flush=True)
+        return 0
+    finally:
+        waits.forget(project)
+
+
+def _wait(repo, project, me, digest, clock, stale, heartbeat, status, outbox, silent, freeze, follow, starts,
+          listener) -> int:
+    """The body of wait, once this wait listens for its session."""
+    from colony import messages
+
+    name = state_name(me.name)
+    path = state_path(project, name)
     state = read_json(path, {})
     # The prompt hook writes `since` when a helper gets its first prompt, before its first wait, so the wait marks
     # its own catch-up, per Claude Code session: a session that takes over a builder's name catches up too.
@@ -604,9 +794,12 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             print(f"{cli.NAME} wait: could not look back for an older start line, reading the last hour only: {e}",
                   file=sys.stderr)
+    if me.name == cli.LEAD:
+        held = read_heartbeat(project, name if named() else "") or {}
+        since = held.get("since") if isinstance(held.get("since"), (int, float)) else time.time()
+        state["claimed_since"] = time.strftime(STAMP, time.gmtime(since))
     failures, digest_at = 0, clock.now() + digest
-    listener = claim_listener(project, state_name(me.name))  # a named lead's own name, so leads keep apart
-    limited = False
+    limited = lost = False
     last_wall, last_mono = time.time(), time.monotonic()
     add_stale(state, stale)
     while True:
@@ -614,6 +807,9 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
         try:
             more = poll(repo, state, me)
             failures = 0
+            if lost:
+                print(f"{cli.NAME} wait: GitHub reads again", flush=True)
+                lost = False
         except RateLimited as e:
             if not limited:
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
@@ -622,9 +818,13 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             continue
         except (GhError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
             failures, more = failures + 1, False
-            if failures >= GIVE_UP:
+            if failures >= GIVE_UP and not follow:
                 print(f"{cli.NAME} wait: {e}", file=sys.stderr)
                 return 1
+            if failures >= GIVE_UP and not lost:  # a following wait says so once, in its stream, and keeps trying
+                print(f"{cli.NAME} wait: {e}; it keeps trying every {INTERVAL} seconds", flush=True)
+                lost = True
+        messages.remember_names(project, state)
         if me.name == cli.LEAD:
             from colony import watch
 
@@ -632,10 +832,10 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             if gap := watch.slept(last_wall, last_mono, wall, mono):
                 state["pending"].append([gap, True])
             last_wall, last_mono = wall, mono
-        if not still_listening(project, state_name(me.name), listener):
+        if not still_listening(project, name, listener):
             # Another wait for this session started since: it reads every line itself, so this one stops without
             # writing the state they share, and says so, so its session starts no third one.
-            print(f"{cli.NAME} wait: a newer {cli.NAME} wait for {me.name} runs, so this one stopped: start no other")
+            print(REPLACED.format(name=cli.NAME, me=me.name), flush=True)
             return 0
         state["polled_at"] = time.time()
         if heartbeat is not None:
@@ -648,14 +848,29 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             freeze()  # the team lead's: posts the freeze once its time comes (demo.freeze_check), and never raises
         if silent is not None:
             state["pending"] += [[line, True] for line in silent(state)]
+        if starts is not None:
+            state["pending"] += [[line, True] for line in starts()]
         drop_shown(path, state, listed)
+        if me.name == cli.LEAD:
+            from colony import chatter  # a helper's chatter waits for the digest, and prints folded
+
+            state["pending"] = chatter.calm(state["pending"], me.people)
         pending = state["pending"]
         if pending and (me.name != cli.LEAD or any(cant_wait for _, cant_wait in pending) or clock.now() >= digest_at):
-            print("\n".join(line for line, _ in pending))
+            lines = [line for line, _ in pending]
+            if me.name == cli.LEAD:
+                lines = chatter.fold(project, name, lines, me.people)
+            print("\n".join(lines), flush=True)
+            acknowledge(state, lines)
+            messages.record_delivered(project, name, lines)
             state["pending"], state["unread"], state["listed"] = [], [], []
-            state.pop("polled_at", None)  # this wait has ended, so the prompt hook reads GitHub until the next one
-            write_json(path, state)
-            return 0
+            if not follow:
+                send_acks(repo, state)
+                state.pop("polled_at", None)  # this wait has ended, so the prompt hook reads GitHub until the next one
+                write_json(path, state)
+                return 0
+            digest_at = clock.now() + digest
+        send_acks(repo, state)
         if clock.now() >= digest_at:
             digest_at = clock.now() + digest
             add_stale(state, stale)
@@ -664,11 +879,20 @@ def wait(repo: str, project: str, me: Session, digest: float = DIGEST_MINUTES * 
             clock.sleep(INTERVAL)
 
 
-def claim_listener(project: str, name: str) -> str:
+def claim_listener(project: str, name: str, follow: bool = False) -> str:
     """Make this wait the one that listens for session `name`, and return its token: a session keeps one wait, and
-    a second one, such as an orphan left from before, would deliver each line twice."""
+    a second one, such as an orphan left from before, would deliver each line twice. The older wait stops at once,
+    by its exact process id once it is checked to be a colony wait (waits.replace), or else at its next poll, and
+    this wait goes on the computer's list of waits (waits.register)."""
+    from colony import waits
+
+    path = state_path(project, f"{name}-listener")
+    held = read_json(path, None)
     token = uuid.uuid4().hex
-    write_json(state_path(project, f"{name}-listener"), {"pid": os.getpid(), "token": token})
+    write_json(path, {"pid": os.getpid(), "token": token, "started": time.time(), "follow": follow})
+    if isinstance(held, dict) and held.get("token") != token:
+        waits.replace(project, held.get("pid"), name)
+    waits.register(project, name, token, follow)
     return token
 
 
@@ -773,8 +997,8 @@ def session(config: dict, args, me: str) -> Session:
 def run(config: dict, args, clock=None) -> int:
     """`colony wait`: wait as $COLONY_SESSION on the repo colony.toml names. The lead's --waiting-on lists the cards
     the batch waits on, and outside hack mode the lead's wait makes sure the coordination issue exists for other
-    leads to post on."""
-    from colony import transport
+    leads to post on. --follow keeps it running, printing each line as it comes."""
+    from colony import messages, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
@@ -783,14 +1007,23 @@ def run(config: dict, args, clock=None) -> int:
     if shutil.which("gh") is None:
         raise cli.ColonyError("gh is not on PATH")
     repo, project, cards = config["project"]["repo"], config["project"]["name"], getattr(args, "waiting_on", None)
-    from colony import guards, presence
+    follow = bool(getattr(args, "follow", False))
+    from colony import guards, presence, profile
 
     outbox = functools.partial(guards.flush_outbox, config)
+    orders = profile.watcher(config, me)  # a change to the standing orders ends the wait at once (profile.py)
+    from colony import capacity  # a usage limit that reset, the account it runs on, sleep, services, the computer
+
     if me != cli.LEAD:
         if cards is not None:
             raise cli.ColonyError("--waiting-on is for the lead's wait")
         status = presence.keeper(config, args, me, "helper", lead_name(config, args)) if named() else None
-        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox)
+        lookout = capacity.helper_check(config, me, lead_name(config, args) if named() else cli.LEAD)
+        from colony import watch  # its pulse, its reporting rhythm and its helper agents' time limit
+
+        rhythm = watch.helper_watch(config, me, lead_name(config, args) if named() else cli.LEAD)
+        return wait(repo, project, session(config, args, me), clock=clock, status=status, outbox=outbox,
+                    silent=lambda state: orders(state) + lookout(state) + rhythm(state), follow=follow)
     waiting_path = state_path(project, f"{state_name(me)}-waiting")
     if cards is not None:
         write_json(waiting_path, cards)
@@ -804,20 +1037,24 @@ def run(config: dict, args, clock=None) -> int:
     heartbeat = functools.partial(beat, project, name, account, token, named=named())
     keep_beat(heartbeat)  # before any poll, so a second session never holds the same lead
     status = presence.keeper(config, args, name, "lead") if named() else None
-    silent = None
-    if named():  # only a named lead's helpers post a status
-        from colony import watch
+    lookout = capacity.lead_check(config, name)
+    from colony import watch  # the team watch: helpers idle without a reason, missed reports, late cards
 
+    team = watch.lead_watch(config, name)
+    silent = lambda state: lookout(state) + orders(state) + team(state)  # noqa: E731
+    if named():  # only a named lead's helpers post a status
         quiet, stuck = silent_check(project, name), watch.stuck_check(name)
-        silent = lambda state: quiet(state) + stuck(state, time.time())  # noqa: E731
+        silent = lambda state: quiet(state) + stuck(state, time.time()) + lookout(state) + orders(state) + \
+            team(state)  # noqa: E731
         watch.keep_awake(project, os.environ.get("CLAUDE_PID", ""))
     freeze = None
     if hack(config):
         from colony import demo
 
         freeze = demo.freeze_check(config, cli.person_of(config, args))
+    starts = messages.start_check(config, project, state_name(me))
     return wait(repo, project, session(config, args, me), digest_seconds(config), clock, stale, heartbeat, status,
-                outbox=outbox, silent=silent, freeze=freeze)
+                outbox=outbox, silent=silent, freeze=freeze, follow=follow, starts=starts)
 
 
 def check_mention(config: dict, to: str, own: frozenset[str], me: str) -> None:
@@ -838,30 +1075,42 @@ def compose(to: str, sentence: str, sender: str) -> str:
     return f"{to} {sentence} (from {sender})" if to.startswith("@") else f"for {to}: {sentence} (from {sender})"
 
 
-def sentences(args) -> list[str]:
+def sentences(args, limit: int = MAX_LINE) -> list[str]:
     """The command's sentences, one or several (`post` and `say` take each as its own line), with their spaces
     squeezed. A sentence is checked as the sender wrote it: the `for <to>: … (from <sender>)` around it, an
-    `urgent:` that --urgent adds and a `(#<card>)` don't count."""
+    `urgent:` that --urgent adds and a `(#<card>)` don't count. `limit` is [messages] max_line (messages.max_line)."""
     given = [args.sentence] if isinstance(args.sentence, str) else list(args.sentence)
     found = [" ".join(sentence.split()) for sentence in given]
     for sentence in found:
-        check_sentence(sentence)
+        check_sentence(sentence, limit)
     return found
 
 
-def check_sentence(sentence: str) -> None:
-    """Refuse an empty sentence, or one over MAX_LINE characters, saying how much to cut."""
+def check_sentence(sentence: str, limit: int = MAX_LINE) -> None:
+    """Refuse an empty sentence, or one over `limit` characters, saying how much to cut, and that a longer note
+    travels as an attached file."""
     if not sentence:
         raise cli.ColonyError("a line holds one sentence, and this one is empty")
-    if len(sentence) > MAX_LINE:
-        raise cli.ColonyError(f"a line holds one sentence of at most {MAX_LINE} characters, and this one has "
-                              f"{len(sentence)}, so cut {len(sentence) - MAX_LINE}: {sentence[:40]}…")
+    if len(sentence) > limit:
+        raise cli.ColonyError(f"a line holds one sentence of at most {limit} characters, and this one has "
+                              f"{len(sentence)}, so cut {len(sentence) - limit}, or put the rest in a file and send it "
+                              f"with --attach <file>: {sentence[:40]}…")
 
 
 def checked(line: str, sentence: str) -> str:
     """The line, once its sentence passes check_sentence; what Colony wraps around the sentence doesn't count."""
     check_sentence(sentence)
     return line
+
+
+def person_warning(config: dict, to: str, said: list[str], code: int = 0) -> int:
+    """After a line went out, the plain-words check (plain.warn) on the sentences of one for a person, `@login` or
+    `@all`, printed as a warning beside it and never a stop; then `code`, the post's own exit code."""
+    if to.startswith("@"):
+        from colony import plain
+
+        plain.warn(config, " ".join(said))
+    return code
 
 
 def say(config: dict, args) -> int:
@@ -871,34 +1120,42 @@ def say(config: dict, args) -> int:
     the coordination issue, the issue rotates when it is full (tidy.keep_short)."""
     from colony import tidy, transport
 
+    from colony import messages
+
     if os.environ.get(cli.SESSION_ENV, "").lower() != cli.LEAD:
         raise cli.ColonyError("say is for leads: a builder posts its line on its card, for its lead")
     transport.check_transport(config)
-    me, to, said = lead_name(config, args), args.to.lower(), sentences(args)
+    me, to, said = lead_name(config, args), args.to.lower(), sentences(args, messages.max_line(config))
     if getattr(args, "urgent", False):
         said = [sentence if CANT_WAIT.match(sentence) else f"urgent: {sentence}" for sentence in said]
     if to.startswith("@"):
         check_mention(config, to, person_logins(config, cli.person_of(config, args)), me)
-    elif not to.endswith(f"-{cli.LEAD}") and cli.SESSION_NAME.fullmatch(to) and to != ALL:
+    elif not to.endswith(f"-{cli.LEAD}") and cli.SESSION_NAME.fullmatch(to) and to != ALL \
+            and not messages.known_lead(config, to):
         raise cli.ColonyError(f"say is for another lead, such as sam-lead, or @login; for one of your helpers, use "
                               f"{cli.NAME} post {to} (you are {me})")
     elif to == ALL:
         to = f"@{ALL}"
     elif to == me or not cli.SESSION_NAME.fullmatch(to):
         raise cli.ColonyError(f"say needs another lead's name, such as sam-lead, or @login (you are {me})")
+    messages.check_lines(config, args, cli.LEAD, me, to, said)
     lines = [compose(to, sentence, me) for sentence in said]
     if getattr(args, "dry_run", False):
-        return dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
+        code = dry_post(lines, f"#{board_number(config)}" if hack(config) else "the coordination issue")
+        return person_warning(config, to, said, code)
     if getattr(args, "private", False):
         from colony import private
 
-        return private.send(config, to, lines, me)
+        code = private.send(config, to, lines, me, attached=messages.attached(config, args))
+        return person_warning(config, to, said, code)
     if not hack(config):
         tidy.keep_short(config, coordination_issue(config["project"]["repo"], config["project"]["name"]))
-    number = transport.send(config, to, "\n".join(lines))  # one comment: every line goes out, or none does
+    body = messages.body(config, args, "\n".join(lines), me, starts=False)
+    number = transport.send(config, to, body)  # one comment: every line goes out, or none does
     for line in lines:
         print(f"#{number} {line}")
-    return 0
+    messages.after_post(config, args, number, to, "the board" if hack(config) else "the coordination issue")
+    return person_warning(config, to, said)
 
 
 def post(config: dict, args) -> int:
@@ -911,23 +1168,27 @@ def post(config: dict, args) -> int:
 
     A line has a kind (tidy.check_kind): a helper sends done, question:, blocked: or urgent:, and the lead sends its
     helpers start:, answer: or urgent:. The lead's line for another lead or a person is free text. A helper's `done`
-    also moves its card to In review on the board (in_review)."""
+    also moves its card to In review on the board (in_review), and carries the branch's changed files, from its diff
+    against the base (cards.done_files)."""
     from colony import tidy, transport
 
     me = os.environ.get(cli.SESSION_ENV, "").lower()
     if not me:
         raise cli.ColonyError(f"set {cli.SESSION_ENV} to this session's name, such as lead")
     transport.check_transport(config)
+    from colony import messages
+
     on_board, card = hack(config), getattr(args, "card", None)
     # a named lead signs with its name, which its helpers take lines from; so does every lead on the hack board
     sender = lead_name(config, args) if me == cli.LEAD and (on_board or named()) else me
-    to, said = args.to.lower(), sentences(args)
+    to, said = args.to.lower(), sentences(args, messages.max_line(config))
     to = f"@{ALL}" if to == ALL else to  # `all` is everyone, as @all is
+    own_lead = to == cli.LEAD  # `lead` is always the sender's own lead, whatever name it goes by
     if to.startswith("@"):
         own = person_logins(config, cli.person_of(config, args)) if me == cli.LEAD else frozenset()
         check_mention(config, to, own, me)
     else:
-        if to == cli.LEAD and (on_board or (me != cli.LEAD and named())):
+        if own_lead and (on_board or (me != cli.LEAD and named())):
             to = lead_name(config, args)  # a helper's `lead` is its own lead, by name, so no other lead takes it
         if not cli.SESSION_NAME.fullmatch(to) or to in (me, sender) or to.isdigit():
             raise cli.ColonyError(f"post needs another session's name, such as lead or builder-2, or @login "
@@ -938,17 +1199,30 @@ def post(config: dict, args) -> int:
         said = [sentence if CANT_WAIT.match(sentence) else f"urgent: {sentence}" for sentence in said]
     for sentence in said:
         tidy.check_kind(me == cli.LEAD, to, sentence)
+    messages.check_lines(config, args, me, sender, to, said, own_lead=own_lead)
     about = f" (#{card})" if on_board and card is not None else ""
     lines = [compose(to, sentence + about, sender) for sentence in said]
     if getattr(args, "dry_run", False):
-        return dry_post(lines, f"#{board_number(config) if on_board else card}")
+        return person_warning(config, to, said, dry_post(lines, f"#{board_number(config) if on_board else card}"))
+    starts = me == cli.LEAD and not to.startswith("@") and any(START.match(sentence) for sentence in said)
+    text = "\n".join(lines)
+    if me != cli.LEAD and card is not None and not on_board and any(DONE.match(sentence) for sentence in said):
+        from colony import cards  # a helper's done line carries its branch's changed files, read from its diff
+
+        text = cards.done_files(config, card, text)
+    body = messages.body(config, args, text, sender, starts=starts)
     # One comment: every line goes out, or none does.
-    number = transport.send(config, to, "\n".join(lines), card=None if on_board else card)
+    number = transport.send(config, to, body, card=None if on_board else card)
     for line in lines:
         print(f"#{number} {line}")
+    messages.after_post(config, args, number, to, "the board" if on_board else f"card #{number}", body=body)
     if me != cli.LEAD and card is not None and any(DONE.match(sentence) for sentence in said):
         in_review(config, card)
-    return 0
+    if me != cli.LEAD and any(DONE.match(sentence) for sentence in said):
+        from colony import watch
+
+        watch.note_done(config, card, to)  # it now waits for its next card, on purpose
+    return person_warning(config, to, said)
 
 
 def read_private(config: dict, args) -> int:
@@ -1017,6 +1291,9 @@ def add_commands(sub, wait_parser) -> None:
     """cli.py's route to this module: wait's --waiting-on, and the `say` and `post` commands."""
     wait_parser.add_argument("--waiting-on", type=card_numbers, metavar="N,N",
                              help="the lead: the cards the batch waits on, whose done lines come at once; with none, every done comes at once")
+    wait_parser.add_argument("--follow", action="store_true",
+                             help="keep running: print each line as it comes, flushed, instead of exiting after the "
+                                  "first; run it where your agent tool streams a command's output")
     p = sub.add_parser("say", help="a lead: post a line for another lead on the coordination issue (the board in "
                                    "hack mode)")
     p.add_argument("to", metavar="lead-name", help="the other lead, such as sam-lead, or @login for that person's "
@@ -1030,6 +1307,7 @@ def add_commands(sub, wait_parser) -> None:
     p.add_argument("--private", action="store_true",
                    help="on a public repo, post on the private board in [messages] private_repo, with a pointer alone "
                         "on the public board: for a security finding, a key's whereabouts, or anything not for strangers")
+    line_options(p)
     p.set_defaults(run=say)
     p = sub.add_parser("private", help="a lead: print the private lines for this session that colony hasn't shown yet")
     p.set_defaults(run=read_private)
@@ -1042,4 +1320,20 @@ def add_commands(sub, wait_parser) -> None:
     p.add_argument("--urgent", action="store_true", help="start the sentence with urgent:, so it can't wait")
     p.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS,
                    help="print the lines it would post, and post nothing")
+    line_options(p)
     p.set_defaults(run=post)
+
+
+def line_options(p) -> None:
+    """The options `post` and `say` share: an attached file, a nudge, and a name no session has yet."""
+    p.add_argument("--attach", metavar="FILE",
+                   help="attach a file's text under the line, folded, so a long note travels on GitHub to every "
+                        "computer; - reads it from stdin")
+    p.add_argument("--nudge", action="store_true",
+                   help="also type a short pointer into the recipient's cmux workspace on this computer, and check it "
+                        "was submitted ([messages] nudge sets when it happens by itself)")
+    p.add_argument("--allow-unknown", action="store_true",
+                   help="send to a name no live or registered session has, such as a helper opening right now")
+    p.add_argument("--public", action="store_true",
+                   help="attach the file though the repo is public, so anyone can read it: only when your person "
+                        "says it may be public")

@@ -7,8 +7,10 @@ place at most every STATUS_EVERY seconds, and never adds a second one (keep). A 
 as gone. A lead from before lead names, with no status, shows through its heartbeat on this computer
 (wait.heartbeat_path).
 
-The lead registry, .colony/leads.toml, keeps each lead's person and claimed folders: a lead claims its folders with
-`colony claim`, which refuses folders a live lead already holds. A lead with no folders holds the rest of the repo.
+The lead registry keeps each lead's person and claimed folders: a lead claims its folders with `colony claim`, which
+refuses folders a live lead already holds. One clone keeps it in one file every worktree of it shares, and each lead's
+status carries its folders, whether it holds the rest of the repo, and its loans and borrows to every computer
+(folders.py). One lead with no folders holds the rest of the repo.
 """
 from __future__ import annotations
 
@@ -19,7 +21,6 @@ import platform
 import re
 import sys
 import time
-import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +32,6 @@ STATUS_EVERY = 5 * 60  # a status comment is edited in place this often
 STATUS_STALE = 15 * 60  # three missed edits: the session counts as gone
 MARK = f"{cli.NAME}-status"
 HIDDEN = re.compile(rf"<!--\s*{MARK}\s+(\{{.*?\}})\s*-->", re.S)
-LEADS_FILE = "leads.toml"
 STREAM = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
@@ -52,7 +52,13 @@ class Status:
     branch: str = ""  # the branch checked out there
     waiting: str = ""  # the tool call its session waits on for an answer, such as Bash, or ""
     waiting_since: float = 0.0
+    rest: bool = False  # a lead that holds the rest of the repo
+    since: float = 0.0  # when the lead claimed its folders; 0 for a lead from before this field
+    active: float = 0.0  # when the lead's own session last acted, which tells a silent lead (folders.silent); 0 unknown
+    lent: list[dict] = field(default_factory=list)  # a lead's loans: {to, paths, cards}
+    borrowed: list[dict] = field(default_factory=list)  # what a lead borrowed: {from, paths, cards}
     comment: int | None = None  # the status comment's id, when it came from one
+    watch: dict = field(default_factory=dict)  # its intent, last report, activity and helper agents (watch.published)
 
 
 def computer() -> str:
@@ -71,13 +77,25 @@ def body(status: Status) -> str:
     """A status comment: readable lines for people, and the hidden JSON copy `read` parses. It addresses no one, so
     no wait takes a line from it."""
     when = datetime.fromtimestamp(status.at, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    held = ', '.join(status.folders) or ('the rest of the repo' if status.rest or not status.since else 'none')
     lines = [f"**{status.name}** ({status.kind}" + (f" of {status.lead}" if status.lead else "") + ") status",
              f"- person {status.person}, computer {status.computer}, account {status.account}",
-             f"- folders: {', '.join(status.folders) or 'the rest of the repo'}",
+             f"- folders: {held}",
+             *[f"- lends {', '.join(g['paths'])} to {g.get('to')} for {cards(g)}" for g in status.lent],
+             *[f"- borrowed {', '.join(g['paths'])} from {g.get('from')} for {cards(g)}" for g in status.borrowed],
              f"- room: {'; '.join(status.room) or 'no reading'}",
              f"- updated {when}, edited in place every {STATUS_EVERY // 60} minutes"]
+    from colony import watch
+
+    if doing := watch.readable(status.watch, status.at):
+        lines.insert(4, f"- doing: {doing}")
     data = {key: value for key, value in vars(status).items() if key != "comment"}
     return "\n".join(lines) + f"\n\n<!-- {MARK} {json.dumps(data, separators=(',', ':'))} -->"
+
+
+def cards(grant: dict) -> str:
+    """A grant's cards, such as #12, #14."""
+    return ", ".join(f"#{card}" for card in grant.get("cards", [])) or "no card"
 
 
 TOOL = re.compile(r"[A-Za-z0-9_.:-]{1,64}")  # a tool's name, such as Bash or mcp__x__y
@@ -125,8 +143,31 @@ def parse(text: str, comment: int | None = None) -> Status | None:
         setattr(status, key, [text for item in (given if isinstance(given, list) else [])[:LIST_MAX]
                               if (text := clean_text(item))])
     status.at, status.waiting_since = clean_number(data.get("at")), clean_number(data.get("waiting_since"))
+    status.since, status.active = clean_number(data.get("since")), clean_number(data.get("active"))
+    status.rest = data.get("rest") is True
+    status.lent, status.borrowed = clean_grants(data.get("lent"), "to"), clean_grants(data.get("borrowed"), "from")
     status.comment = comment
+    from colony import watch
+
+    status.watch = watch.clean(data.get("watch"))
     return status
+
+
+def clean_grants(given, who: str) -> list[dict]:
+    """A status's loans or borrows, from a comment anyone could write: each names a session, its paths as short lines,
+    and its cards as whole numbers; any other entry drops."""
+    found = []
+    for item in (given if isinstance(given, list) else [])[:LIST_MAX]:
+        if not isinstance(item, dict):
+            continue
+        name = clean_text(item.get(who)).lower()
+        paths = [text for path in (item.get("paths") if isinstance(item.get("paths"), list) else [])[:LIST_MAX]
+                 if (text := clean_text(path))]
+        numbers = [card for card in (item.get("cards") if isinstance(item.get("cards"), list) else [])[:LIST_MAX]
+                   if isinstance(card, int) and not isinstance(card, bool)]
+        if cli.SESSION_NAME.fullmatch(name) and paths and numbers:
+            found.append({who: name, "paths": paths, "cards": numbers})
+    return found
 
 
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}  # GitHub's author_association for someone with access to the repo
@@ -173,7 +214,7 @@ def read(config: dict) -> list[Status]:
 
 def local(config: dict, now: float | None = None) -> list[Status]:
     """The leads alive on this computer by their heartbeat alone, including a lead from before lead names."""
-    from colony import wait
+    from colony import folders, wait
 
     folder = wait.state_path(config["project"]["name"], cli.LEAD).parent
     found = []
@@ -181,8 +222,13 @@ def local(config: dict, now: float | None = None) -> list[Status]:
         beat = wait.read_json(path, None)
         if isinstance(beat, dict) and wait.fresh(beat if isinstance(beat.get("at"), (int, float)) else None, now):
             name = beat.get("session") or path.stem
+            try:
+                held = folders.mine(name)
+            except cli.ColonyError:
+                held = {"folders": [], "rest": False, "since": 0.0, "lent": [], "borrowed": []}
             found.append(Status(name, "lead", person=name.split("-", 1)[0], account=beat.get("account", ""),
-                                computer=computer(), at=beat["at"], folders=claimed(name)))
+                                computer=computer(), at=beat["at"], folders=held["folders"], rest=held["rest"],
+                                since=held["since"], lent=held["lent"], borrowed=held["borrowed"]))
     return found
 
 
@@ -204,43 +250,41 @@ def everyone(config: dict, now: float | None = None) -> tuple[list[Status], list
     names = {status.name for status in alive}
     alive += [status for status in local(config, now) if status.name not in names]
     gone = [status for status in statuses if status.name not in {s.name for s in alive}]
-    return alive, gone, note
+    from colony import folders
+
+    return folders.local_view(alive), gone, note
 
 
-# The lead registry: .colony/leads.toml
+# The lead registry, which every worktree of the clone shares (folders.py)
 
 
 def leads_path() -> Path:
-    """The repo's lead registry, .colony/leads.toml."""
-    return cli.repo_root() / cli.DIR / LEADS_FILE
+    """The clone's lead registry, <git common dir>/colony/leads.json, which every worktree of it shares."""
+    from colony import folders
+
+    return folders.store_path()
 
 
 def registry() -> dict[str, dict]:
-    """Each lead in .colony/leads.toml with its person and folders, or {} when there is none."""
+    """Each lead in the clone's registry with its person and folders, or {} when there is none or no clone."""
+    from colony import folders
+
     try:
-        data = tomllib.loads(leads_path().read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+        return folders.leads()
+    except cli.ColonyError:
         return {}
-    leads = data.get("leads", {})
-    return leads if isinstance(leads, dict) else {}
 
 
 def claimed(name: str) -> list[str]:
     """The folders a lead claimed in the registry, [] for the rest of the repo or an unknown lead."""
-    folders = registry().get(name, {}).get("folders", [])
-    return [str(folder) for folder in folders] if isinstance(folders, list) else []
+    return list(registry().get(name, {}).get("folders", []))
 
 
 def write_registry(leads: dict[str, dict]) -> None:
-    """Write .colony/leads.toml, one table per lead."""
-    lines = ["# Each lead's person and claimed folders. `colony claim` writes it; a lead with no folders holds the rest.",
-             ""]
-    for name in sorted(leads):
-        lead = leads[name]
-        lines += [f'[leads."{name}"]', f'person = {json.dumps(lead.get("person", ""))}',
-                  f'folders = {json.dumps(list(lead.get("folders", [])))}', ""]
-    leads_path().parent.mkdir(parents=True, exist_ok=True)
-    leads_path().write_text("\n".join(lines))
+    """Replace the registry's leads, keeping each kept lead's rest, loans and borrows (folders.write_leads)."""
+    from colony import folders
+
+    folders.write_leads(leads)
 
 
 def folder(path: str) -> str:
@@ -290,12 +334,25 @@ def mine(config: dict, args, name: str, kind: str, lead: str = "") -> Status:
     rooms = [cli.room_text(account, folder) for account, folder in accounts]
     status = Status(name, kind, person=person, lead=lead, computer=computer(), account=cli.current_account(config),
                     room=rooms, folders=claimed(lead or name), at=time.time())
+    if kind == "lead":
+        from colony import folders, watch
+
+        try:
+            held = folders.mine(name)
+        except cli.ColonyError:
+            held = {"rest": False, "since": 0.0, "lent": [], "borrowed": []}
+        status.rest, status.since = held["rest"], held["since"]
+        status.lent, status.borrowed = held["lent"], held["borrowed"]
+        status.active = float(watch.activity().get("active") or 0.0)
     if kind == "helper":
         from colony import watch
 
         doing = watch.activity()
         status.work, status.waiting = doing.get("work", ""), doing.get("waiting", "")
         status.waiting_since, status.branch = doing.get("waiting_since", 0.0), watch.branch(status.work)
+    from colony import watch
+
+    status.watch = watch.published(config["project"]["name"], name)
     return status
 
 
@@ -336,11 +393,17 @@ def keeper(config: dict, args, name: str, kind: str, lead: str = ""):
     last = {"error": ""}  # the error printed last: the same one again stays quiet, since the wait polls every 15 s
 
     def run() -> None:
+        from colony import folders
+
         state = wait.read_json(path, {})
         state = state if isinstance(state, dict) else {}
         try:
+            if kind == "lead" and time.time() - float(state.get("status_at", 0)) >= STATUS_EVERY:
+                folders.settle_quietly(config, name)  # an ask whose holder lent, or went silent
             if keep(config, mine(config, args, name, kind, lead), state):
                 wait.write_json(path, state)
+                if kind == "lead":
+                    folders.seen(name)
             last["error"] = ""
         except (cli.ColonyError, OSError, ValueError, KeyError) as e:
             if str(e) != last["error"]:
@@ -356,10 +419,18 @@ def ago(at: float, now: float) -> str:
     return f"{cli.ago(max(0.0, now - at))} ago"
 
 
-def describe(status: Status, now: float) -> str:
+def describe(status: Status, now: float, config: dict | None = None) -> str:
     """One session's line in `colony who`."""
+    from colony import folders as registry_
+
     where_ = status.computer or "unknown computer"
-    held = ", ".join(status.folders) or "the rest of the repo"
+    held = ", ".join(status.folders) or ("the rest of the repo" if registry_.holds_rest(status) else "none")
+    grants = [f"lends {', '.join(g['paths'])} to {g.get('to')} for {cards(g)}" for g in status.lent]
+    grants += [f"borrowed {', '.join(g['paths'])} from {g.get('from')} for {cards(g)}" for g in status.borrowed]
+    if grants:
+        held += f"; {'; '.join(grants)}"
+    if config is not None and registry_.silent(config, status, now):
+        held += f". Silent for {int(registry_.silent_for(status, now) // 60)} minutes, so its folders can be borrowed"
     who = f"{status.name}" + (f" (helper of {status.lead})" if status.kind == "helper" else "")
     room = f" Room: {'; '.join(status.room)}." if status.room else ""
     folders = f" Folders: {held}." if status.kind == "lead" else ""
@@ -401,12 +472,18 @@ def who(config: dict, args) -> int:
         return 0
     print(f"Leads ({len(leads)}):" if leads else "Leads: none alive.")
     for status in sorted(leads, key=lambda s: s.name):
-        print(describe(status, now))
+        print(describe(status, now, config))
     print(f"Helpers ({len(helpers)}):" if helpers else "Helpers: none alive.")
     for status in sorted(helpers, key=lambda s: (s.lead, s.name)):
-        print(describe(status, now))
+        print(describe(status, now, config))
+    from colony import folders
+
+    gone, left_out = folders.long_gone(config, gone, now)
     if gone:
         print("Gone, no status in 15 minutes: " + ", ".join(f"{s.name} ({ago(s.at, now)})" for s in gone))
+    if left_out:
+        print(f"And {left_out} gone for {int(folders.settings(config)['drop_after_hours'])} hours or more, no longer "
+              "listed.")
     return 0
 
 

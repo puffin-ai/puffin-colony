@@ -6,7 +6,8 @@ repo = "owner/myapp"               # the GitHub repo, as owner/name
 base = "main"                      # PRs go here; colony never pushes to it
 preset = "lean"                    # the rules setup copied: lean, puffin or own
 max_builders = 4                   # builders the lead opens on this machine; more join from other computers
-worktrees = "~/worktrees"          # where builders and batches make their worktrees; "../worktrees" is beside the clone
+worktrees = ".worktrees"           # where every worktree goes: inside the repo, from its main checkout, kept out of
+                                   # git status; a folder outside the repo scatters worktrees and gets a daily note
 fast_check = "npm test"            # a builder's quick check, which `colony fast-check` runs; with [checks] areas,
                                    # {areas} in it takes the areas the builder's branch changes
 checks = "npm run lint && npm run typecheck && npm test"   # the full check a batch runs; with [checks] areas,
@@ -16,11 +17,14 @@ generated = []                     # files a build writes, such as "src/generate
 regen = ""                         # the command that rebuilds the generated files
 check_env_file = ""                # optional local file of KEY=VALUE lines for the checks, never committed
 install = "npm ci"                 # run in each new worktree
-release = ""                       # optional: the branch `colony release` releases the base into, such as main
+integration = ""                   # optional: where the team's work gathers, which a release is cut from; the base
+                                   # when empty
+release = ""                       # optional: the branch `colony release` releases into, such as main; origin's
+                                   # default branch when empty and it differs from the integration branch
 deploy_workflow = ""               # optional: the workflow `colony release --after` watches, such as deploy.yml
 
 # One table per Claude Code settings folder. person = "any" shares an account with everyone. A session opens on
-# --account, else the first of its person's [people.<person>] accounts with room (the soonest weekly reset first),
+# --account, else the first of its person's [people.<person>] accounts with room (the most weekly room an hour first),
 # else an account of theirs with no reading, else a last_resort account.
 [accounts.main]
 config_dir = "~/.claude"
@@ -53,6 +57,25 @@ skip = []                          # such as ["docs/", "*.md"]
 rerun = ""                         # a failing test whose output names a timeout or time limit runs once more alone
                                    # with this, {test} its id, such as "cd apps/backend && uv run pytest {test}"
 minutes = 0                        # a full check run's minutes, the yardstick for the minutes minutes.md says it saved
+# Proportional checks (docs/checks.md): the tests for a change and the guard tests, a time budget for each kind of
+# check, and a pass on the same code reused instead of run again.
+related = ""                       # the command that runs a change's tests, such as "uv run pytest {tests}"; once set,
+                                   # "related" is the default scope
+guards = []                        # tests that run with every related check, such as ["tests/test_architecture.py"]
+# scope = "related"                # "related", "areas" (the default without related) or "full", the full suite
+# tests = { "setup.cfg" = ["tests/"] }   # the tests of files whose tests aren't named after them
+budgets = { fast = 300, checks = 300, full = 0 }   # seconds a command follows a check before it leaves it running
+                                   # in the background; 0 sends it there at once
+# caps = { full = 3600 }           # a run past its cap, in seconds, is stopped and counts as failed
+# reuse = true                     # reuse a pass on the same code with the same command
+# locks = ["test-db"]              # locks every check run holds besides tests, such as one shared test database;
+                                   # [locks.<name>] slots sets how many runs share it
+
+# [ci]                             # `colony ci`: start CI on any commit, watch it live, post the result
+# start = ""                       # the command that starts CI, with {sha}, {short}, {branch} and {repo}; empty pushes
+                                   # the commit to a branch of its own, colony-ci/{short}
+# post = true                      # post the result on the commit's pull request, else on the commit
+# cancel_superseded = true         # cancel the runs on older commits of the same branch
 
 [walk]
 browser = "playwright"             # "playwright" (the Playwright MCP) or "agent-browser" (the agent-browser CLI)
@@ -66,6 +89,13 @@ use_api_key = false                # true lets sessions bill ANTHROPIC_API_KEY i
 
 [messages]
 lead_digest_minutes = 10           # the lead reads gathered lines this often; urgent, blocked, questions and your lines come at once
+# max_line = 300                   # the most characters in a line's sentence; a longer note goes with --attach <file>
+# start_ack_minutes = 10           # a start line goes again when the helper's wait hasn't acknowledged it by then; 0 for none
+# start_resends = 2                # sends of an unacknowledged start line before the lead hears it at once
+# nudge = "off"                    # "auto" types a pointer into an idle recipient's cmux workspace on this computer; or "always"
+# redeliver_minutes = 60           # after a compaction or restart, show the unacknowledged lines from this far back
+# check_names = true               # refuse a line for a name no session has
+# refuse_local_paths = true        # refuse a line naming a path on this computer, which other computers can't read
 
 [people]
 logins = []                        # GitHub logins of the people; a line they post counts as theirs and reaches the lead at once
@@ -114,3 +144,101 @@ open_cards_per_lead = 10           # `colony card new` refuses a lead past this 
 stale_days = 7                     # `colony tidy` closes, or moves to future-work, a card with no update this long
 issue_comments = 200               # the coordination and Needs issues rotate at this many comments
 archive_days = 7                   # `colony tidy` archives a board item Done this long
+
+# Folders (docs/folders.md): when a lead counts as silent, and when a gone lead drops from the registry.
+# [leads]
+# silent_minutes = 120             # a lead whose own session did nothing this long: its folders can be borrowed
+# drop_after_hours = 72            # a lead gone this long drops from the registry, and `colony who` stops listing it
+#
+# This computer's own settings go in .colony/colony.local.toml, over this file, which git never tracks:
+# `colony config local` makes it (docs/configuration.md#layers).
+
+# Capacity (docs/capacity.md): every table below is optional, and each key shown holds its default.
+# [pool]                           # the team's rules for its pool of accounts
+# order = "pace"                   # "pace": the most weekly room an hour until its reset first; "reset": the
+                                   # soonest weekly reset first; "listed": the person's own order
+# out_at = 95                      # a window at or past this percent has no room: a new session switches account
+# near_at = 80                     # a 5-hour window this full, with its reset over near_hours off, is skipped too
+# near_hours = 1
+# reserve = []                     # accounts kept free: used only when named with --account
+# max_busy = 3                     # helpers one account runs at once; an account's own max_busy overrides it
+# wave = 3                         # helpers `colony helpers <n> --open` opens at once; the rest in later waves
+# wave_seconds = 60                # the pause between waves
+# stale_minutes = 15               # a usage reading older than this never places a session (at least 10)
+# share_lead_accounts = false      # false: a live lead's own account takes helpers in its turn, one fewer than
+                                   # its cap, keeping the lead 10% of each window; true: as any other account
+# helper_rate = 10                 # 5-hour percent one helper uses an hour, a guess until readings show the rate
+# scan_folders = ["~/.claude", "~/.claude-*", "~/.claude_*"]  # where `colony accounts scan` looks
+#
+# [subagents]                      # the subagent guard: builders run as helpers, never as subagents
+# max_running = 2                  # the most subagents one session runs at once; 0 lets none run
+#
+# [machine]                        # what one helper, test run and build needs here; Colony reads the rest itself
+# helper_gb = 1                    # memory one helper session needs
+# test_gb = 2                      # memory one test run needs; build_gb the same for a build
+# test_cores = 2                   # cores one test run keeps busy; build_cores the same for a build
+# keep_free_gb = 2                 # memory left for you and the system
+# keep_free_disk_gb = 10           # below this much free disk, the computer counts as busy
+# busy_load = 1                    # at or past this load per core, it is busy: no new helper opens here
+#
+# [services.aws]                   # a check for a service the team relies on; accounts and gh are checked already
+# check = "aws sts get-caller-identity"
+# fix = "aws sso login"            # what you do when it fails; expect, at_least, at_most and exit set the pass
+# [services.db]                    # a local service your work needs: its check, and the command that starts it again
+# check = "pg_isready -h localhost -p 5432"   # checks run in the repo's top folder
+# restart = "docker compose up -d db"        # `colony resume` runs it when the check fails; nothing else does
+#
+# [locks.test-db]                  # a lock for a thing one run at a time may use: `colony lock test-db -- <command>`
+# slots = 1
+
+[safety]                           # what the merge guard lets agents land (docs/safety.md#the-merge-guard)
+merge_into = []                    # branches agents may merge pull requests into, such as ["dev"]; empty, they
+                                   # open pull requests for you; counts once on GitHub's default branch
+protect = []                       # more branches to protect beside the base and the default branch, such as ["staging"]
+
+[recover]                          # what `colony crash-report` and `colony resume` look at (docs/safety.md#recovery)
+within_hours = 24                  # how far back both look for sessions that showed life; both also check the
+                                   # [services.<name>] tables above, and resume runs a failing one's restart
+
+# Watch (docs/watch.md): optional, and each key shown holds its default.
+# [watch]
+# idle_minutes = 20                # a session doing nothing this long, with no reason given, is idle
+# report_minutes = 30              # a working helper reports at least this often: `colony report "<progress>"`
+# agent_minutes = 45               # how long a helper's own helper agent may run
+# intent_hours = 4                 # a wait or hold with no end time is checked after this long
+# late_after = 1                   # a card past this many times its prediction is late
+# every_minutes = 2                # how often the lead's wait and the watchdog look at the team
+# page = true                      # the watchdog keeps the status page, the pinned `Colony: status` issue
+# page_minutes = 5                 # how often the status page may change
+# watchdog = true                  # the lead's wait starts the watchdog when none runs on its computer
+# escalate_minutes = 60            # a lead idle this long past idle_minutes has its person mentioned on GitHub
+# quit_hours = 24                  # a watchdog started by a wait ends after this long with no session alive here
+
+# Housekeeping (docs/cycle.md#the-leads-queue): optional, and each key shown holds its default.
+# [cards]                          # the lead's queue of To do cards
+# auto_start = "waits"             # the lead's wait starts a card whose wait just ended; "all": any ready card; "off"
+# remind_minutes = 60              # how long before the same queued card is named to the lead again
+#
+# [testers]                        # testers that share a release's findings list (docs/testing.md)
+# claim_minutes = 60               # a claim on a card with no result lapses after this, freeing the card
+
+# Releases and branch health (docs/releases.md): every table below is optional, and each key shown holds its default.
+# [release]
+# freeze = true                    # `colony release` freezes the integration branch for every lead while it is checked
+# freeze_hours = 12                # a freeze ends by itself after this long
+# migrations = []                  # the project's own migration paths or globs, such as "db/changes/*"
+# long_lived = []                  # other long-lived branches each release goes into, such as "staging"
+#
+# [health]                         # `colony health`: keep the shared branch green
+# branches = []                    # the shared branches; empty is the integration branch
+# source = "auto"                  # "ci", "local" (the full suite here), or "auto": CI when the commit has checks
+# every_minutes = 60               # how often `colony health watch` looks
+# pause = true                     # a red branch pauses every lead's merges until it passes, except named fixes
+#
+# [steps]                          # `colony step`: steps only a person can take
+# issue = 0                        # the issue that holds them; 0 finds or opens `Colony: person steps`
+# dry_runs = {}                    # the project's own tests for a step, such as { "./deploy.sh" = "./deploy.sh --check" }
+#
+# [plain]                          # `colony plain check`: status messages in plain words
+# allow = []                       # the project's own names it lets through
+# jargon = []                      # the team's own shorthand it flags

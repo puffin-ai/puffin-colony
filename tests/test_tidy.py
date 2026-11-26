@@ -216,11 +216,13 @@ def test_an_idea_goes_to_the_register_future_work_names_as_a_row_of_its_ideas_ta
 
 
 @pytest.fixture
-def sent(monkeypatch):
-    """transport.send, recorded instead of posted."""
+def sent(monkeypatch, tmp_path):
+    """transport.send, recorded instead of posted, in a temporary HOME, since a helper's done line notes its intent
+    there (watch.note_done)."""
     lines = []
     monkeypatch.setattr(transport, "send", lambda config, to, line, card=None: lines.append(line) or 41)
     monkeypatch.setenv(cli.PERSON_ENV, "ana")
+    monkeypatch.setenv("HOME", str(tmp_path))
     return lines
 
 

@@ -1,0 +1,13 @@
+# The unattended mode: the leads decide alone, take their recommended default and log it, and ask only about scope.
+description = "Decide alone with your recommended default and log each decision; ask the person only about scope, and take your pick when no answer comes."
+
+[decisions]
+autonomy = "unattended"
+without_answer = "default"
+
+[monitoring]
+report = "quiet"
+
+[[rules]]
+id = 1
+text = "Ask the person only about scope, with `colony ask --kind scope`, and keep working on your pick until the answer comes."

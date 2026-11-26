@@ -382,7 +382,8 @@ def test_the_config_setups_hack_branch_writes_loads_over_the_hack_defaults(tmp_p
     assert config["gate"]["merge_after_fast_check"] is True and config["people"]["names"] == {"ana": "Ana", "ben": "Ben"}
     assert (PACKAGE / "presets" / config["project"]["preset"] / "core.md") == CORE
     assert wait.display_name(config, "ana") == "Ana"
-    assert config["project"]["worktrees"] == str(Path("~/worktrees").expanduser())
+    # Hack's default worktrees folder is .worktrees inside the repo, so no worktree lands beside the clone.
+    assert Path(config["project"]["worktrees"]).name == ".worktrees"
 
 
 # The playbook's Hack section, which a hack lead and its builders follow instead of Lead and Builder
@@ -451,10 +452,12 @@ def test_the_docs_say_board_unread_prints_every_new_post_and_marks_yours():
         assert "Prints the posts for you that you haven't seen" not in text, doc
 
 
-def test_the_playbook_says_subagents_are_for_speed_searches_and_browser_checks():
+def test_the_playbook_says_builders_are_helpers_and_subagents_only_search_or_check_a_browser():
     section = playbook_section("Subagents")
-    for use in ("**Speed.**", "in parallel", "**Searches.**", "**Browser checks.**"):
-        assert use in section, use
+    for rule in ("Builders run only as helpers, never as subagents.", "a quick search", "a browser check",
+                 "`colony helpers <n> --open`", "[subagents] max_running"):
+        assert rule in section, rule
+    assert "**Speed.**" not in section and "in parallel" not in section
     builder = (PACKAGE / "skills" / "colony-builder" / "SKILL.md").read_text()
     assert "start no subagents" not in builder and "Subagents section" in builder
 

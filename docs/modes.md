@@ -61,6 +61,10 @@ Each mode's defaults are a TOML file in the installed package:
 
 Colony reads the mode's file first, then your repo's `.colony/colony.toml`. Any key in your file wins. To change one default, add its key to your `colony.toml` and commit it. Every key is in [configuration.md](configuration.md).
 
+## Working modes
+
+A repo's mode, above, picks Colony's defaults for the whole repo, in `colony.toml`. A working mode is something else: a bundle of a person's standing orders, such as `orchestrator`, `unattended`, `plan-first` or `speed`, switched on for a session with one word, `colony mode <name>`. Working modes live with the profiles: see [profiles.md](profiles.md#modes) and [boot.md](boot.md#modes).
+
 ## Switching later
 
 1. Change `mode` in `[project]` of `.colony/colony.toml`, and commit it, so every machine reads the same mode.

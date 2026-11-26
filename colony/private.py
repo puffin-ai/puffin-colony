@@ -55,18 +55,20 @@ def board(config: dict) -> tuple[str, int]:
     return repo, int(found)
 
 
-def send(config: dict, to: str, lines: list[str], me: str) -> int:
+def send(config: dict, to: str, lines: list[str], me: str, attached: str = "") -> int:
     """Post private lines for `to`: on the private board with a pointer on the public one, or on a private repo's
-    own board."""
+    own board. `attached`, a file's attachment block (transport.attachment), goes under the lines, never on the
+    public board."""
     from colony import transport
 
+    body = "\n".join(lines) + (f"\n\n{attached}" if attached else "")
     if not is_public(config):
-        number = transport.send(config, to, "\n".join(lines))
+        number = transport.send(config, to, body)
         for line in lines:
             print(f"#{number} {line}")
         return 0
     repo, number = board(config)
-    wait.gh("issue", "comment", str(number), "--repo", repo, "--body", "\n".join(lines))
+    wait.gh("issue", "comment", str(number), "--repo", repo, "--body", body)
     login = to if to.startswith("@") else f"@{to.split('-', 1)[0]}"  # ben-main-lead is ben's
     pointer = f"{login} a private line waits for you: run `{cli.NAME} private` (from {me})"
     transport.send(config, login, pointer)

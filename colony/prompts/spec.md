@@ -31,7 +31,7 @@ The knowledge vault is `{knowledge}/`. Its rules are in `.colony/rules/`, and it
 ## 5. Land it
 
 - Work in your own worktree on a branch named `spec/<feature>`, made from the base branch, and change no application code.
-- Run `colony check-docs` and fix what it reports, then commit as `docs(spec): <feature>` and push the branch.
+- Run `colony check-docs` and fix what it reports, then commit as `docs(spec): <feature>` and push the branch: `git push -u origin HEAD:refs/heads/spec/<feature>`.
 - Post one line for the lead on the card: `colony post <card> lead "done, spec/<feature> pushed, <n> tasks, waiting on the owner's approval of the requirements"`, which signs it with your name.
 
 Final reply: the pages you wrote, each open question with its default, and the approval line, in under 150 words.

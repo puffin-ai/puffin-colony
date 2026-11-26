@@ -55,7 +55,7 @@ When an answer is unclear, take the default and say so. When the person leaves a
 
 ## 3. Write the config
 
-Copy `{package}/{name}.toml.example` to `{dir}/{name}.toml`, and fill in every value from steps 1 and 2: the project name, repo and base branch, `preset`, the worktrees folder (a sibling folder of the clone), the fast and full checks, the generated paths and the regen command, the install command, one `[accounts.<name>]` table per settings folder with its person, the rule files in `[gate] rules` (`{dir}/core.md`, `{dir}/rules/*.md`, and the repo's own `CLAUDE.md` and `AGENTS.md` files), and `provider_dollars` from question 4. Then:
+Copy `{package}/{name}.toml.example` to `{dir}/{name}.toml`, and fill in every value from steps 1 and 2: the project name, repo and base branch, `preset`, the worktrees folder (keep the example's `.worktrees`, inside the repo, which git ignores; never a folder outside the clone), the fast and full checks, the generated paths and the regen command, the install command, one `[accounts.<name>]` table per settings folder with its person, the rule files in `[gate] rules` (`{dir}/core.md`, `{dir}/rules/*.md`, and the repo's own `CLAUDE.md` and `AGENTS.md` files), and `provider_dollars` from question 4. Then:
 - `[knowledge] vault`: the vault's folder from the `knowledge` item, with no trailing slash. The later steps call it `<vault>`. Keep each check's mode as the example sets it.
 - `[cycle]`: write it only when step 1 found something the defaults miss, and write only those keys:
   - `risk`, the missed folders by kind, such as `risk = { payments = ["src/ledger/"], auth = ["src/iam/"] }`. The kinds are `auth`, `payments`, `migrations`, `secrets`, `deletion`, `public API`, `dependencies` and `config`.
@@ -129,7 +129,7 @@ On a yes to `pointer`, add `@{dir}/core.md` at the top of `CLAUDE.md` and `` Thi
 
 ## 9. Open the pull request
 
-- Make a branch `{name}/setup` from `origin/<base>`, commit only the files you wrote with the message `chore: set up {display}`, and push that branch. Never push to the base branch.
+- Make a branch `{name}/setup` from `origin/<base>`, commit only the files you wrote with the message `chore: set up {display}`, and push that branch: `git push -u origin HEAD:refs/heads/{name}/setup`. Never push to the base branch.
 - Open the PR into the base branch with `gh pr create`. Its body lists each file and one line on what it holds, the board link, the last line of `{name} check-docs`, and any follow-up work.
 - End the session's work with exactly this message, its 3 lines filled in, and nothing after it:
 
@@ -213,6 +213,10 @@ A team builds fast, for hours or a weekend. Each person runs their own lead, `<l
        You're set: wrote <each file and folder written, comma-separated>, and pinned the board at <the issue link>.
        Pull request: <the PR link>. Merge it now, so every teammate's agent gets the board and the owner table.
        Each teammate pulls and runs `{name}`, and any other agent uses `tools/board`.
+
+## Standing orders
+
+In every mode, before you open the pull request, run `{name} profile init`. It writes `{dir}/team.toml`, the team profile: the standing orders every person's sessions follow here, with every key commented out until the team fills it in through a reviewed pull request. Commit it with the other files you wrote. Ask none of the person's own preferences here: their lead asks its short set of questions once, on its first start, into their personal profile, which lives outside the repo and is never committed.
 
 ## Never
 

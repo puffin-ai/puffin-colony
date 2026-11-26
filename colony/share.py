@@ -76,7 +76,10 @@ def share(config: dict, args) -> int:
     git("fetch", "origin")
     start = f"origin/{BRANCH}" if git("rev-parse", "--verify", "--quiet", f"origin/{BRANCH}").returncode == 0 \
         else f"origin/{config['project']['base']}"
-    folder = Path(config["project"].get("worktrees") or root.parent) / f"{config['project']['name']}-share-{os.getpid()}"
+    from colony import folders
+
+    folders.ready(config, root)  # inside [project] worktrees, never beside the clone
+    folder = folders.worktree_path(config, f"share-{os.getpid()}")
     made = git("worktree", "add", "--detach", str(folder), start)
     if made.returncode:
         raise cli.ColonyError(f"git worktree add failed: {made.stderr.strip()[:300]}")

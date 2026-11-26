@@ -56,6 +56,8 @@ How a finding becomes a rule is in [knowledge.md](knowledge.md#how-research-beco
 
 ## Needs you
 
+A lead asks through `colony ask`, which decides whether a question needs you at all, checks the team's work first, and attaches the full explanation; `colony answer` records your answer word for word, and `colony decisions` lists what waits. See [decisions.md](decisions.md). Other sessions post with `colony needs`, below.
+
 Each person has one issue, `Needs <Person>`, for the decisions only they can make: an item on the stop list, a product or screen choice no doc settles, approving a FEATURE's requirements, and merging.
 
 ```sh
@@ -118,7 +120,36 @@ colony card new "builder-2: dark mode switch in settings" --body "<task, done-wh
 - It refuses a duplicate, and names the open card it repeats: a title with the same words, ignoring case and punctuation and the `<builder>:` start, or one whose words overlap by three quarters or more.
 - It creates the issue and puts it on the board as To do, with its Lead (you, or `--lead <name>`) and Size.
 
-The size is S, M or L. Cards that touch the same folders go to the same builder, which keeps conflicts down. A batch's pull request says `Closes #<n>` for each card, so the merge closes them. GitHub closes them only when the pull request merges into the repo's default branch; on another base, the lead closes them.
+The size is S, M or L. Cards that touch the same folders go to the same builder, which keeps conflicts down. A batch's pull request says `Closes #<n>` for each card, so the merge closes them. GitHub closes them only when the pull request merges into the repo's default branch; on another base, such as an integration branch, `colony tidy` closes them (see [Tidy](#tidy)).
+
+### Cards that touch the same files
+
+A card's body names its folders on a `Folders:` line, and, when the lead knows them, its files on a `Files:` line, such as `Files: src/auth/login.ts, tests/test_login.py`. When `colony card new` makes a card, it reads every open card's lines and prints one `overlap:` line for each card that plans to touch the same paths: the same file, or a folder that holds the other's file or folder. Then it says what to do: give the overlapping cards to one helper, or make the new card wait for the other. `colony card overlaps` lists every such pair among the open cards at any time. Two cards where one waits for the other are not an overlap, since their work never runs at once.
+
+### Cards that wait for others
+
+A card can wait for other cards: its body holds a `Waits for: #12, #13` line. Write it with `colony card new … --waits-for 12,13`, or change it later with `colony card waits <n> 12,13`; `colony card waits <n> ""` clears it. `colony take` refuses a card whose wait isn't over, and names the cards it still waits for.
+
+A card it waits for has landed when one of these is true:
+
+- its issue is closed as completed;
+- its Status on the board is Done;
+- a merged pull request finishes it, whatever branch it merged into: one whose body says `Closes #<n>`, or the card's own branch, `<helper>/<n>`.
+
+A card closed as not planned never lands. The lead's wait names the card that waited for it once, so the lead changes the wait or closes the card.
+
+### The lead's queue
+
+The lead's queue is its To do cards whose wait is over, oldest first. `colony card next` prints it, with the cards that still wait and what each one waits for. `colony card next --start` hands the first ready card to a free helper: the helper its title names when that one is free, else the first free helper of this lead, or the one `--helper` names. It posts the `start: this card` line, and sets the card's Status and Helper on the board. When the card goes to another helper than its title names, it renames the card first.
+
+Every 10 minutes, with its stale-card check, the lead's wait reads the queue:
+
+- When a card's wait just ended, and the helper its title names is live and free, it starts the card for that helper, and the lead gets one line, such as `#14 started: builder-2 has it now, since #12 landed`. `[cards] auto_start` sets which cards start so: `"waits"` (the default) for cards that waited, `"all"` for any ready card, or `"off"` for none.
+- When ready cards sit queued while a helper of this lead is free, or while none of the lead's cards is in progress, the lead gets one `queued:` line naming the next card. An idle lead hands it out at once with `colony card next --start`. The line comes again only when the queue changes, or after `[cards] remind_minutes` (60).
+
+### The files a branch changed
+
+A helper's `done` line carries the list of the files its branch changed, read from `git diff` between the branch and where it left the base, never typed by the helper. It goes under the line on GitHub, as an attachment, with what the diff can't show: files not committed, commits not pushed, and changed files outside the card's `Folders:` and `Files:` lines. When the helper posts from another folder than the card's worktree, the list comes from the pushed card branch, `origin/<helper>/<n>`. `colony card files [<n>] [--branch <branch>]` prints the same list at any time, such as the lead's check of `origin/builder-2/41`.
 
 ## Tidy
 
@@ -126,6 +157,7 @@ The size is S, M or L. Cards that touch the same folders go to the same builder,
 
 | It | When |
 | --- | --- |
+| Closes a card, as completed, with one line saying why | Its work is finished, and GitHub left it open: a merged pull request finishes it, on whatever branch it merged into, by `Closes #<n>` in its body or as the card's own branch `<helper>/<n>`; or its Status on the board is Done. Without a board, it closes each open issue titled `<helper>: <what>` that a merged pull request finishes. |
 | Closes a card, as not planned, with one line saying why | It shows no update for `[limits] stale_days` (7) and its work started |
 | Moves a card to future-work, and closes it with one line saying why | It shows no update for 7 days and it is still To do |
 | Rotates the coordination issue or a Needs issue | It holds `[limits] issue_comments` (200) comments |
@@ -133,19 +165,19 @@ The size is S, M or L. Cards that touch the same folders go to the same builder,
 | Turns on the repo's `delete_branch_on_merge`, and says so | It is off |
 | Removes a worktree, and prints the space freed | Its work is over and it is clean: no uncommitted or untracked change. A card's work is over when the card is closed or its pull request merged; a batch's, fix's or retro's when its pull requests all merged or closed, which also ends the batch's walk worktree; the merge worktree's when no merge is running and its head is in the base; and an image worktree is always left over. Untracked round reports never keep a batch's, fix's, retro's or walk's worktree. The main checkout is never removed, and a dirty or locked worktree is kept and named |
 
-It finds each worktree in `git worktree list --porcelain` by its branch, such as `<name>/<n>` for a card, or by its folder's name for a detached one, reads every branch's pull requests in one `gh pr list`, and leaves the branches themselves. It prints the counts before and after: open cards per lead, stale cards closed or moved, comments on the coordination and Needs issues, rotations, board items archived, and worktrees removed and kept with the space freed. `--dry-run` also lists every worktree it leaves, with its size and last commit date, largest first. A step that fails says why, and the others go on.
+It finds each worktree in `git worktree list --porcelain` by its branch, such as `<name>/<n>` for a card, or by its folder's name for a detached one, reads every branch's pull requests in one `gh pr list`, and leaves the branches themselves. It prints the counts before and after: open cards per lead, finished cards closed, stale cards closed or moved, comments on the coordination and Needs issues, rotations, board items archived, and worktrees removed and kept with the space freed. `--dry-run` also lists every worktree it leaves, with its size and last commit date, largest first. A step that fails says why, and the others go on.
 
 **Rotation.** A rotated issue gets a closing comment that lists its open items: the `question:`, `blocked:` and `urgent:` lines among its last 50 comments, and on a Needs issue each decision posted after the person's last answer. Then it closes, and a fresh issue with the same title opens, its body linking the old one. `colony say`, `colony needs` and `colony handover` read the issue's comment count before they post, in one cheap call, and rotate it first when it is full. The lead's wait follows the new coordination issue: the computer that rotated it remembers the new number at once, and every other computer checks its remembered number every 10 minutes and drops it once that issue is closed.
 
 ## Handover
 
-When the lead's conversation nears automatic compaction, it hands over first:
+Colony hands over by itself, after every turn, before a compaction and when a session ends, and the next session reads it ([boot.md](boot.md#the-automatic-handover)). A lead hands over by hand when it passes the lead to a fresh session on purpose:
 
 ```sh
 colony handover --decisions "<each decision, with its card>" --open "<each open question>" --next "<what it was about to do>"
 ```
 
-That posts a comment on `Colony: coordination` with the lead's name, the time, the decisions, the open questions and the next step. Then it prints the command that opens a fresh lead for the same person. Every lead starts with `colony handover --read`, and carries on from the `next:` line of the last one.
+That posts a comment on `Colony: coordination` with the lead's name, the time, the decisions, the open questions and the next step. Then it prints the command that opens a fresh lead for the same person. Every lead's briefing shows the last one, and the lead carries on from its `next:` line.
 
 ## Stats
 
