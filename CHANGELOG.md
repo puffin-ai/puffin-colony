@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0, 2026-11-25
 
 The run-lessons upgrade: 85 changes learned from one long run with several leads, orchestrators and many helpers. A session now starts from your standing orders without onboarding. Helpers open by live account readings and the computer's room. The watch knows a session that waits on purpose. Colony recovers what a crash or a sleep stopped, and every merge waits for your yes.
 
@@ -54,6 +54,8 @@ Releases (releases.md):
 Cards and testing (cycle.md, testing.md):
 
 - `colony card new` names cards that plan to touch the same files. A card can wait for others and starts when they land, and an idle lead picks up its next queued card. A helper's changed files come from its diff, and finished cards close whatever branch they merged into. Testers reuse the accounts and fixtures you prepared, and share one findings list across computers.
+
+Upgrading: `colony upgrade` refreshes the launcher, the wait guard, the hooks and the role skills, and migrates `.colony/colony.toml` with `colony config migrate`. Uncommitted edits of `.colony/colony.toml` stop it: `colony config local --from-edits` moves them into `.colony/colony.local.toml` first. `.colony/playbook.md`, `.colony/core.md` and `tools/board` are copies setup filled in, so copy them again from the package for the new rules, and fill in their placeholders as setup did. A project whose leads merge into an integration branch adds it to `[safety] merge_into`, on the default branch, before the new pin reaches its sessions.
 
 ## 0.6.0, 2026-11-12
 
