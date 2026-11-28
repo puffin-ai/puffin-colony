@@ -590,6 +590,24 @@ def where_to_open(args) -> str:
     return "terminal" if portable.is_terminal(sys.stdin) else "background"
 
 
+def cmux_launcher(config: dict, title: str, command: list[str]) -> Path:
+    """Write a session's launch command to ~/.colony/<project>/launch/<title>.sh, which a cmux workspace runs with a
+    short `sh <file>` line.
+
+    cmux types its --command into the new workspace's shell. A typed line stops at 1,024 bytes, macOS's limit on one
+    line of terminal input, and loses its Enter with the rest: a lead's prompt makes its launch command longer than
+    that, so the workspace was left holding a cut-off line and the session never started. The file holds the whole
+    command, prompt and settings included, and the line cmux types stays far below the limit whatever the prompt holds.
+    """
+    from colony import wait
+
+    path = wait.state_path(config["project"]["name"], "launch").parent / "launch" / \
+        f"{re.sub(r'[^A-Za-z0-9._-]+', '-', title)}.sh"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexec " + shlex.join(command) + "\n")
+    return path
+
+
 def launch(config: dict, args, session: str, role: str, prompt: str, title: str = "") -> int:
     """Open one session on --account, else the person's account (pick_account): in cmux, in this terminal, or in the
     background.
@@ -641,7 +659,9 @@ def launch(config: dict, args, session: str, role: str, prompt: str, title: str 
     inherited = {k: v for k, v in os.environ.items() if keep_key or k != "ANTHROPIC_API_KEY"}
     if mode == "cmux":
         command = argv if keep_key else ["env", "-u", "ANTHROPIC_API_KEY", *argv]
-        cmd = [cmux_command() or "cmux", "new-workspace", "--name", title, "--cwd", root, "--command", shlex.join(command)]
+        script = cmux_launcher(config, title, command)
+        cmd = [cmux_command() or "cmux", "new-workspace", "--name", title, "--cwd", root,
+               "--command", shlex.join(["sh", str(script)])]
         cmd += [part for key, value in env.items() for part in ("--env", f"{key}={value}")]
         return subprocess.run(cmd).returncode
     if mode == "background":
