@@ -91,7 +91,7 @@ After setup, `colony` opens your lead.
      --permission-mode auto "Read .colony/playbook.md, Lead section, and start."
    ```
    Remote Control lets you follow the session from the Claude apps under that title.
-5. **It opens where it can.** It uses a new cmux workspace when cmux takes its commands (inside cmux). It uses this terminal when you run it at one, or when you pass `--here`. Otherwise, as when a lead opens builders from inside its own session, it starts a background Claude session under Remote Control. You follow that session in the Claude app, or with `claude attach <id>`.
+5. **It opens where it can.** It uses a new cmux workspace when cmux takes its commands (inside cmux). There, the workspace runs the session's launch command from a file, `~/.colony/<project>/launch/<session>.sh`, because a typed line stops at 1,024 bytes on macOS and a lead's prompt runs longer. It uses this terminal when you run it at one, or when you pass `--here`. Otherwise, as when a lead opens builders from inside its own session, it starts a background Claude session under Remote Control. You follow that session in the Claude app, or with `claude attach <id>`.
 
 The lead starts with the startup routine's briefing, which comes by itself: its orders and mode, the last handover, the project summary, the live leads, the open pull requests and cards, the decisions that wait on you, and the room for helpers. It resumes the plan or the handover without asking, or asks you one question. See [boot.md](boot.md).
 

@@ -354,13 +354,31 @@ def test_lead_opens_cmux_with_the_env_and_prints_no_values(home, host, config, c
     args = cmux_log.read_text().splitlines()
     assert code == 0
     assert args[:5] == ["new-workspace", "--name", "demo-lead", "--cwd", str(host)]
-    assert args[args.index("--command") + 1].startswith("env -u ANTHROPIC_API_KEY claude --remote-control demo-lead ")
+    script = home / ".colony" / "demo" / "launch" / "demo-lead.sh"
+    assert args[args.index("--command") + 1] == f"sh {script}"
+    assert script.read_text().startswith("#!/bin/sh\nexec env -u ANTHROPIC_API_KEY claude --remote-control demo-lead ")
     for pair in ("COLONY_SESSION=lead", "COLONY_PERSON=ana", f"CLAUDE_CONFIG_DIR={home / 'first'}",
                  "CLAUDE_CODE_RETRY_WATCHDOG=1", "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS=21600000",
                  "CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000"):
         assert args[args.index(pair) - 1] == "--env"
     assert str(home / "first") not in out
     assert not claude_log.exists()
+
+
+def test_a_long_prompt_opens_cmux_with_a_short_typed_line_and_the_whole_command_in_its_file(home, config, capsys):
+    """cmux types --command into the new shell, and a typed line stops at 1,024 bytes on macOS, its Enter lost with
+    the rest: a task group lead's long prompt left its workspace holding a cut-off line, and the lead never started."""
+    cmux_log = make_stub(home / "bin", "cmux")
+    make_stub(home / "bin", "claude")
+    prompt = "Lead the landing-research group: " + "research it, record it, then analyze it. " * 120
+    args = argparse.Namespace(person="ana", here=False, dry_run=False)
+    assert cli.launch(config, args, cli.LEAD, "lead", prompt, title="demo-landing-research-lead") == 0
+    typed = cmux_log.read_text().splitlines()
+    typed = typed[typed.index("--command") + 1]
+    script = home / ".colony" / "demo" / "launch" / "demo-landing-research-lead.sh"
+    assert typed == f"sh {script}" and len(typed.encode()) < 1024
+    assert shlex.split(script.read_text().splitlines()[1])[-1] == prompt  # the whole prompt, one argument
+    capsys.readouterr()
 
 
 def live_lead(name="ana-main-lead"):
@@ -527,7 +545,9 @@ def test_lead_keeps_the_api_key_only_when_the_config_says_so(home, host, config,
     config["budget"]["use_api_key"] = True
     run_lead(config, capsys, dry_run=False)
     args = cmux_log.read_text().splitlines()
-    assert args[args.index("--command") + 1].startswith("claude --remote-control demo-lead ")
+    script = home / ".colony" / "demo" / "launch" / "demo-lead.sh"
+    assert args[args.index("--command") + 1] == f"sh {script}"
+    assert script.read_text().startswith("#!/bin/sh\nexec claude --remote-control demo-lead ")
 
 
 # Colony 0.2's wiring: every command, the researcher and spec sessions, their roles, and the account choice
